@@ -1,0 +1,11 @@
+instruction = "The project's test suite is failing. Run it with `npx vitest run`, work out what is wrong in the source code, and fix the code so every test passes. Do not change the tests."
+
+[source]
+repo = "../../../sources/tradelyzer"
+commit = "1e606dc257a4172721171baa75c22c376dd09dfe"
+remove = []
+link = ["node_modules"]
+link_from = "../../../sources/tradelyzer-deps"
+
+[check]
+command = "npx vitest run"

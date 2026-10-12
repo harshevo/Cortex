@@ -1,0 +1,11 @@
+instruction = "The trade calendar should file each trade under the day it closed in the time zone the user has chosen. A user whose calendar is set to New York reports that trades closed in the evening appear on the following day. Fix it."
+
+[source]
+repo = "../../../sources/tradelyzer"
+commit = "1e606dc257a4172721171baa75c22c376dd09dfe"
+remove = ["tests/calendar.test.ts"]
+link = ["node_modules"]
+link_from = "../../../sources/tradelyzer-deps"
+
+[check]
+command = "npx vitest run"

@@ -1,0 +1,7 @@
+instruction = """
+The test suite for this project is failing. Run it, work out what is wrong in \
+the source code, and fix the code so every test passes. Do not change the tests.
+"""
+
+[check]
+command = "python3 -m unittest -q test_inventory"

@@ -1,0 +1,16 @@
+[package]
+name = "cortex-verify"
+description = "The verification gate: finds a project's checks and runs them on finished work."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cortex-core.workspace = true
+
+async-trait.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

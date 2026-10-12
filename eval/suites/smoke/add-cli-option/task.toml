@@ -1,0 +1,13 @@
+instruction = """
+Add a `--top N` option to `wordcount.py`. With it, the program prints the N \
+most frequent words in the file instead of the total, one per line in the form \
+`word count`, most frequent first. Words with the same count are listed in \
+alphabetical order. Words are compared without regard to case and printed in \
+lower case, and punctuation is not part of a word. If the file has fewer than \
+N different words, print them all.
+
+Without the option the program must behave exactly as it does now.
+"""
+
+[check]
+command = "python3 -m unittest discover -q -p 'test_*.py'"

@@ -1,0 +1,11 @@
+instruction = "A journal entry may have at most 10 tags. Some entries saved by an older version have more, up to 30. Such an entry can no longer be edited at all, because every save fails the 10-tag rule.\n\nChange `journalSchemaFor(previous)` so that when the previously saved entry has more than 10 tags, the new version is accepted if it has at most 10 tags, or if every one of its tags was already on the saved entry (tags may be kept or removed, not added), and never more than 30. When that rule is broken the message must be `Choose up to 10 mistake tags. Existing tags can be kept or removed.` Entries with no saved version, or whose saved version has 10 tags or fewer, keep the plain 10-tag limit and its existing message."
+
+[source]
+repo = "../../../sources/tradelyzer"
+commit = "1e606dc257a4172721171baa75c22c376dd09dfe"
+remove = ["tests/journal-database.test.ts"]
+link = ["node_modules"]
+link_from = "../../../sources/tradelyzer-deps"
+
+[check]
+command = "npx vitest run"

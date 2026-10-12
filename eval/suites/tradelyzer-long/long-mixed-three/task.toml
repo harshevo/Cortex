@@ -1,0 +1,24 @@
+instruction = "Several problems have been reported in this project. They are separate; fix all of them. Keep track of which you have dealt with, and check each fix before moving on.\n\n1. Users importing exchange history report that when a position is closed in several partial exits, the commissions on the resulting trades add up to more than the fees the exchange actually charged. Trades closed in a single exit are correct. Find the cause in the import code and fix it.\n\n2. The month view of the trade calendar shows whole weeks, Monday to Sunday, including the days of neighbouring months that fall in the first and last week. In months whose last day is not a Sunday, the final week is missing, so the last days of the month cannot be seen. Fix it.\n\n3. Losing trades with cents are displayed wrongly throughout the app. A net P&L of -1.50 shows as a loss of 0.50, and -0.01 shows as a gain of one cent. Whole dollar losses and all gains are fine. Find the cause and fix it."
+max_steps = 56
+
+[source]
+repo = "../../../sources/tradelyzer"
+commit = "1e606dc257a4172721171baa75c22c376dd09dfe"
+remove = ["tests/exchanges.test.ts", "tests/calendar.test.ts", "tests/trade-file.test.ts", "tests/journal.test.ts"]
+link = ["node_modules"]
+link_from = "../../../sources/tradelyzer-deps"
+
+[check]
+command = "npx vitest run"
+
+[[milestone]]
+name = "partial-exit-fees"
+command = "npx vitest run tests/exchange-sample.test.ts tests/exchanges.test.ts -t '^completed\\ exchange\\ trades\\ matches\\ spot\\ partial\\ exits\\ with\\ proportional\\ entry\\ fees\\ and\\ stable\\ IDs$|^import\\ accounting\\ regressions\\ preserves\\ fractional\\ entry\\ fees\\ across\\ multiple\\ partial\\ exits$|^imports\\ binance\\ perpetual\\ samples\\ through\\ the\\ real\\ adapter\\ and\\ persists\\ them$|^imports\\ binance\\ spot\\ samples\\ through\\ the\\ real\\ adapter\\ and\\ persists\\ them$|^imports\\ bybit\\ perpetual\\ samples\\ through\\ the\\ real\\ adapter\\ and\\ persists\\ them$|^imports\\ coinbase\\ spot\\ samples\\ through\\ the\\ real\\ adapter\\ and\\ persists\\ them$'"
+
+[[milestone]]
+name = "calendar-missing-week"
+command = "npx vitest run tests/calendar.test.ts -t '^Luxon\\ calendar\\ covers\\ all\\ dates\\ of\\ a\\ six\\-week\\ month\\ including\\ adjacent\\ days$|^Luxon\\ calendar\\ handles\\ leap\\ February\\ and\\ December\\ rollover$'"
+
+[[milestone]]
+name = "negative-amounts"
+command = "npx vitest run tests/journal.test.ts tests/trade-file.test.ts -t '^completed\\-trade\\ imports\\ preserves\\ exact\\ cents\\ including\\ large\\ values\\ and\\ negative\\ fractions$|^day\\ journal\\ logic\\ summarizes\\ winning,\\ losing,\\ breakeven\\ and\\ empty\\ days$|^day\\ journal\\ logic\\ warns\\ only\\ when\\ net\\ loss\\ strictly\\ exceeds\\ the\\ configured\\ limit$'"

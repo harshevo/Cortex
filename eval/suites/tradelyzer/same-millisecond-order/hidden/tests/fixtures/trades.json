@@ -1,0 +1,37 @@
+{
+  "account": {
+    "name": "Demo Prop 100K",
+    "currency": "USD",
+    "startingBalance": "100000.00"
+  },
+  "trades": [
+    {
+      "id": "demo-1",
+      "symbol": "GBPUSD",
+      "side": "short",
+      "volume": 0.2,
+      "openedAt": "2026-09-07T08:24:00Z",
+      "closedAt": "2026-09-07T08:51:00Z",
+      "entryPrice": 1.26932,
+      "exitPrice": 1.27089,
+      "stopLoss": 1.27063,
+      "commission": "-1.40",
+      "swap": "0.00",
+      "netPnl": "-32.86"
+    },
+    {
+      "id": "demo-2",
+      "symbol": "EURUSD",
+      "side": "long",
+      "volume": 1,
+      "openedAt": "2026-09-08T08:00:00Z",
+      "closedAt": "2026-09-08T09:00:00Z",
+      "entryPrice": 1.1,
+      "exitPrice": 1.101,
+      "stopLoss": null,
+      "commission": "-2.00",
+      "swap": "0.00",
+      "netPnl": "98.00"
+    }
+  ]
+}

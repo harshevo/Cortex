@@ -1,0 +1,35 @@
+[package]
+name = "cortex-gui"
+description = "The Cortex desktop app: a native window onto the agent and its memory."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "cortex-gui"
+path = "src/main.rs"
+
+[dependencies]
+cortex-brain.workspace = true
+cortex-cli.workspace = true
+cortex-core.workspace = true
+cortex-memory.workspace = true
+cortex-providers.workspace = true
+cortex-retrieval.workspace = true
+
+anyhow.workspace = true
+async-trait.workspace = true
+bytemuck = { version = "1", features = ["derive"] }
+clap.workspace = true
+dirs = "7"
+eframe = { version = "0.36", default-features = false, features = ["default_fonts", "wgpu"] }
+glam = { version = "0.34", features = ["bytemuck"] }
+keyring = "4"
+image = { version = "0.25", default-features = false, features = ["png"] }
+rayon = "1"
+reqwest.workspace = true
+rfd = { version = "0.17", default-features = false }
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+tokio.workspace = true

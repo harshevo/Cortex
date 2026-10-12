@@ -1,0 +1,12 @@
+instruction = """
+In the `shop` package, rename the function `calc` in `shop/tax.py` to \
+`compute_tax` and update every place that uses it. The old name must no longer \
+exist.
+
+Also give `compute_tax` a keyword-only parameter `rounding` (default 2) that \
+sets the number of decimal places in the result. Existing callers must behave \
+exactly as before.
+"""
+
+[check]
+command = "python3 -m unittest discover -q -p 'test_*.py'"

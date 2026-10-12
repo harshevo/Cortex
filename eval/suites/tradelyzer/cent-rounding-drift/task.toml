@@ -1,0 +1,11 @@
+instruction = "Imported trades have their commission and net P&L rounded to cents one trade at a time, so rounding errors pile up. Example: one exit with a $0.01 fee that closes three entry lots produces three trades that each show a commission of 0.00, and the cent disappears from the totals.\n\nChange `matchFills` so that rounding is carried across the whole import. Keep exact running totals of commission and of net P&L over all trades produced so far, in the order they are produced. Each trade's displayed commission is the running commission total rounded to cents (half up) minus the rounded running total as it stood before that trade; net P&L works the same way. The displayed values then always add up to the rounded exact total."
+
+[source]
+repo = "../../../sources/tradelyzer"
+commit = "1e606dc257a4172721171baa75c22c376dd09dfe"
+remove = ["tests/exchanges.test.ts"]
+link = ["node_modules"]
+link_from = "../../../sources/tradelyzer-deps"
+
+[check]
+command = "npx vitest run"

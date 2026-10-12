@@ -1,0 +1,21 @@
+[package]
+name = "cortex-router"
+description = "The router: decides from the task which context to gather before the model starts."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cortex-core.workspace = true
+cortex-index.workspace = true
+cortex-memory.workspace = true
+cortex-retrieval.workspace = true
+cortex-tools.workspace = true
+
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

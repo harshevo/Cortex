@@ -1,0 +1,11 @@
+instruction = "Bybit sometimes reports an entry fill and its exit fill with the same millisecond timestamp. Bybit also supplies a sequence number that gives the true order of executions, but imports of such round trips come out wrong: the exit is processed before the entry, so the trade is reported as unmatched or with the wrong profit. Execution ids are random and say nothing about order. Fix the import so that fills with the same timestamp are processed in their true order."
+
+[source]
+repo = "../../../sources/tradelyzer"
+commit = "1e606dc257a4172721171baa75c22c376dd09dfe"
+remove = ["tests/exchanges.test.ts"]
+link = ["node_modules"]
+link_from = "../../../sources/tradelyzer-deps"
+
+[check]
+command = "npx vitest run"

@@ -1,0 +1,7 @@
+instruction = """
+`slugify` in `textutil.py` is a stub. Implement it so that it does exactly what \
+its docstring describes. Use only the Python standard library.
+"""
+
+[check]
+command = "python3 -m unittest discover -q -p 'test_*.py'"

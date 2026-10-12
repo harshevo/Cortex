@@ -1,0 +1,11 @@
+instruction = "Losing trades with cents are displayed wrongly throughout the app. A net P&L of -1.50 shows as a loss of 0.50, and -0.01 shows as a gain of one cent. Whole dollar losses and all gains are fine. Find the cause and fix it."
+
+[source]
+repo = "../../../sources/tradelyzer"
+commit = "1e606dc257a4172721171baa75c22c376dd09dfe"
+remove = ["tests/trade-file.test.ts", "tests/journal.test.ts"]
+link = ["node_modules"]
+link_from = "../../../sources/tradelyzer-deps"
+
+[check]
+command = "npx vitest run"

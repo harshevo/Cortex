@@ -1,0 +1,32 @@
+instruction = "Several problems have been reported in this project. They are separate; fix all of them. Keep track of which you have dealt with, and check each fix before moving on.\n\n1. Users importing exchange history report that when a position is closed in several partial exits, the commissions on the resulting trades add up to more than the fees the exchange actually charged. Trades closed in a single exit are correct. Find the cause in the import code and fix it.\n\n2. Bybit sometimes reports an entry fill and its exit fill with the same millisecond timestamp. Bybit also supplies a sequence number that gives the true order of executions, but imports of such round trips come out wrong: the exit is processed before the entry, so the trade is reported as unmatched or with the wrong profit. Execution ids are random and say nothing about order. Fix the import so that fills with the same timestamp are processed in their true order.\n\n3. A futures import can start in the middle of a position: the first fill in the selected date range closes a position that was opened before the range. That close is correctly counted as unmatched. But when that same fill is a reversal, meaning the exchange says only part of it closed the old position and the rest opened a new position in the other direction, the new position is lost. Its later exit is then also reported as unmatched instead of producing a trade. Fix the import so the opening part of such a fill is kept. This applies to futures only; spot imports never open a position on a sell.\n\n4. Imported trades have their commission and net P&L rounded to cents one trade at a time, so rounding errors pile up. Example: one exit with a $0.01 fee that closes three entry lots produces three trades that each show a commission of 0.00, and the cent disappears from the totals.\n\nChange `matchFills` so that rounding is carried across the whole import. Keep exact running totals of commission and of net P&L over all trades produced so far, in the order they are produced. Each trade's displayed commission is the running commission total rounded to cents (half up) minus the rounded running total as it stood before that trade; net P&L works the same way. The displayed values then always add up to the rounded exact total.\n\n5. Bybit's execution history is read page by page using a cursor. If Bybit returns a cursor it has already returned, the import keeps requesting pages until it runs out of its request budget and then fails with a misleading error. It should instead stop as soon as a cursor repeats, with the error `Bybit pagination did not advance. Retry with a smaller range.`"
+max_steps = 80
+
+[source]
+repo = "../../../sources/tradelyzer"
+commit = "1e606dc257a4172721171baa75c22c376dd09dfe"
+remove = ["tests/exchanges.test.ts"]
+link = ["node_modules"]
+link_from = "../../../sources/tradelyzer-deps"
+
+[check]
+command = "npx vitest run"
+
+[[milestone]]
+name = "partial-exit-fees"
+command = "npx vitest run tests/exchange-sample.test.ts tests/exchanges.test.ts -t '^completed\\ exchange\\ trades\\ matches\\ spot\\ partial\\ exits\\ with\\ proportional\\ entry\\ fees\\ and\\ stable\\ IDs$|^imports\\ binance\\ perpetual\\ samples\\ through\\ the\\ real\\ adapter\\ and\\ persists\\ them$|^imports\\ binance\\ spot\\ samples\\ through\\ the\\ real\\ adapter\\ and\\ persists\\ them$|^imports\\ bybit\\ perpetual\\ samples\\ through\\ the\\ real\\ adapter\\ and\\ persists\\ them$|^imports\\ coinbase\\ spot\\ samples\\ through\\ the\\ real\\ adapter\\ and\\ persists\\ them$'"
+
+[[milestone]]
+name = "same-millisecond-order"
+command = "npx vitest run tests/exchanges.test.ts -t '^completed\\ exchange\\ trades\\ orders\\ Bybit\\ fills\\ at\\ the\\ same\\ millisecond\\ by\\ sequence\\ rather\\ than\\ random\\ IDs$'"
+
+[[milestone]]
+name = "reversal-opening-lost"
+command = "npx vitest run tests/exchanges.test.ts -t '^retains\\ a\\ verified\\ reversal\\ opening\\ when\\ its\\ prior\\ position\\ is\\ outside\\ the\\ range$'"
+
+[[milestone]]
+name = "cent-rounding-drift"
+command = "npx vitest run tests/exchanges.test.ts -t '^import\\ accounting\\ regressions\\ preserves\\ the\\ total\\ one\\-cent\\ fee\\ when\\ an\\ exit\\ matches\\ multiple\\ lots$'"
+
+[[milestone]]
+name = "bybit-repeating-cursor"
+command = "npx vitest run tests/exchanges.test.ts -t '^exchange\\ REST\\ adapters\\ fails\\ instead\\ of\\ silently\\ truncating\\ repeating\\ cursors$'"

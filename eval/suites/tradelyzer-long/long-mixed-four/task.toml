@@ -1,0 +1,28 @@
+instruction = "Several problems have been reported in this project. They are separate; fix all of them. Keep track of which you have dealt with, and check each fix before moving on.\n\n1. Bybit's execution history is read page by page using a cursor. If Bybit returns a cursor it has already returned, the import keeps requesting pages until it runs out of its request budget and then fails with a misleading error. It should instead stop as soon as a cursor repeats, with the error `Bybit pagination did not advance. Retry with a smaller range.`\n\n2. When a day's journal is saved, the caller passes the ids of screenshots to remove. Nothing checks that those screenshots belong to the day being saved, so saving one day's journal can delete another day's screenshot. Make the save refuse, with the error `Screenshot belongs to another day.`, when any screenshot to remove belongs to a different day. In that case nothing may be saved or deleted. An id that matches no stored screenshot is not an error.\n\n3. The trade calendar should file each trade under the day it closed in the time zone the user has chosen. A user whose calendar is set to New York reports that trades closed in the evening appear on the following day. Fix it.\n\n4. Imported trades have their commission and net P&L rounded to cents one trade at a time, so rounding errors pile up. Example: one exit with a $0.01 fee that closes three entry lots produces three trades that each show a commission of 0.00, and the cent disappears from the totals.\n\nChange `matchFills` so that rounding is carried across the whole import. Keep exact running totals of commission and of net P&L over all trades produced so far, in the order they are produced. Each trade's displayed commission is the running commission total rounded to cents (half up) minus the rounded running total as it stood before that trade; net P&L works the same way. The displayed values then always add up to the rounded exact total."
+max_steps = 68
+
+[source]
+repo = "../../../sources/tradelyzer"
+commit = "1e606dc257a4172721171baa75c22c376dd09dfe"
+remove = ["tests/exchanges.test.ts", "tests/journal-database.test.ts", "tests/calendar.test.ts"]
+link = ["node_modules"]
+link_from = "../../../sources/tradelyzer-deps"
+
+[check]
+command = "npx vitest run"
+
+[[milestone]]
+name = "bybit-repeating-cursor"
+command = "npx vitest run tests/exchanges.test.ts -t '^exchange\\ REST\\ adapters\\ fails\\ instead\\ of\\ silently\\ truncating\\ repeating\\ cursors$'"
+
+[[milestone]]
+name = "cross-day-screenshot"
+command = "npx vitest run tests/journal-database.test.ts -t '^prevents\\ attachment\\ changes\\ from\\ modifying\\ another\\ day'\"'\"'s\\ screenshots$'"
+
+[[milestone]]
+name = "calendar-evening-trades"
+command = "npx vitest run tests/calendar.test.ts -t '^Luxon\\ calendar\\ groups\\ by\\ local\\ close\\ day\\ across\\ midnight$'"
+
+[[milestone]]
+name = "cent-rounding-drift"
+command = "npx vitest run tests/exchanges.test.ts -t '^import\\ accounting\\ regressions\\ preserves\\ fractional\\ entry\\ fees\\ across\\ multiple\\ partial\\ exits$|^import\\ accounting\\ regressions\\ preserves\\ the\\ total\\ one\\-cent\\ fee\\ when\\ an\\ exit\\ matches\\ multiple\\ lots$'"

@@ -1,0 +1,11 @@
+instruction = "A futures import can start in the middle of a position: the first fill in the selected date range closes a position that was opened before the range. That close is correctly counted as unmatched. But when that same fill is a reversal, meaning the exchange says only part of it closed the old position and the rest opened a new position in the other direction, the new position is lost. Its later exit is then also reported as unmatched instead of producing a trade. Fix the import so the opening part of such a fill is kept. This applies to futures only; spot imports never open a position on a sell."
+
+[source]
+repo = "../../../sources/tradelyzer"
+commit = "1e606dc257a4172721171baa75c22c376dd09dfe"
+remove = ["tests/exchanges.test.ts"]
+link = ["node_modules"]
+link_from = "../../../sources/tradelyzer-deps"
+
+[check]
+command = "npx vitest run"

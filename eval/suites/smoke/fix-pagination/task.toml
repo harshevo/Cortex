@@ -1,0 +1,8 @@
+instruction = """
+Users report two problems with the results list: the first page skips items \
+that should be on it, and when the last page is only partly full it is missing \
+from the page count. The logic is in `pagination.py`. Find and fix both problems.
+"""
+
+[check]
+command = "python3 -m unittest discover -q -p 'test_*.py'"

@@ -1,0 +1,49 @@
+use async_trait::async_trait;
+use cortex_core::{Access, Adviser, Tool, ToolContext, ToolError, ToolSpec};
+use serde_json::{Value, json};
+use std::sync::Arc;
+
+pub struct BrainState(pub Vec<Arc<dyn Adviser>>);
+
+#[async_trait]
+impl Tool for BrainState {
+    fn spec(&self) -> ToolSpec {
+        ToolSpec {
+            name: "brain_state".into(),
+            description: "Inspect the real brain state and learned intuition. Optional neuron_ids inspects up to 8 neurons anywhere in the fly network, returning voltage and up to 64 outgoing synapses each; offset pages through their connections. Diagnostic measurements are not proof of task correctness.".into(),
+            input_schema: json!({"type":"object","properties":{"neuron_ids":{"type":"array","maxItems":8,"items":{"type":"integer","minimum":0}},"offset":{"type":"integer","minimum":0}},"additionalProperties":false}),
+        }
+    }
+    fn access(&self) -> Access {
+        Access::ReadOnly
+    }
+    async fn run(&self, query: Value, _context: &ToolContext) -> Result<String, ToolError> {
+        if !query.is_object() {
+            return Err(ToolError::InvalidInput("Expected an object".into()));
+        }
+        if let Some(ids) = query.get("neuron_ids") {
+            let ids = ids
+                .as_array()
+                .ok_or_else(|| ToolError::InvalidInput("neuron_ids must be an array".into()))?;
+            if ids.len() > 8 || ids.iter().any(|id| id.as_u64().is_none()) {
+                return Err(ToolError::InvalidInput(
+                    "Use up to 8 non-negative integer neuron IDs".into(),
+                ));
+            }
+        }
+        if query
+            .get("offset")
+            .is_some_and(|offset| offset.as_u64().is_none())
+        {
+            return Err(ToolError::InvalidInput(
+                "offset must be a non-negative integer".into(),
+            ));
+        }
+        let states: Vec<_> = self
+            .0
+            .iter()
+            .filter_map(|adviser| adviser.inspect(&query))
+            .collect();
+        serde_json::to_string(&states).map_err(|error| ToolError::Failed(error.to_string()))
+    }
+}

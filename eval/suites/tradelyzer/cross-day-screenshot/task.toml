@@ -1,0 +1,11 @@
+instruction = "When a day's journal is saved, the caller passes the ids of screenshots to remove. Nothing checks that those screenshots belong to the day being saved, so saving one day's journal can delete another day's screenshot. Make the save refuse, with the error `Screenshot belongs to another day.`, when any screenshot to remove belongs to a different day. In that case nothing may be saved or deleted. An id that matches no stored screenshot is not an error."
+
+[source]
+repo = "../../../sources/tradelyzer"
+commit = "1e606dc257a4172721171baa75c22c376dd09dfe"
+remove = ["tests/journal-database.test.ts"]
+link = ["node_modules"]
+link_from = "../../../sources/tradelyzer-deps"
+
+[check]
+command = "npx vitest run"

@@ -1,0 +1,11 @@
+instruction = "The month view of the trade calendar shows whole weeks, Monday to Sunday, including the days of neighbouring months that fall in the first and last week. In months whose last day is not a Sunday, the final week is missing, so the last days of the month cannot be seen. Fix it."
+
+[source]
+repo = "../../../sources/tradelyzer"
+commit = "1e606dc257a4172721171baa75c22c376dd09dfe"
+remove = ["tests/calendar.test.ts"]
+link = ["node_modules"]
+link_from = "../../../sources/tradelyzer-deps"
+
+[check]
+command = "npx vitest run"

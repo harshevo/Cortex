@@ -1,0 +1,18 @@
+/target
+
+# Per-project agent state (trajectories, later: index and memory).
+.cortex/
+
+# Evaluation output. Reports are worth keeping; commit them deliberately.
+/eval/results/
+
+.DS_Store
+
+# Third-party repositories cloned as raw material for eval tasks.
+/eval/sources/
+
+# Python environment and caches for the ML side.
+/ml/.venv/
+__pycache__/
+
+target/

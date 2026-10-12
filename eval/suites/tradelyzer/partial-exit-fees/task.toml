@@ -1,0 +1,11 @@
+instruction = "Users importing exchange history report that when a position is closed in several partial exits, the commissions on the resulting trades add up to more than the fees the exchange actually charged. Trades closed in a single exit are correct. Find the cause in the import code and fix it."
+
+[source]
+repo = "../../../sources/tradelyzer"
+commit = "1e606dc257a4172721171baa75c22c376dd09dfe"
+remove = ["tests/exchanges.test.ts"]
+link = ["node_modules"]
+link_from = "../../../sources/tradelyzer-deps"
+
+[check]
+command = "npx vitest run"

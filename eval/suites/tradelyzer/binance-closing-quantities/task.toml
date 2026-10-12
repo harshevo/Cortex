@@ -1,0 +1,11 @@
+instruction = "`withBinanceClosingQuantities` in the import code is not implemented. Implement it.\n\nBackground: Binance futures fills in one-way mode (lane `BOTH`) do not say how much of each fill closed an existing position. The function receives the fills and, per symbol, the signed position after the newest fill (positive is long, negative is short), and works backwards to fill in `closed`.\n\nRules:\n- Fills are identified by symbol and id together. Duplicates count once.\n- Walk the distinct fills from newest to oldest, ordered by time and then by id compared as an integer.\n- Only fills whose lane is `BOTH` are processed; others are left untouched.\n- For each processed fill: the position before it is the position after it minus the quantity for a BUY, or plus the quantity for a SELL. A BUY closes when the position before was short; a SELL closes when it was long. The closed quantity is then the smaller of the fill quantity and the size of the position before; otherwise it is zero. The position before becomes the position after for the next (older) fill of that symbol.\n- Return the fills in their original order and count, with each processed fill replaced by a copy whose `closed` is the closed quantity as a decimal string.\n- Use the file's 40-digit decimal type for all arithmetic.\n\nErrors, checked per processed fill in this order:\n- quantity not finite or not positive: `Exchange returned an invalid fill.`\n- no finite ending position for the fill's symbol: `Binance position state is missing. Retry the import or use a file export.`\n- closed quantity is zero but the fill reports a non-zero `pnl`: `Binance position history could not be reconciled. Retry when trading is paused or use a file export.`"
+
+[source]
+repo = "../../../sources/tradelyzer"
+commit = "1e606dc257a4172721171baa75c22c376dd09dfe"
+remove = ["tests/exchanges.test.ts"]
+link = ["node_modules"]
+link_from = "../../../sources/tradelyzer-deps"
+
+[check]
+command = "npx vitest run"

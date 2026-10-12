@@ -1,0 +1,17 @@
+[package]
+name = "cortex-providers"
+description = "Model backends for Cortex: the Anthropic API, OpenAI-compatible servers, a ChatGPT subscription, and a scripted stand-in for tests."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cortex-core.workspace = true
+
+async-trait.workspace = true
+base64 = "0.22"
+getrandom = "0.4"
+reqwest.workspace = true
+serde_json.workspace = true
+sha2 = "0.11"
+tokio = { workspace = true, features = ["net"] }

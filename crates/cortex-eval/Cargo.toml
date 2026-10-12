@@ -1,0 +1,25 @@
+[package]
+name = "cortex-eval"
+description = "Evaluation harness: run the agent on a suite of tasks and score the results."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cortex-core.workspace = true
+cortex-index.workspace = true
+cortex-providers.workspace = true
+cortex-tools.workspace = true
+
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+cortex-brain.workspace = true
+async-trait.workspace = true
+cortex-memory.workspace = true
+cortex-verify.workspace = true

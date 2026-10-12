@@ -1,0 +1,21 @@
+[package]
+name = "cortex-memory"
+description = "Memory in three tiers: working (one task), episodic (past tasks), and long-term facts about a repository."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cortex-core.workspace = true
+cortex-retrieval.workspace = true
+
+async-trait.workspace = true
+reqwest.workspace = true
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
