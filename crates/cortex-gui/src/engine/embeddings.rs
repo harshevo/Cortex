@@ -200,6 +200,9 @@ fn service_command(port: u16) -> Result<Command> {
     command
         .current_dir(directory)
         .env("PYTHONUNBUFFERED", "1")
+        .env("CORTEX_CPU_THREADS", "2")
+        .env("OMP_NUM_THREADS", "2")
+        .env("TOKENIZERS_PARALLELISM", "false")
         .args([
             "-m",
             "cortex_ml.embedding.server",

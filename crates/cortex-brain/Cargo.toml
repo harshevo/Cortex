@@ -12,6 +12,9 @@ async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
+wgpu = { version = "30", default-features = false, features = ["metal", "wgsl", "std", "parking_lot"] }
+bytemuck = { version = "1", features = ["derive"] }
+pollster = "0.4"
 
 [dev-dependencies]
 tokio.workspace = true

@@ -33,6 +33,7 @@ pub enum Placement {
 /// Everything the engine remembers about one repository.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Remembered {
+    pub total_episodes: usize,
     /// Oldest first.
     pub episodes: Vec<Episode>,
 
@@ -88,7 +89,7 @@ impl MemoryReader {
     pub async fn read(&self) -> Result<Remembered> {
         let mut stored = self
             .store
-            .episodes(&self.scope)
+            .recent_episodes(&self.scope, 512)
             .context("cannot read the episodes")?;
 
         let facts = self
@@ -142,6 +143,7 @@ impl MemoryReader {
         let (vectors, placement) = self.place(&episodes, embeddings);
 
         Ok(Remembered {
+            total_episodes: self.store.episode_count(&self.scope)?,
             episodes,
             vectors,
             facts,

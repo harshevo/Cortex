@@ -17,6 +17,8 @@ use std::sync::{Arc, OnceLock};
 
 use crate::connectome::{Connectome, Layout, Random, Wiring};
 use crate::situation::FEATURES;
+#[path = "gpu.rs"]
+mod gpu;
 
 /// Share of the voltage kept from one step to the next.
 const DECAY: f32 = 0.8;
@@ -38,6 +40,7 @@ const NOT_READ: u32 = u32::MAX;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct BrainConfig {
+    pub sample_neurons: usize,
     pub neurons: usize,
     pub inputs: usize,
     pub kenyon: usize,
@@ -67,6 +70,7 @@ impl BrainConfig {
     /// 50 million. The fly has roughly 2,000 Kenyon cells a side.
     pub fn fly() -> Self {
         Self {
+            sample_neurons: 96,
             neurons: 139_255,
             inputs: 2_040,
             kenyon: 4_000,
@@ -132,6 +136,7 @@ pub struct Activity {
 }
 
 pub struct Brain {
+    gpu: Option<gpu::GpuBrain>,
     config: BrainConfig,
     connectome: Arc<Connectome>,
 
@@ -172,6 +177,10 @@ pub struct NeuralFrame {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NeuralTrace {
+    #[serde(default)]
+    pub first_tick: u32,
+    #[serde(default)]
+    pub backend: String,
     pub total_neurons: usize,
     pub total_connections: usize,
     pub neuron_ids: Vec<u32>,
@@ -300,6 +309,7 @@ impl Brain {
         }
 
         Self {
+            gpu: None,
             config,
             connectome,
             input_neurons,
@@ -318,6 +328,53 @@ impl Brain {
 
     pub fn config(&self) -> &BrainConfig {
         &self.config
+    }
+
+    pub fn enable_gpu(&mut self) -> Result<(), String> {
+        if self.telemetry.neuron_ids.is_empty() {
+            self.prepare_trace();
+        }
+        let gpu = gpu::GpuBrain::new(self)?;
+        self.telemetry.backend = format!("Metal GPU · {}", gpu.name());
+        self.gpu = Some(gpu);
+        Ok(())
+    }
+
+    pub fn set_sample_limit(&mut self, limit: usize) -> Result<(), String> {
+        if !matches!(limit, 96 | 256 | 512) {
+            return Err("Choose 96, 256, or 512 displayed neurons".into());
+        }
+        if self.config.sample_neurons == limit {
+            return Ok(());
+        }
+        let previous = self.telemetry.clone();
+        let had_gpu = self.gpu.take().is_some();
+        self.config.sample_neurons = limit;
+        self.prepare_trace();
+        self.telemetry.features = previous.features;
+        self.telemetry.total_spikes = previous.total_spikes;
+        self.telemetry.mean_rate = previous.mean_rate;
+        self.telemetry.readout_active = previous.readout_active;
+        self.telemetry.encoding_ms = previous.encoding_ms;
+        self.telemetry.first_tick = self.config.steps.saturating_sub(1);
+        self.telemetry.frames.push(NeuralFrame {
+            voltage: self
+                .telemetry
+                .neuron_ids
+                .iter()
+                .map(|id| self.voltage[*id as usize])
+                .collect(),
+            spikes: self
+                .telemetry
+                .neuron_ids
+                .iter()
+                .map(|id| self.refractory[*id as usize] == REFRACTORY_STEPS)
+                .collect(),
+        });
+        if had_gpu {
+            self.enable_gpu()?;
+        }
+        Ok(())
     }
 
     pub fn connectome(&self) -> &Connectome {
@@ -341,9 +398,31 @@ impl Brain {
             self.prepare_trace();
         }
         self.telemetry.frames.clear();
+        self.telemetry.first_tick = 0;
         self.telemetry.features = features.to_vec();
         let neurons = self.config.neurons;
         let steps = self.config.steps;
+        if let Some(gpu) = self.gpu.take() {
+            match gpu.respond(features, self) {
+                Ok(code) => {
+                    self.last_activity = Activity {
+                        mean_rate: self.telemetry.total_spikes as f32
+                            / (neurons as f32 * steps as f32),
+                        kenyon_active: code.iter().filter(|count| **count > 0.0).count() as f32
+                            / self.readout.max(1) as f32,
+                    };
+                    self.telemetry.mean_rate = self.last_activity.mean_rate;
+                    self.telemetry.readout_active = self.last_activity.kenyon_active;
+                    self.telemetry.encoding_ms = started.elapsed().as_millis() as u64;
+                    self.gpu = Some(gpu);
+                    return code;
+                }
+                Err(error) => {
+                    eprintln!("warning: GPU simulation failed; using CPU: {error}");
+                    self.telemetry.backend = format!("CPU fallback: {error}");
+                }
+            }
+        }
 
         self.voltage.fill(0.0);
         self.current.fill(0.0);
@@ -482,13 +561,25 @@ impl Brain {
                 }
             }
         }
-        let connected = ids.clone();
-        for id in connected {
+        let mut position = 0;
+        let limit = self.config.sample_neurons.min(self.config.neurons);
+        while position < ids.len() && ids.len() < limit {
+            let id = ids[position];
+            position += 1;
             let (targets, _) = self.connectome.outgoing(id as usize);
-            for target in targets.iter().take(2) {
-                if !ids.contains(target) && ids.len() < 96 {
+            for target in targets.iter().take(4) {
+                if !ids.contains(target) && ids.len() < limit {
                     ids.push(*target);
                 }
+            }
+        }
+        for position in 0..limit {
+            if ids.len() == limit {
+                break;
+            }
+            let id = (position * self.config.neurons / limit) as u32;
+            if !ids.contains(&id) {
+                ids.push(id);
             }
         }
         let populations = ids
@@ -505,15 +596,21 @@ impl Brain {
             })
             .collect();
         let mut synapses = Vec::new();
+        let places: std::collections::HashMap<u32, usize> = ids
+            .iter()
+            .enumerate()
+            .map(|(index, id)| (*id, index))
+            .collect();
         for (from, id) in ids.iter().enumerate() {
             let (targets, weights) = self.connectome.outgoing(*id as usize);
             for (target, weight) in targets.iter().zip(weights) {
-                if let Some(to) = ids.iter().position(|id| id == target) {
-                    synapses.push((from, to, *weight));
+                if let Some(to) = places.get(target) {
+                    synapses.push((from, *to, *weight));
                 }
             }
         }
         self.telemetry = NeuralTrace {
+            backend: "CPU".into(),
             total_neurons: self.config.neurons,
             total_connections: self.connectome.synapses(),
             neuron_ids: ids,
@@ -674,6 +771,85 @@ mod tests {
 
         assert!(similarity(&base, &near) > similarity(&base, &far));
         assert!(similarity(&base, &far) < 0.9);
+    }
+
+    /// The GPU delivers a step's spikes in no fixed order, so sums of
+    /// currents can round differently and a neuron sitting exactly on the
+    /// threshold may fire a step apart. The codes are compared for being
+    /// nearly the same, not identical.
+    #[test]
+    fn the_gpu_gives_the_same_activity_as_the_cpu() {
+        let mut cpu = Brain::generate(BrainConfig::tiny());
+        let mut gpu = Brain::generate(BrainConfig::tiny());
+
+        if let Err(error) = gpu.enable_gpu() {
+            eprintln!("skipped: no GPU here ({error})");
+
+            return;
+        }
+
+        for set in [&[0, 2, 3, 13][..], &[0, 5, 8, 10, 14], &[]] {
+            let situation = features(set);
+
+            let expected = cpu.respond(&situation);
+            let code = gpu.respond(&situation);
+
+            assert!(gpu.trace().backend.starts_with("Metal GPU"));
+            assert_eq!(code.len(), expected.len());
+
+            if set.is_empty() {
+                assert!(code.iter().all(|count| *count == 0.0));
+
+                continue;
+            }
+
+            assert!(similarity(&code, &expected) > 0.99);
+
+            let (spikes, wanted) = (gpu.trace().total_spikes, cpu.trace().total_spikes);
+
+            assert!(
+                spikes.abs_diff(wanted) * 100 <= wanted,
+                "{spikes} vs {wanted}"
+            );
+            assert_eq!(gpu.trace().frames.len(), cpu.trace().frames.len());
+
+            // The state read back is the state the trace recorded.
+            let trace = gpu.trace();
+
+            for (index, id) in trace.neuron_ids.iter().enumerate() {
+                assert_eq!(
+                    trace.frames.last().unwrap().voltage[index],
+                    gpu.voltage[*id as usize]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn more_neurons_can_be_sampled_without_changing_the_simulation() {
+        let mut brain = Brain::generate(BrainConfig::tiny());
+
+        let situation = features(&[0, 2, 3, 13]);
+        let code = brain.respond(&situation);
+
+        assert!(brain.set_sample_limit(100).is_err());
+
+        for limit in [256, 512, 96] {
+            brain.set_sample_limit(limit).unwrap();
+
+            // Until the next presentation there is the present state to
+            // show, as one frame.
+            let trace = brain.trace();
+
+            assert_eq!(trace.neuron_ids.len(), limit);
+            assert_eq!(trace.populations.len(), limit);
+            assert_eq!(trace.frames.len(), 1);
+            assert_eq!(trace.frames[0].voltage.len(), limit);
+
+            assert_eq!(brain.respond(&situation), code);
+            assert_eq!(brain.trace().frames.len(), brain.config.steps as usize);
+            assert_eq!(brain.trace().frames[0].spikes.len(), limit);
+        }
     }
 
     #[test]

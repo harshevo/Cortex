@@ -452,7 +452,7 @@ pub fn intuition_file(memory: &std::path::Path) -> PathBuf {
 fn fly_brain(args: &ModelArgs) -> Result<Brain> {
     let started = Instant::now();
 
-    let brain = match &args.connectome {
+    let mut brain = match &args.connectome {
         Some(path) => Brain::from_file(BrainConfig::measured(), path)
             .with_context(|| format!("cannot read the connectome {}", path.display()))?,
 
@@ -465,6 +465,20 @@ fn fly_brain(args: &ModelArgs) -> Result<Brain> {
         "generated wiring"
     };
 
+    let device = std::env::var("CORTEX_BRAIN_DEVICE").unwrap_or_else(|_| "auto".into());
+    match device.as_str() {
+        "cpu" => {}
+        "auto" if !cfg!(target_os = "macos") => {}
+        "auto" | "gpu" => {
+            if let Err(error) = brain.enable_gpu() {
+                if device == "gpu" {
+                    bail!("GPU simulation requested but unavailable: {error}");
+                }
+                eprintln!("brain: Metal unavailable, using CPU: {error}");
+            }
+        }
+        _ => bail!("CORTEX_BRAIN_DEVICE must be auto, gpu, or cpu"),
+    }
     eprintln!(
         "brain: {} neurons, {} connections, {wiring}, {} MB, built in {} ms",
         brain.config().neurons,

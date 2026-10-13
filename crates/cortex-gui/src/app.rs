@@ -246,7 +246,7 @@ impl CortexApp {
 
         for update in updates {
             match update {
-                Update::BrainInspection(states) => self.memory.activity.inspection = states,
+                Update::BrainInspection(states) => self.memory.inspected(states),
                 Update::ServiceStarting(text) => self.live.notice(&text, Tone::Muted),
                 Update::Ready(info) => self.agent_ready(info),
 
@@ -342,6 +342,8 @@ impl CortexApp {
         }
 
         self.status = Status::Ready(info);
+
+        self.memory.activity.agent_rebuilt();
     }
 
     fn submit(&mut self, instruction: &str) {
@@ -828,9 +830,25 @@ impl CortexApp {
     }
 
     fn memory_space(&mut self, ui: &mut egui::Ui) {
+        if let Some(request) = self
+            .approvals
+            .front()
+            .map(|approval| approval.request.clone())
+        {
+            ui.label("The agent is waiting for your approval.");
+            if let Some(decision) = conversation::approval_card(ui, &request)
+                && let Some(approval) = self.approvals.pop_front()
+            {
+                approval.answer(decision);
+            }
+        }
         self.memory.set_thoughts(working::thoughts(&self.working));
 
-        memory_space::show(ui, &mut self.memory, self.live.running);
+        memory_space::show(
+            ui,
+            &mut self.memory,
+            self.live.running && self.approvals.is_empty(),
+        );
         if let Some(query) = self.memory.activity.request.take() {
             self.engine.inspect_brain(query);
         }
@@ -975,7 +993,8 @@ impl CortexApp {
 
         // The "thinking" square pulses while a run is in progress.
         if self.live.running {
-            ui.ctx().request_repaint();
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(100));
         }
 
         self.rehearsal.advance(ui.ctx());

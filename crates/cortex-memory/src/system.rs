@@ -181,7 +181,6 @@ impl MemorySystem {
         };
 
         let mut candidates = Vec::new();
-        let mut vectors = Vec::new();
         let mut vector_by_id = std::collections::HashMap::new();
 
         for stored in stored {
@@ -194,19 +193,37 @@ impl MemorySystem {
                 vector_by_id.insert(stored.episode.id, vector.clone());
             }
 
-            vectors.push(stored.embedding.unwrap_or_default());
-
             candidates.push(ScoredEpisode {
                 episode: stored.episode,
                 score,
             });
         }
 
+        // Which memories are near enough to show is decided by similarity,
+        // which is what the floors were set on. The reranker's scores are
+        // on a scale of their own, so it only decides the order, and with
+        // it which of them fit.
+        let mut episodes = recall::select_episodes(candidates, usize::MAX, floor);
+
+        let vectors: Vec<Vec<f32>> = episodes
+            .iter()
+            .map(|candidate| {
+                vector_by_id
+                    .get(&candidate.episode.id)
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .collect();
+
         let reranked = self
-            .rerank(query_vector.as_deref(), &vectors, &mut candidates)
+            .rerank(query_vector.as_deref(), &vectors, &mut episodes)
             .await;
 
-        let episodes = recall::select_episodes(candidates, self.config.max_episodes, floor);
+        if reranked {
+            episodes.sort_by(|left, right| right.score.total_cmp(&left.score));
+        }
+
+        episodes.truncate(self.config.max_episodes);
 
         if let Some(query_vector) = &query_vector {
             self.keep_shown(query_vector, &episodes, &vector_by_id);
@@ -1037,6 +1054,60 @@ mod tests {
 
         assert_eq!(observed.len(), 1);
         assert_eq!(observed[0], (vec![1.0, 0.0], vec![1.0, 0.0]));
+    }
+
+    /// Scores every memory far below the similarity floor, the newest
+    /// highest.
+    struct LowScoringReranker;
+
+    #[async_trait]
+    impl Reranker for LowScoringReranker {
+        async fn rerank(&self, _query: &[f32], candidates: &[Vec<f32>]) -> Option<Vec<f32>> {
+            Some(
+                (0..candidates.len())
+                    .map(|position| 0.01 * (position + 1) as f32)
+                    .collect(),
+            )
+        }
+
+        async fn observe(&self, _query: &[f32], _useful: &[f32]) {}
+    }
+
+    #[tokio::test]
+    async fn a_reranker_changes_the_order_and_not_what_is_near_enough() {
+        let plain = system().with_embedder(Arc::new(FixedEmbedder));
+        let (_dir, workspace) = workspace_with(&["calendar.ts", "money.ts"]);
+
+        play_run(&plain, "calendar week grid", "calendar.ts", None);
+        play_run(&plain, "calendar day labels", "calendar.ts", None);
+        play_run(&plain, "rounding of fees", "money.ts", None);
+
+        let before = plain.recall("zzz", workspace.root()).await.unwrap();
+
+        let instructions = |recall: &Recall| -> Vec<String> {
+            recall
+                .episodes
+                .iter()
+                .map(|scored| scored.episode.instruction.clone())
+                .collect()
+        };
+
+        assert!(!before.reranked);
+        assert_eq!(before.episodes.len(), 2);
+
+        let reranked = plain.with_reranker(Arc::new(LowScoringReranker));
+        let after = reranked.recall("zzz", workspace.root()).await.unwrap();
+
+        // The same two memories, although their new scores are under the
+        // floor, and the unrelated one is still left out.
+        assert!(after.reranked);
+        assert_eq!(after.episodes.len(), 2);
+        assert!(!instructions(&after).contains(&"rounding of fees".to_string()));
+
+        let mut same = instructions(&before);
+        same.reverse();
+
+        assert_eq!(instructions(&after), same);
     }
 
     #[tokio::test]

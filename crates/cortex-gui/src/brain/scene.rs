@@ -528,6 +528,7 @@ mod tests {
         ];
 
         Remembered {
+            total_episodes: episodes.len(),
             facts: derive_facts(&episodes, 10),
             episodes,
             vectors: vec![

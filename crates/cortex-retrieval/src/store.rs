@@ -20,7 +20,7 @@ const FILE: &str = ".cortex/semantic-index.json";
 
 /// Changed whenever chunks or stored vectors change shape, so that a file
 /// written by an older build is embedded again instead of misread.
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 
 /// Which embedding model made the vectors. Those of another model, or of
 /// another size, cannot be compared with a query and are thrown away.

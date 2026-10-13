@@ -21,6 +21,7 @@ pub struct Advice {
 
 pub trait Adviser: Send + Sync {
     fn begin_run(&self, _max_steps: u32) {}
+    fn prepare(&self, _step: u32, _max_steps: u32) {}
     fn inspect(&self, _query: &Value) -> Option<Value> {
         self.telemetry()
     }

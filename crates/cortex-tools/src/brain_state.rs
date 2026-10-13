@@ -11,7 +11,7 @@ impl Tool for BrainState {
         ToolSpec {
             name: "brain_state".into(),
             description: "Inspect the real brain state and learned intuition. Optional neuron_ids inspects up to 8 neurons anywhere in the fly network, returning voltage and up to 64 outgoing synapses each; offset pages through their connections. Diagnostic measurements are not proof of task correctness.".into(),
-            input_schema: json!({"type":"object","properties":{"neuron_ids":{"type":"array","maxItems":8,"items":{"type":"integer","minimum":0}},"offset":{"type":"integer","minimum":0}},"additionalProperties":false}),
+            input_schema: json!({"type":"object","properties":{"neuron_ids":{"type":"array","maxItems":8,"items":{"type":"integer","minimum":0}},"offset":{"type":"integer","minimum":0},"sample_count":{"type":"integer","enum":[96,256,512]}},"additionalProperties":false}),
         }
     }
     fn access(&self) -> Access {
@@ -20,6 +20,14 @@ impl Tool for BrainState {
     async fn run(&self, query: Value, _context: &ToolContext) -> Result<String, ToolError> {
         if !query.is_object() {
             return Err(ToolError::InvalidInput("Expected an object".into()));
+        }
+        if query
+            .get("sample_count")
+            .is_some_and(|count| !matches!(count.as_u64(), Some(96 | 256 | 512)))
+        {
+            return Err(ToolError::InvalidInput(
+                "sample_count must be 96, 256, or 512".into(),
+            ));
         }
         if let Some(ids) = query.get("neuron_ids") {
             let ids = ids

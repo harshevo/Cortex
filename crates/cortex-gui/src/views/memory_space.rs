@@ -78,7 +78,7 @@ impl MemoryView {
     /// long enough, once there are many, to make the window stutter. So
     /// that is done on another thread and picked up when it is ready.
     pub fn load(&mut self, remembered: Remembered) {
-        self.episodes = remembered.episodes.len();
+        self.episodes = remembered.total_episodes.max(remembered.episodes.len());
         let checked = remembered
             .episodes
             .iter()
@@ -169,6 +169,13 @@ impl MemoryView {
         self.rebuild_graph();
     }
 
+    /// Takes in the engine's answer to a question the inspector asked.
+    pub fn inspected(&mut self, states: Vec<serde_json::Value>) {
+        if self.activity.inspected(states) {
+            self.rebuild_graph();
+        }
+    }
+
     fn rebuild_graph(&mut self) {
         let mut graph = Graph::assemble(&self.lasting, &self.thoughts);
         graph.add_activity(&self.activity);
@@ -224,7 +231,12 @@ pub fn show(ui: &mut Ui, view: &mut MemoryView, thinking: bool) {
     }
 
     // The brain is always moving.
-    ui.ctx().request_repaint();
+    ui.ctx()
+        .request_repaint_after(std::time::Duration::from_millis(if thinking {
+            33
+        } else {
+            100
+        }));
 }
 
 /// Applies the pointer to the scene: drag to orbit, scroll to zoom, hover

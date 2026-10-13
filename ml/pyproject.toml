@@ -17,6 +17,9 @@ dependencies = [
 [dependency-groups]
 dev = ["pytest"]
 
+[project.optional-dependencies]
+apple = ["coremltools>=9,<10; sys_platform == 'darwin'"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 

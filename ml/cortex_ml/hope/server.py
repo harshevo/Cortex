@@ -22,6 +22,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import torch
 
 from cortex_ml.hope.model import HopeConfig, HopeMemory
+from cortex_ml.acceleration import HopeRuntime
 
 
 def load(weights: str | None) -> tuple[HopeMemory, bool]:
@@ -42,7 +43,8 @@ def load(weights: str | None) -> tuple[HopeMemory, bool]:
     return model, True
 
 
-def make_handler(model: HopeMemory, trained: bool):
+def make_handler(model: HopeMemory, trained: bool, runtime: HopeRuntime | None = None):
+    runtime = runtime or HopeRuntime(model, trained=trained)
     lock = threading.Lock()
 
     class Handler(BaseHTTPRequestHandler):
@@ -51,7 +53,9 @@ def make_handler(model: HopeMemory, trained: bool):
             if self.path != "/health":
                 return self._send(404, {"error": "not found"})
 
-            self._send(200, {"model": "hope", "trained": trained, "dimension": model.config.dimension})
+            self._send(200, {"model": "hope", "trained": trained, "dimension": model.config.dimension,
+                "backend": runtime.backend, "compute_devices": runtime.compute_devices,
+                "coreml_error": runtime.coreml_error})
 
         def do_POST(self):
             try:
@@ -64,10 +68,10 @@ def make_handler(model: HopeMemory, trained: bool):
                     if self.path == "/rerank":
                         candidates = torch.tensor(body["candidates"], dtype=torch.float32)
 
-                        return self._send(200, {"scores": model.score(query, candidates).tolist()})
+                        return self._send(200, {"scores": runtime.score(query, candidates).tolist()})
 
                     if self.path == "/observe":
-                        model.observe(query, torch.tensor(body["useful"], dtype=torch.float32))
+                        runtime.observe(query, torch.tensor(body["useful"], dtype=torch.float32))
 
                         return self._send(200, {"ok": True})
 
@@ -96,6 +100,7 @@ def main() -> None:
 
     parser.add_argument("--port", type=int, default=8766)
     parser.add_argument("--weights", default=None, help="file written by cortex_ml.hope.train")
+    parser.add_argument("--accelerator", choices=["auto", "gpu", "ane", "cpu"], default="auto")
 
     args = parser.parse_args()
 
@@ -103,7 +108,8 @@ def main() -> None:
 
     model.eval()
 
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(model, trained))
+    runtime = HopeRuntime(model, accelerator=args.accelerator, trained=trained)
+    server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(model, trained, runtime))
 
     state = "trained" if trained else "untrained (ranks like plain cosine)"
 

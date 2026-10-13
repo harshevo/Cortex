@@ -38,6 +38,11 @@ fn main() {
         None => Brain::generate(config),
     };
 
+    if arguments.iter().any(|argument| argument == "gpu") {
+        brain.enable_gpu().expect("GPU simulation");
+    }
+    println!("Backend: {}", brain.trace().backend);
+
     println!(
         "{} neurons, {} connections, {} MB, built in {} ms",
         brain.config().neurons,

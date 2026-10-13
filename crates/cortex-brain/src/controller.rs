@@ -42,7 +42,7 @@ const REPEAT_PENALTY: f32 = 0.15;
 
 /// Turns a situation's features into the code the learner sees.
 pub trait Encoder: Send {
-    fn inspect(&self, _query: &serde_json::Value) -> Option<serde_json::Value> {
+    fn inspect(&mut self, _query: &serde_json::Value) -> Option<serde_json::Value> {
         None
     }
     fn telemetry(&self) -> Option<serde_json::Value> {
@@ -85,7 +85,13 @@ impl FlyBrainEncoder {
 }
 
 impl Encoder for FlyBrainEncoder {
-    fn inspect(&self, query: &serde_json::Value) -> Option<serde_json::Value> {
+    fn inspect(&mut self, query: &serde_json::Value) -> Option<serde_json::Value> {
+        if let Some(limit) = query["sample_count"].as_u64() {
+            if let Err(error) = self.brain.set_sample_limit(limit as usize) {
+                return Some(json!({"error":error}));
+            }
+            return Some(json!({"source":"fly-brain", "trace":self.brain.trace()}));
+        }
         Some(self.brain.inspect(query))
     }
     fn telemetry(&self) -> Option<serde_json::Value> {
@@ -246,9 +252,6 @@ impl TrajectorySink for Controller {
         match event {
             Event::ModelStarted { step } => {
                 state.step = *step;
-                if state.current.is_none() {
-                    state.current = Some(state.encode());
-                }
             }
             Event::RunStarted { .. } => {
                 if let Some(file) = &self.file {
@@ -294,13 +297,22 @@ impl TrajectorySink for Controller {
 }
 
 impl Adviser for Controller {
+    fn prepare(&self, step: u32, max_steps: u32) {
+        let mut state = self.state();
+        state.step = step;
+        state.max_steps = max_steps;
+        if state.current.is_none() {
+            state.current = Some(state.encode());
+        }
+    }
     fn begin_run(&self, max_steps: u32) {
         self.state().max_steps = max_steps;
     }
     fn inspect(&self, query: &serde_json::Value) -> Option<serde_json::Value> {
-        let state = self.state();
+        let mut state = self.state();
         let mut detail = state.encoder.inspect(query)?;
         detail["checked_runs"] = state.learner.runs().into();
+        detail["runs"] = state.learner.runs().into();
         if let Some(code) = &state.current {
             detail["action_values"] = json!(state.learner.values(code));
         }

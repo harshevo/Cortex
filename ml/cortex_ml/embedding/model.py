@@ -10,6 +10,7 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 from sentence_transformers import SentenceTransformer
+from cortex_ml.acceleration import configure_threads, gpu_device, release_gpu_memory
 
 MODEL_NAME = "google/embeddinggemma-2"
 
@@ -17,6 +18,10 @@ MODEL_NAME = "google/embeddinggemma-2"
 # These are the two it defines for code search.
 QUERY_PROMPT = "CodeRetrieval"
 DOCUMENT_TEMPLATE = "title: {title} | text: {text}"
+
+# Longer inputs are cut here. Attention needs memory in proportion to the
+# square of the length, and a batch of whole files was seen to take 25 GB.
+MAX_TOKENS = 512
 
 # Text-only configuration, as described in the model card.
 TEXT_ONLY = {"vision_config": None, "audio_config": None}
@@ -31,18 +36,13 @@ class Document:
 
 
 def pick_device() -> str:
-    if torch.backends.mps.is_available():
-        return "mps"
-
-    if torch.cuda.is_available():
-        return "cuda"
-
-    return "cpu"
+    return gpu_device()
 
 
 class Embedder:
 
     def __init__(self, device: str | None = None, batch_size: int = 16):
+        configure_threads()
         self.device = device or pick_device()
         self.batch_size = batch_size
 
@@ -53,6 +53,8 @@ class Embedder:
             config_kwargs=TEXT_ONLY,
             model_kwargs={"torch_dtype": torch.float32},
         )
+
+        self.model.max_seq_length = min(self.model.max_seq_length or MAX_TOKENS, MAX_TOKENS)
 
         self.dimension = int(self.model.encode("probe").shape[-1])
 
@@ -83,5 +85,7 @@ class Embedder:
             convert_to_numpy=True,
             show_progress_bar=False,
         )
+
+        release_gpu_memory()
 
         return vectors.astype(np.float32)

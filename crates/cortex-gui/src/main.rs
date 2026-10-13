@@ -65,7 +65,12 @@ fn run() -> Result<()> {
         .flatten();
 
     // The agent lives on this runtime; the window owns the main thread.
-    let runtime = tokio::runtime::Runtime::new().context("cannot start the async runtime")?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .max_blocking_threads(4)
+        .enable_all()
+        .build()
+        .context("cannot start the async runtime")?;
 
     let rehearsal = Rehearsal::new(args.rehearsal);
     let demo = args.demo;

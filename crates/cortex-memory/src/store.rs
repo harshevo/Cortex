@@ -185,19 +185,54 @@ impl Store {
 
     /// Every episode in `scope`, oldest first.
     pub fn episodes(&self, scope: &str) -> Result<Vec<StoredEpisode>, MemoryError> {
+        self.episode_rows(scope, None)
+    }
+
+    pub fn episode_count(&self, scope: &str) -> Result<usize, MemoryError> {
+        Ok(self.connection().query_row(
+            "SELECT COUNT(*) FROM episodes WHERE scope = ?1",
+            params![scope],
+            |row| row.get::<_, i64>(0),
+        )? as usize)
+    }
+
+    pub fn recent_episodes(
+        &self,
+        scope: &str,
+        limit: usize,
+    ) -> Result<Vec<StoredEpisode>, MemoryError> {
+        let mut episodes = self.episode_rows(scope, Some(limit))?;
+        episodes.reverse();
+        Ok(episodes)
+    }
+
+    fn episode_rows(
+        &self,
+        scope: &str,
+        limit: Option<usize>,
+    ) -> Result<Vec<StoredEpisode>, MemoryError> {
         let connection = self.connection();
 
-        let mut statement = connection.prepare(
-            "SELECT id, body, embedding FROM episodes WHERE scope = ?1 ORDER BY created_ms, id",
-        )?;
+        let sql = match limit {
+            Some(_) => {
+                "SELECT id, body, embedding FROM episodes WHERE scope = ?1 ORDER BY created_ms DESC, id DESC LIMIT ?2"
+            }
+            None => {
+                "SELECT id, body, embedding FROM episodes WHERE scope = ?1 ORDER BY created_ms, id LIMIT ?2"
+            }
+        };
+        let mut statement = connection.prepare(sql)?;
 
-        let rows = statement.query_map(params![scope], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Option<Vec<u8>>>(2)?,
-            ))
-        })?;
+        let rows = statement.query_map(
+            params![scope, limit.map(|limit| limit as i64).unwrap_or(-1)],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<Vec<u8>>>(2)?,
+                ))
+            },
+        )?;
 
         let mut episodes = Vec::new();
 

@@ -193,6 +193,18 @@ pub struct Lasting {
 
 impl Lasting {
     pub fn arrange(remembered: &Remembered) -> Self {
+        static POOL: std::sync::OnceLock<rayon::ThreadPool> = std::sync::OnceLock::new();
+        let pool = POOL.get_or_init(|| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(2)
+                .thread_name(|index| format!("memory-layout-{index}"))
+                .build()
+                .expect("memory layout workers")
+        });
+        pool.install(|| Self::arrange_inner(remembered))
+    }
+
+    fn arrange_inner(remembered: &Remembered) -> Self {
         let episodes = &remembered.episodes;
 
         let vectors: Vec<&[f32]> = remembered.vectors.iter().map(Vec::as_slice).collect();
@@ -639,6 +651,7 @@ mod tests {
         ];
 
         Remembered {
+            total_episodes: episodes.len(),
             facts: derive_facts(&episodes, 10),
             episodes,
             vectors: vec![

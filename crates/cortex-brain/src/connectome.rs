@@ -81,6 +81,9 @@ pub struct Wiring {
 }
 
 impl Connectome {
+    pub(crate) fn arrays(&self) -> (&[u32], &[u32], &[i16]) {
+        (&self.offsets, &self.targets, &self.strengths)
+    }
     /// Generates wiring with the given statistics. The same seed always
     /// gives the same brain.
     pub fn generate(wiring: &Wiring) -> Self {

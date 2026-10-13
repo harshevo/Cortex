@@ -550,7 +550,7 @@ fn run_summary(
     );
 }
 
-fn approval_card(ui: &mut Ui, request: &ApprovalRequest) -> Option<Decision> {
+pub fn approval_card(ui: &mut Ui, request: &ApprovalRequest) -> Option<Decision> {
     let mut decision = None;
 
     theme::card()

@@ -296,6 +296,11 @@ impl Agent {
 
             self.prune(step, conversation);
             self.mask(step, conversation);
+            for adviser in &self.advisers {
+                let adviser = adviser.clone();
+                let max_steps = self.config.max_steps;
+                brain_job(move || adviser.prepare(step, max_steps)).await;
+            }
 
             let request = ModelRequest {
                 system: &self.config.system_prompt,
@@ -347,7 +352,7 @@ impl Agent {
 
                     let mut message = Message::tool_results(results);
 
-                    message.blocks.extend(self.advice(step));
+                    message.blocks.extend(self.advice(step).await);
                     message.blocks.extend(self.interjections(step));
 
                     conversation.push(message);
@@ -544,13 +549,15 @@ impl Agent {
     }
 
     /// Notes from the advisers, placed after the step's tool results.
-    fn advice(&self, step: u32) -> Vec<Block> {
+    async fn advice(&self, step: u32) -> Vec<Block> {
         let mut blocks = Vec::new();
 
         for adviser in &self.advisers {
             let started = Instant::now();
 
-            let advice = adviser.advise(step, self.config.max_steps);
+            let worker = adviser.clone();
+            let max_steps = self.config.max_steps;
+            let advice = brain_job(move || worker.advise(step, max_steps)).await;
             self.emit_brain(adviser.as_ref(), step);
             let Some(advice) = advice else {
                 continue;
@@ -791,6 +798,22 @@ impl Agent {
             }
         }
     }
+}
+
+async fn brain_job<T: Send + 'static>(job: impl FnOnce() -> T + Send + 'static) -> T {
+    static JOBS: std::sync::OnceLock<Arc<tokio::sync::Semaphore>> = std::sync::OnceLock::new();
+    let permit = JOBS
+        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(1)))
+        .clone()
+        .acquire_owned()
+        .await
+        .expect("brain scheduler open");
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        job()
+    })
+    .await
+    .expect("brain worker finished")
 }
 
 /// Runs one call and reports how long it took, in milliseconds.

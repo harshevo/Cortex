@@ -3,10 +3,16 @@ use cortex_brain::spiking::NeuralTrace;
 use eframe::egui::{self, Color32, Pos2, Sense, Stroke, Vec2};
 use serde_json::Value;
 
-#[derive(Default)]
+/// How many neurons of the network can be shown. The engine simulates all
+/// of them whichever is chosen.
+const SAMPLE_SIZES: [usize; 3] = [96, 256, 512];
+
 pub struct ActivityView {
     pub inspection: Vec<Value>,
     pub request: Option<Value>,
+
+    /// How many neurons the user wants shown.
+    samples: usize,
     query_id: u32,
     query_offset: usize,
     pub trace: NeuralTrace,
@@ -26,12 +32,74 @@ pub struct ActivityView {
     pub revision: u64,
 }
 
+impl Default for ActivityView {
+    fn default() -> Self {
+        Self {
+            inspection: Vec::new(),
+            request: None,
+            samples: SAMPLE_SIZES[0],
+            query_id: 0,
+            query_offset: 0,
+            trace: NeuralTrace::default(),
+            performance: String::new(),
+            intuition: Picture::default(),
+            active: Vec::new(),
+            hunches: Vec::new(),
+            values: Vec::new(),
+            runs: 0,
+            step: 0,
+            confident: false,
+            action: String::new(),
+            frame: 0,
+            selected: 0,
+            started: 0.0,
+            playing: false,
+            revision: 0,
+        }
+    }
+}
+
 impl ActivityView {
+    /// A newly built agent samples the fewest neurons, so the choice made
+    /// here is sent to it again.
+    pub fn agent_rebuilt(&mut self) {
+        if self.samples != SAMPLE_SIZES[0] {
+            self.request = Some(serde_json::json!({"sample_count": self.samples}));
+        }
+    }
+
+    /// Takes in the engine's answer to a request made here. Returns
+    /// whether the neurons shown have changed.
+    pub fn inspected(&mut self, states: Vec<Value>) -> bool {
+        let resampled = states
+            .iter()
+            .filter_map(|state| serde_json::from_value::<NeuralTrace>(state["trace"].clone()).ok())
+            .find(valid_trace);
+
+        let Some(trace) = resampled else {
+            self.inspection = states;
+
+            return false;
+        };
+
+        self.trace = trace;
+        self.frame = 0;
+        self.selected = 0;
+        self.playing = false;
+        self.revision += 1;
+
+        true
+    }
+
     pub fn observe(&mut self, source: &str, step: u32, detail: &Value, now: f64) {
         if source == "fly-brain" {
             if let Ok(trace) = serde_json::from_value::<NeuralTrace>(detail["trace"].clone())
                 && valid_trace(&trace)
             {
+                // The agent can change the sample too, with its own tool.
+                if self.request.is_none() && SAMPLE_SIZES.contains(&trace.neuron_ids.len()) {
+                    self.samples = trace.neuron_ids.len();
+                }
                 self.trace = trace;
                 self.values = serde_json::from_value(detail["values"].clone()).unwrap_or_default();
                 self.runs = detail["runs"].as_u64().unwrap_or_default() as u32;
@@ -89,6 +157,14 @@ impl ActivityView {
 
     pub fn show(&mut self, ui: &mut egui::Ui) {
         ui.heading("Neural activity");
+        ui.small(format!(
+            "Compute: {}",
+            if self.trace.backend.is_empty() {
+                "CPU"
+            } else {
+                &self.trace.backend
+            }
+        ));
         if !self.performance.is_empty() {
             ui.small(&self.performance);
         }
@@ -106,6 +182,19 @@ impl ActivityView {
                 self.trace.encoding_ms
             ));
             ui.small("Recorded simulation steps; playback is slowed for inspection.");
+            ui.horizontal(|ui| {
+                ui.label("Neurons shown");
+                for size in SAMPLE_SIZES {
+                    if ui
+                        .selectable_label(self.samples == size, size.to_string())
+                        .clicked()
+                        && self.samples != size
+                    {
+                        self.samples = size;
+                        self.request = Some(serde_json::json!({"sample_count": size}));
+                    }
+                }
+            });
             ui.horizontal(|ui| {
                 if ui
                     .button(if self.playing { "Pause" } else { "Replay" })
@@ -237,27 +326,29 @@ impl ActivityView {
         let (rect, response) =
             ui.allocate_exact_size(Vec2::new(ui.available_width(), 185.0), Sense::click());
         let painter = ui.painter_at(rect);
-        let points: Vec<Pos2> = (0..self.trace.neuron_ids.len())
-            .map(|index| {
-                let column = match self.trace.populations[index].as_str() {
-                    "input" => 0,
-                    "readout" => 1,
-                    _ => 2,
-                };
-                let peers: Vec<_> = self
-                    .trace
-                    .populations
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, p)| **p == self.trace.populations[index])
-                    .map(|(i, _)| i)
-                    .collect();
-                let row = peers.iter().position(|i| *i == index).unwrap_or(0);
+        let column = |population: &str| match population {
+            "input" => 0,
+            "readout" => 1,
+            _ => 2,
+        };
+        let mut peers = [0_usize; 3];
+        for population in &self.trace.populations {
+            peers[column(population)] += 1;
+        }
+        let mut placed = [0_usize; 3];
+        let points: Vec<Pos2> = self
+            .trace
+            .populations
+            .iter()
+            .map(|population| {
+                let column = column(population);
+                let row = placed[column];
+                placed[column] += 1;
                 Pos2::new(
                     rect.left() + 25.0 + column as f32 * (rect.width() - 50.0) / 2.0,
                     rect.top()
                         + 8.0
-                        + (row as f32 + 0.5) * (rect.height() - 16.0) / peers.len().max(1) as f32,
+                        + (row as f32 + 0.5) * (rect.height() - 16.0) / peers[column] as f32,
                 )
             })
             .collect();
@@ -372,7 +463,8 @@ impl ActivityView {
 
 fn valid_trace(trace: &NeuralTrace) -> bool {
     let size = trace.neuron_ids.len();
-    size <= 96
+    size <= SAMPLE_SIZES[2]
+        && !trace.frames.is_empty()
         && trace.frames.len() <= 128
         && trace.populations.len() == size
         && trace
@@ -412,6 +504,43 @@ mod tests {
         view.pause();
         assert_eq!(view.frame(), 23);
         assert!(!view.advance(30.0));
+    }
+
+    #[test]
+    fn a_larger_sample_is_asked_for_shown_and_kept_across_agents() {
+        let mut brain = Brain::generate(BrainConfig::tiny());
+        brain.respond(&[1.0; cortex_brain::situation::FEATURES]);
+
+        let mut view = ActivityView::default();
+        view.agent_rebuilt();
+        assert!(view.request.is_none());
+
+        view.samples = 512;
+        view.agent_rebuilt();
+        assert_eq!(view.request.take().unwrap()["sample_count"], 512);
+
+        // The engine's answer carries the new sample.
+        brain.set_sample_limit(512).unwrap();
+        let answer = serde_json::json!({"source":"fly-brain","trace":brain.trace()});
+        assert!(view.inspected(vec![answer]));
+        assert_eq!(view.trace.neuron_ids.len(), 512);
+        assert!(view.inspection.is_empty());
+
+        // An answer about single neurons leaves the sample alone.
+        assert!(!view.inspected(vec![serde_json::json!({"neurons":[]})]));
+        assert_eq!(view.trace.neuron_ids.len(), 512);
+        assert_eq!(view.inspection.len(), 1);
+
+        // The agent changing the sample itself is followed.
+        brain.set_sample_limit(256).unwrap();
+        brain.respond(&[1.0; cortex_brain::situation::FEATURES]);
+        view.observe(
+            "fly-brain",
+            1,
+            &serde_json::json!({"trace":brain.trace()}),
+            0.0,
+        );
+        assert_eq!(view.samples, 256);
     }
 
     #[test]

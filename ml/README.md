@@ -63,7 +63,14 @@ uv run python -m cortex_ml.hope.train --memory ../.cortex/memory.db --out hope.p
 uv run python -m cortex_ml.hope.server --port 8766 --weights hope.pt
 ```
 
-Status: the model, its training loop and the service are tested on synthetic data. It has not been trained on real runs, because there are not yet enough of them.
+The agent's own memory is still too small to train on, so the weights in `hope.pt` come from public collections of solved GitHub issues (SWE-bench's training split and SWE-rebench's filtered split), read the same way: an earlier issue is useful to a later one in the same repository when their fixes changed a file in common.
+
+```bash
+uv run python -m cortex_ml.hope.public --out data/hope-examples.npz data/SWE-bench/data/train-00000-of-00001.parquet data/SWE-rebench/data/filtered-00000-of-00001.parquet
+uv run python -m cortex_ml.hope.pretrain --examples data/hope-examples.npz --out hope.pt
+```
+
+Status: trained on 13,007 ranking tasks. On 2,057 tasks from repositories kept out of training, the useful earlier task is ranked first 47.8% of the time against 42.9% for plain cosine (mean reciprocal rank 0.618 against 0.576), among the 32 nearest earlier tasks. This is measured on GitHub issues, not on the agent's own runs; whether it helps the agent finish tasks has not been measured.
 
 ## Edit predictor
 
