@@ -287,7 +287,19 @@ async fn build(
 
     if !launch.demo {
         let model = launch.settings.model_args()?;
-        embeddings.ensure(&model.embedding_url, outbox).await?;
+
+        // Only code search by meaning cannot do without the service.
+        // Memory falls back to comparing words, so on a Mac without the
+        // Python side the agent still runs.
+        if let Err(error) = embeddings.ensure(&model.embedding_url, outbox).await {
+            if model.features.contains(&cortex_cli::args::Feature::Semantic) {
+                return Err(error);
+            }
+
+            outbox.send(Update::ServiceStarting(
+                "Running without the embedding service: memory compares by shared words.".into(),
+            ));
+        }
     }
     let mut blueprint = Blueprint::prepare(launch, demo_folder).await?;
     member.attach(Some(blueprint.info.place.clone()));

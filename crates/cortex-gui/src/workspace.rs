@@ -1,14 +1,30 @@
-use eframe::egui::{self, Layout, Sense, UiBuilder};
+use eframe::egui::{self, CornerRadius, Layout, Sense, Stroke, UiBuilder};
 
 use crate::app::CortexApp;
 use crate::theme::palette;
+use crate::views::icons::{self, Icon};
 use crate::views::top_bar::{Step, Steps};
+
+/// The height of the strip that holds the minimized chats.
+const TRAY_HEIGHT: f32 = 34.0;
+
+/// The height of the row of buttons above each pane of a split.
+const PANE_BAR_HEIGHT: f32 = 28.0;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Split {
     Off,
     Columns,
     Rows,
+}
+
+/// What the person did to a pane this frame.
+#[derive(Clone, Copy, PartialEq)]
+enum PaneAction {
+    None,
+    Focus,
+    Close,
+    Minimize,
 }
 
 pub struct Workspace {
@@ -18,6 +34,13 @@ pub struct Workspace {
     next_id: u64,
     split: Split,
     ratio: f32,
+
+    /// The split to go back to when a minimized chat is brought back.
+    layout: Split,
+
+    /// Chats taken off screen while they work, oldest first. They keep
+    /// running and wait in the tray above the panes.
+    minimized: Vec<u64>,
 
     /// The chats that have been on screen, oldest first, and which of
     /// them is on screen now: what the bar's arrows step through.
@@ -34,6 +57,8 @@ impl Workspace {
             next_id: 2,
             split: Split::Off,
             ratio: 0.5,
+            layout: Split::Columns,
+            minimized: Vec::new(),
             visited: vec![1],
             position: 0,
         };
@@ -60,11 +85,14 @@ impl Workspace {
 
     fn choose_split(&mut self, split: Split) {
         self.split = split;
+        if split != Split::Off {
+            self.layout = split;
+        }
         if split != Split::Off && self.secondary.is_none() {
             self.secondary = self
                 .chats
                 .iter()
-                .find(|(id, _)| *id != self.active)
+                .find(|(id, _)| *id != self.active && !self.minimized.contains(id))
                 .map(|(id, _)| *id);
             if self.secondary.is_none() {
                 self.secondary = Some(self.add());
@@ -79,13 +107,50 @@ impl Workspace {
         let index = self.index(id);
         self.chats[index].1.stop();
         self.chats.remove(index);
+        self.minimized.retain(|minimized| *minimized != id);
         if self.active == id {
-            self.active = self.chats[index.min(self.chats.len() - 1)].0;
+            // The other pane of a split takes over; failing that, a chat
+            // that is not waiting in the tray.
+            let beside = self.secondary.filter(|secondary| *secondary != id);
+            let waiting = |id: &u64| self.minimized.contains(id);
+            self.active = beside
+                .or_else(|| self.chats.iter().map(|(id, _)| *id).find(|id| !waiting(id)))
+                .unwrap_or(self.chats[index.min(self.chats.len() - 1)].0);
+            self.minimized.retain(|minimized| *minimized != self.active);
         }
         if self.secondary == Some(id) || self.secondary == Some(self.active) {
             self.secondary = None;
             self.split = Split::Off;
         }
+    }
+
+    /// Takes one pane of a split off screen and leaves the other filling
+    /// the window. The chat keeps running and waits in the tray.
+    fn minimize(&mut self, id: u64) {
+        let Some(secondary) = self.secondary else {
+            return;
+        };
+        if self.split == Split::Off || (id != self.active && id != secondary) {
+            return;
+        }
+        if id == self.active {
+            self.active = secondary;
+            let index = self.index(secondary);
+            self.chats[index].1.refresh_history();
+        }
+        self.secondary = None;
+        self.split = Split::Off;
+        self.minimized.push(id);
+    }
+
+    /// Brings a minimized chat back as the second pane of a split.
+    fn restore(&mut self, id: u64) {
+        if !self.minimized.contains(&id) {
+            return;
+        }
+        self.minimized.retain(|minimized| *minimized != id);
+        self.secondary = Some(id);
+        self.split = self.layout;
     }
 
     /// Puts the chat `id` on screen and remembers it as visited. Whatever
@@ -133,24 +198,156 @@ impl Workspace {
         if self.secondary == Some(id) {
             self.secondary = Some(self.active);
         }
+        self.minimized.retain(|minimized| *minimized != id);
         self.active = id;
         let index = self.index(id);
         self.chats[index].1.refresh_history();
     }
 
-    fn pane(&mut self, ui: &mut egui::Ui, id: u64, rect: egui::Rect) -> bool {
+    /// Draws one pane. `in_split` adds the pane's own buttons to its top
+    /// right-hand corner: close, and minimize while its agent is working.
+    fn pane(&mut self, ui: &mut egui::Ui, id: u64, rect: egui::Rect, in_split: bool) -> PaneAction {
         let index = self.index(id);
+
+        // In a split each pane has a row of its own for its buttons, so
+        // they never sit on top of the conversation.
+        let mut content = rect;
+        if in_split {
+            content.min.y += PANE_BAR_HEIGHT;
+        }
+
         let mut pane = ui.new_child(
             UiBuilder::new()
                 .id_salt(("chat pane", id))
-                .max_rect(rect)
+                .max_rect(content)
                 .layout(Layout::top_down(egui::Align::Min)),
         );
         pane.set_clip_rect(rect);
         let focus = pane.interact(rect, egui::Id::new((id, "pane focus")), Sense::hover());
         let clicked = focus.contains_pointer() && pane.input(|input| input.pointer.any_pressed());
         self.chats[index].1.render_pane(&mut pane);
-        clicked
+
+        if in_split {
+            let running = self.chats[index].1.running();
+            let row = egui::Rect::from_min_size(
+                rect.min,
+                egui::vec2(rect.width() - 6.0, PANE_BAR_HEIGHT),
+            );
+            let close = icons::slot_from_right(row, 0);
+            let minimize = icons::slot_from_right(row, 1);
+
+            if icons::button_at(
+                &pane,
+                close,
+                egui::Id::new((id, "pane close")),
+                Icon::Close,
+                if running {
+                    "Close this pane and stop its agent"
+                } else {
+                    "Close this pane"
+                },
+                true,
+            )
+            .clicked()
+            {
+                return PaneAction::Close;
+            }
+
+            if running
+                && icons::button_at(
+                    &pane,
+                    minimize,
+                    egui::Id::new((id, "pane minimize")),
+                    Icon::Minimize,
+                    "Minimize: it keeps working, and waits above until you bring it back",
+                    false,
+                )
+                .clicked()
+            {
+                return PaneAction::Minimize;
+            }
+        }
+
+        if clicked {
+            PaneAction::Focus
+        } else {
+            PaneAction::None
+        }
+    }
+
+    /// The strip of minimized chats. Returns the one to bring back and
+    /// the one to close, if either was asked for.
+    fn tray(&mut self, ui: &mut egui::Ui, strip: egui::Rect) -> (Option<u64>, Option<u64>) {
+        let mut restored = None;
+        let mut closed = None;
+
+        ui.painter().rect_filled(strip, 0.0, palette::sunken());
+        ui.painter().hline(
+            strip.x_range(),
+            strip.bottom() - 0.5,
+            Stroke::new(1.0, palette::border()),
+        );
+
+        let mut row = ui.new_child(
+            UiBuilder::new()
+                .id_salt("minimized chats")
+                .max_rect(strip.shrink2(egui::vec2(10.0, 4.0)))
+                .layout(Layout::left_to_right(egui::Align::Center)),
+        );
+        row.set_clip_rect(strip);
+        row.spacing_mut().item_spacing.x = 6.0;
+
+        for id in self.minimized.clone() {
+            let app = &self.chats[self.index(id)].1;
+            let running = app.running();
+            let label = app.label();
+
+            egui::Frame::new()
+                .fill(palette::surface())
+                .stroke(Stroke::new(1.0, palette::border()))
+                .corner_radius(CornerRadius::same(8))
+                .inner_margin(egui::Margin::symmetric(8, 1))
+                .show(&mut row, |ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+
+                    let (dot, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), Sense::hover());
+                    if running {
+                        icons::activity_dot(ui, dot.center());
+                    } else {
+                        ui.painter().circle_filled(dot.center(), 3.0, palette::good());
+                    }
+
+                    let text = egui::RichText::new(label)
+                        .size(12.0)
+                        .color(palette::text_secondary());
+                    let name = ui
+                        .add(egui::Label::new(text).selectable(false).sense(Sense::click()))
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .on_hover_text(if running {
+                            "Working. Click to bring it back"
+                        } else {
+                            "Finished. Click to bring it back"
+                        });
+
+                    if name.clicked()
+                        || icons::button(ui, Icon::Maximize, "Bring it back beside this chat", false)
+                            .clicked()
+                    {
+                        restored = Some(id);
+                    }
+
+                    let tooltip = if running {
+                        "Close it and stop its agent"
+                    } else {
+                        "Close it"
+                    };
+                    if icons::button(ui, Icon::Close, tooltip, true).clicked() {
+                        closed = Some(id);
+                    }
+                });
+        }
+
+        (restored, closed)
     }
 }
 
@@ -306,9 +503,20 @@ impl eframe::App for Workspace {
             let id = self.add();
             self.activate(id);
         }
-        let rect = ui.available_rect_before_wrap();
+        let mut rect = ui.available_rect_before_wrap();
+        if !self.minimized.is_empty() {
+            let mut strip = rect;
+            strip.max.y = strip.min.y + TRAY_HEIGHT;
+            rect.min.y = strip.max.y;
+            let (restored, closed) = self.tray(ui, strip);
+            if let Some(id) = closed {
+                self.close(id);
+            } else if let Some(id) = restored {
+                self.restore(id);
+            }
+        }
         if self.split == Split::Off || self.secondary.is_none() {
-            self.pane(ui, self.active, rect);
+            self.pane(ui, self.active, rect, false);
         } else {
             let columns = self.split == Split::Columns;
             let size = if columns { rect.width() } else { rect.height() };
@@ -350,10 +558,17 @@ impl eframe::App for Workspace {
                     palette::border()
                 },
             );
-            self.pane(ui, self.active, first);
+            let active = self.active;
             let secondary = self.secondary.unwrap();
-            if self.pane(ui, secondary, second) {
-                self.activate(secondary);
+            let on_active = self.pane(ui, active, first, true);
+            let on_secondary = self.pane(ui, secondary, second, true);
+            match (on_active, on_secondary) {
+                (PaneAction::Close, _) => self.close(active),
+                (_, PaneAction::Close) => self.close(secondary),
+                (PaneAction::Minimize, _) => self.minimize(active),
+                (_, PaneAction::Minimize) => self.minimize(secondary),
+                (_, PaneAction::Focus) => self.activate(secondary),
+                _ => {}
             }
         }
     }
@@ -435,6 +650,87 @@ mod tests {
         workspace.take_step(Step::Back);
 
         assert_eq!(workspace.active, 1);
+    }
+
+    #[test]
+    fn closing_a_pane_leaves_the_other_one_on_screen() {
+        let (_runtime, mut workspace) = workspace();
+
+        workspace.choose_split(Split::Rows);
+        let second = workspace.secondary.unwrap();
+        let third = workspace.add();
+
+        // The pane on the left goes; the one beside it stays, not the
+        // chat that was never on screen.
+        workspace.close(1);
+
+        assert_eq!(workspace.active, second);
+        assert!(workspace.split == Split::Off);
+        assert!(workspace.chats.iter().any(|(id, _)| *id == third));
+    }
+
+    #[test]
+    fn a_minimized_pane_waits_and_comes_back_in_the_same_split() {
+        let (_runtime, mut workspace) = workspace();
+
+        workspace.choose_split(Split::Rows);
+        let second = workspace.secondary.unwrap();
+
+        workspace.minimize(1);
+
+        assert_eq!(workspace.active, second);
+        assert!(workspace.split == Split::Off);
+        assert_eq!(workspace.minimized, [1]);
+        assert_eq!(workspace.chats.len(), 2);
+
+        workspace.restore(1);
+
+        assert_eq!(workspace.active, second);
+        assert_eq!(workspace.secondary, Some(1));
+        assert!(workspace.split == Split::Rows);
+        assert!(workspace.minimized.is_empty());
+    }
+
+    #[test]
+    fn a_minimized_chat_is_not_picked_to_fill_a_new_split() {
+        let (_runtime, mut workspace) = workspace();
+
+        workspace.choose_split(Split::Columns);
+        let second = workspace.secondary.unwrap();
+        workspace.minimize(second);
+
+        workspace.choose_split(Split::Columns);
+
+        let third = workspace.secondary.unwrap();
+        assert_ne!(third, second);
+        assert_eq!(workspace.minimized, [second]);
+
+        // Brought back, it takes the second pane; the chat it replaces
+        // stays open.
+        workspace.restore(second);
+
+        assert_eq!(workspace.secondary, Some(second));
+        assert_eq!(workspace.chats.len(), 3);
+    }
+
+    #[test]
+    fn opening_or_closing_a_minimized_chat_takes_it_out_of_the_tray() {
+        let (_runtime, mut workspace) = workspace();
+
+        workspace.choose_split(Split::Columns);
+        let second = workspace.secondary.unwrap();
+        workspace.minimize(second);
+        workspace.activate(second);
+
+        assert!(workspace.minimized.is_empty());
+        assert_eq!(workspace.active, second);
+
+        workspace.choose_split(Split::Columns);
+        workspace.minimize(1);
+        workspace.close(1);
+
+        assert!(workspace.minimized.is_empty());
+        assert_eq!(workspace.chats.len(), 1);
     }
 
     #[test]

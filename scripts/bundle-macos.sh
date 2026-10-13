@@ -3,6 +3,7 @@
 #
 #     scripts/bundle-macos.sh              leaves it in target/release/Cortex.app
 #     scripts/bundle-macos.sh --install    also copies it to /Applications
+#     scripts/bundle-macos.sh --zip        also packs it into dist/ to give to someone
 #
 # The app still needs this checkout where it is: it starts the embedding
 # service from `ml/` and the mind service from `../brain`. If the checkout
@@ -53,6 +54,15 @@ PLIST
 codesign --force --sign - "$app"
 
 echo "built $app"
+
+if [ "${1:-}" = "--zip" ]; then
+    zip="dist/Cortex-$version-macos-arm64.zip"
+    mkdir -p dist
+    rm -f "$zip"
+    # ditto keeps the signature and the bundle's layout intact.
+    ditto -c -k --keepParent "$app" "$zip"
+    echo "packed $zip"
+fi
 
 if [ "${1:-}" = "--install" ]; then
     rm -rf /Applications/Cortex.app

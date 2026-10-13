@@ -27,6 +27,9 @@ pub enum Icon {
     Sidebar,
     Chat,
     Code,
+    Close,
+    Minimize,
+    Maximize,
 }
 
 pub fn activity_dot(ui: &Ui, centre: Pos2) {
@@ -222,6 +225,27 @@ pub fn paint(ui: &Ui, centre: Pos2, icon: Icon, color: Color32) {
             line(at(0.95, 0.0), at(0.45, 0.5));
 
             line(at(0.2, -0.8), at(-0.2, 0.8));
+        }
+
+        Icon::Close => {
+            line(at(-0.6, -0.6), at(0.6, 0.6));
+            line(at(-0.6, 0.6), at(0.6, -0.6));
+        }
+
+        // A line at the foot, as on a window's own minimise button.
+        Icon::Minimize => {
+            line(at(-0.7, 0.55), at(0.7, 0.55));
+        }
+
+        // Two corners pulling apart.
+        Icon::Maximize => {
+            line(at(0.1, -0.8), at(0.8, -0.8));
+            line(at(0.8, -0.8), at(0.8, -0.1));
+            line(at(0.8, -0.8), at(0.15, -0.15));
+
+            line(at(-0.1, 0.8), at(-0.8, 0.8));
+            line(at(-0.8, 0.8), at(-0.8, 0.1));
+            line(at(-0.8, 0.8), at(-0.15, 0.15));
         }
     }
 }
