@@ -184,7 +184,7 @@ async fn forked_workers_deliver_while_idle_and_running_and_close_cleanly() {
     })
     .await;
 
-    first.submit("slow task");
+    first.submit("slow task", Vec::new());
     let mut slow_started = false;
     until(|| {
         while let Ok(request) = server.requests.try_recv() {
@@ -193,7 +193,7 @@ async fn forked_workers_deliver_while_idle_and_running_and_close_cleanly() {
         slow_started
     })
     .await;
-    second.submit("independent task");
+    second.submit("independent task", Vec::new());
     second
         .member
         .send(first.agent_id(), "running collaboration request")

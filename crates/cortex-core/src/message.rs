@@ -27,6 +27,30 @@ pub struct ToolResult {
     pub call_id: String,
     pub output: String,
     pub is_error: bool,
+
+    /// Pictures that belong to the output, such as a screenshot, for the
+    /// model to look at.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<Image>,
+}
+
+/// A picture: one the person attached to an instruction, or one a tool
+/// returned.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Image {
+    /// Such as `image/png`.
+    pub media_type: String,
+
+    /// The file's bytes in base64.
+    pub data: String,
+}
+
+impl Image {
+    /// The picture as a `data:` address, the form two of the provider
+    /// formats take it in.
+    pub fn data_url(&self) -> String {
+        format!("data:{};base64,{}", self.media_type, self.data)
+    }
 }
 
 /// One piece of a message.
@@ -40,6 +64,8 @@ pub enum Block {
     ToolCall(ToolCall),
 
     ToolResult(ToolResult),
+
+    Image(Image),
 
     /// A provider-specific block (for example model reasoning) that the core
     /// does not interpret but must send back unchanged on the next request.
@@ -60,6 +86,17 @@ impl Message {
             role: Role::User,
             blocks: vec![Block::Text { text: text.into() }],
         }
+    }
+
+    /// What the person said, followed by the pictures sent with it.
+    pub fn user_with_images(text: impl Into<String>, images: &[Image]) -> Self {
+        let mut message = Self::user_text(text);
+
+        message
+            .blocks
+            .extend(images.iter().cloned().map(Block::Image));
+
+        message
     }
 
     pub fn assistant_text(text: impl Into<String>) -> Self {

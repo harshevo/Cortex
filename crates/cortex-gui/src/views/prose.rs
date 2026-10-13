@@ -28,7 +28,7 @@ pub fn show(ui: &mut Ui, text: &str, font: FontId) {
                 ui.label(
                     RichText::new(text)
                         .font(theme::strong(font.size + 1.0))
-                        .color(palette::TEXT),
+                        .color(palette::text()),
                 );
             }
 
@@ -40,7 +40,7 @@ pub fn show(ui: &mut Ui, text: &str, font: FontId) {
 /// Monospaced text on a sunken background, scrolling past `max_height`.
 pub fn code_block(ui: &mut Ui, code: &str, max_height: f32) {
     egui::Frame::new()
-        .fill(palette::SUNKEN)
+        .fill(palette::sunken())
         .corner_radius(CornerRadius::same(7))
         .inner_margin(egui::Margin::symmetric(10, 8))
         .show(ui, |ui| {
@@ -50,7 +50,7 @@ pub fn code_block(ui: &mut Ui, code: &str, max_height: f32) {
                 ui.label(
                     RichText::new("Code / output")
                         .font(theme::small())
-                        .color(palette::TEXT_MUTED),
+                        .color(palette::text_muted()),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.small_button("Copy").clicked() {
@@ -67,7 +67,7 @@ pub fn code_block(ui: &mut Ui, code: &str, max_height: f32) {
                         egui::Label::new(
                             RichText::new(code)
                                 .font(theme::mono())
-                                .color(palette::TEXT_SECONDARY),
+                                .color(palette::text_secondary()),
                         )
                         .selectable(true),
                     );
@@ -141,7 +141,7 @@ fn inline(text: &str, font: &FontId) -> LayoutJob {
 
     let plain = TextFormat {
         font_id: font.clone(),
-        color: palette::TEXT,
+        color: palette::text(),
         line_height,
         ..TextFormat::default()
     };
@@ -150,8 +150,8 @@ fn inline(text: &str, font: &FontId) -> LayoutJob {
     // code set inside a sentence is taken down a little to sit level.
     let code = TextFormat {
         font_id: FontId::monospace(font.size * 0.84),
-        color: palette::CODE,
-        background: palette::SURFACE,
+        color: palette::code(),
+        background: palette::surface(),
         line_height,
         ..TextFormat::default()
     };

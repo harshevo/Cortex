@@ -59,6 +59,7 @@ async fn run(args: EvalRunArgs) -> Result<ExitCode> {
         label: args.label,
         results_dir: args.out,
         max_steps: args.model.max_steps,
+        sandbox: args.model.sandbox(),
         tools: setup.tools,
         prune: setup.prune,
         repeats: args.repeats,

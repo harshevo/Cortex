@@ -73,7 +73,7 @@ impl WorkingMemory {
                 self.instruction.push_str("\nFollow-up: ");
                 self.instruction.push_str(text);
             }
-            Event::BrainObserved { .. } => {}
+            Event::BrainObserved { .. } | Event::ImagesAttached { .. } => {}
             Event::RunStarted { instruction, .. } => {
                 *self = Self {
                     instruction: instruction.clone(),
@@ -272,6 +272,7 @@ mod tests {
                 call_id: id.to_string(),
                 output: output.to_string(),
                 is_error,
+                images: Vec::new(),
             },
             duration_ms: 1,
         });

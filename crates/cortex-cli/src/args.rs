@@ -37,9 +37,28 @@ pub enum Command {
     #[command(subcommand)]
     Eval(EvalCommand),
 
+    /// List the skills that `/name` starts: the built-in ones, your own
+    /// in `~/.cortex/skills`, and the project's in `.cortex/skills`.
+    Skills(SkillsArgs),
+
     /// Sign in to ChatGPT in the browser, to use a subscription's models
     /// with `--provider codex`.
     Login,
+
+    /// Show what the mind has learned and how runs have gone with it
+    /// speaking and with it silent: checks passed, steps, tokens and time.
+    Mind(MindArgs),
+}
+
+#[derive(Args)]
+pub struct MindArgs {
+    /// Address of the brain service.
+    #[arg(long, default_value = cortex_brain::mind::DEFAULT_URL)]
+    pub mind_url: String,
+
+    /// Print the service's whole report as JSON.
+    #[arg(long)]
+    pub json: bool,
 }
 
 /// Where the model runs.
@@ -96,6 +115,11 @@ pub struct ModelArgs {
     #[arg(long = "with", value_enum, value_name = "FEATURE")]
     pub features: Vec<Feature>,
 
+    /// Turn off a capability, including one that is on unless turned off:
+    /// `run` and `chat` start with `mind`. Repeat to turn off several.
+    #[arg(long = "without", value_enum, value_name = "FEATURE")]
+    pub without: Vec<Feature>,
+
     /// Address of the embedding service used by `--with semantic`.
     #[arg(long, default_value = cortex_retrieval::client::DEFAULT_URL)]
     pub embedding_url: String,
@@ -108,6 +132,16 @@ pub struct ModelArgs {
     /// Address of the HOPE memory service used by `--with hope`.
     #[arg(long, default_value = cortex_memory::hope::DEFAULT_URL)]
     pub hope_url: String,
+
+    /// Address of the brain service used by `--with mind`. One on this
+    /// machine is started when it is not running.
+    #[arg(long, default_value = cortex_brain::mind::DEFAULT_URL)]
+    pub mind_url: String,
+
+    /// The share of runs in which the mind watches and says nothing, so
+    /// that `cortex mind` can compare the rest with them. 0 for none.
+    #[arg(long, default_value_t = cortex_brain::mind::DEFAULT_CONTROL, value_name = "SHARE")]
+    pub mind_control: f64,
 
     /// A command the verification gate runs instead of detecting the
     /// project's checks. Repeat to run several. Used with `--with gate`.
@@ -124,6 +158,12 @@ pub struct ModelArgs {
     #[arg(long, value_name = "FILE")]
     pub memory_db: Option<PathBuf>,
 
+    /// Another project whose memory `--with memory` also recalls from:
+    /// its tasks most like the one at hand, and its advice that is not
+    /// about any one file. Repeat for several.
+    #[arg(long = "memory-from", value_name = "FOLDER")]
+    pub memory_from: Vec<PathBuf>,
+
     /// Attempts made at most with `--with rollouts`.
     #[arg(long, default_value_t = 3, value_name = "COUNT")]
     pub rollouts: u32,
@@ -134,9 +174,32 @@ pub struct ModelArgs {
     #[arg(long)]
     pub rollouts_parallel: bool,
 
+    /// With `--with browser`, show the model the screenshots it takes.
+    /// Only for a model that takes images; another may refuse the whole
+    /// request. Without this a screenshot is only saved in the project.
+    #[arg(long)]
+    pub browser_pictures: bool,
+
+    /// With `--with browser`, open a browser window you can watch,
+    /// instead of running the browser out of sight.
+    #[arg(long)]
+    pub browser_window: bool,
+
+    /// Run the commands tools start with your own rights. Without this
+    /// they run in a sandbox: they can write only in the project and
+    /// temporary folders, and cannot read where keys are kept.
+    #[arg(long)]
+    pub no_sandbox: bool,
+
     /// Maximum number of model calls per instruction.
     #[arg(long, default_value_t = 60)]
     pub max_steps: u32,
+}
+
+impl ModelArgs {
+    pub fn sandbox(&self) -> cortex_core::Sandbox {
+        cortex_core::Sandbox::enabled(!self.no_sandbox)
+    }
 }
 
 /// Where the agent works and what it may do without asking.
@@ -214,6 +277,16 @@ pub struct PrepareArgs {
 
     #[command(flatten)]
     pub model: ModelArgs,
+}
+
+#[derive(Args)]
+pub struct SkillsArgs {
+    /// Project directory.
+    #[arg(long, default_value = ".")]
+    pub dir: PathBuf,
+
+    /// Print the full text of this skill instead of the list.
+    pub name: Option<String>,
 }
 
 #[derive(Args)]

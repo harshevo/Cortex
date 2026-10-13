@@ -18,9 +18,11 @@ pub enum Icon {
     Plus,
     Copy,
     Back,
+    Forward,
     Trash,
     Folder,
     FolderPlus,
+    Laptop,
     Gear,
     Sidebar,
     Chat,
@@ -28,10 +30,15 @@ pub enum Icon {
 }
 
 pub fn activity_dot(ui: &Ui, centre: Pos2) {
+    activity_dot_sized(ui, centre, 3.0);
+}
+
+/// The pulsing dot of something in progress, with the given radius.
+pub fn activity_dot_sized(ui: &Ui, centre: Pos2, radius: f32) {
     let phase = ui.input(|input| input.time) as f32 * std::f32::consts::TAU / 1.8;
     let alpha = 0.35 + 0.65 * (phase.sin() + 1.0) / 2.0;
     ui.painter()
-        .circle_filled(centre, 3.0, palette::ACCENT.gamma_multiply(alpha));
+        .circle_filled(centre, radius, palette::accent().gamma_multiply(alpha));
     ui.ctx()
         .request_repaint_after(std::time::Duration::from_millis(33));
 }
@@ -76,14 +83,14 @@ pub fn slot_from_right(row: Rect, position: usize) -> Rect {
 
 fn paint_button(ui: &Ui, rect: Rect, icon: Icon, response: &egui::Response, danger: bool) {
     let color = match (response.hovered(), danger) {
-        (true, true) => palette::BAD,
-        (true, false) => palette::TEXT,
-        (false, _) => palette::TEXT_MUTED,
+        (true, true) => palette::bad(),
+        (true, false) => palette::text(),
+        (false, _) => palette::text_muted(),
     };
 
     if response.hovered() {
         ui.painter()
-            .rect_filled(rect, CornerRadius::same(6), palette::RAISED);
+            .rect_filled(rect, CornerRadius::same(6), palette::raised());
     }
 
     paint(ui, rect.center(), icon, color);
@@ -105,6 +112,11 @@ pub fn paint(ui: &Ui, centre: Pos2, icon: Icon, color: Color32) {
             line(at(0.85, 0.0), at(-0.85, 0.0));
             line(at(-0.85, 0.0), at(-0.2, -0.65));
             line(at(-0.85, 0.0), at(-0.2, 0.65));
+        }
+        Icon::Forward => {
+            line(at(-0.85, 0.0), at(0.85, 0.0));
+            line(at(0.85, 0.0), at(0.2, -0.65));
+            line(at(0.85, 0.0), at(0.2, 0.65));
         }
         Icon::Copy => {
             painter.rect_stroke(
@@ -144,6 +156,17 @@ pub fn paint(ui: &Ui, centre: Pos2, icon: Icon, color: Color32) {
 
             line(at(-0.35, 0.15), at(0.35, 0.15));
             line(at(0.0, -0.2), at(0.0, 0.5));
+        }
+
+        Icon::Laptop => {
+            // Screen.
+            line(at(-0.7, -0.75), at(0.7, -0.75));
+            line(at(0.7, -0.75), at(0.7, 0.3));
+            line(at(0.7, 0.3), at(-0.7, 0.3));
+            line(at(-0.7, 0.3), at(-0.7, -0.75));
+
+            // Base.
+            line(at(-1.0, 0.7), at(1.0, 0.7));
         }
 
         Icon::Gear => {

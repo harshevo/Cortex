@@ -31,8 +31,9 @@ use crate::agent::{Agent, AgentConfig, Extras, Outcome, Progress, RunReport, las
 use crate::briefing::{self, Briefing};
 use crate::changes::{self, Change};
 use crate::error::{AgentError, ProviderError};
-use crate::message::Message;
+use crate::message::{Image, Message};
 use crate::review::{self, Review};
+use crate::sandbox::Sandbox;
 use crate::tool::ToolContext;
 use crate::trajectory::{Event, TrajectorySink};
 use crate::usage::Usage;
@@ -219,6 +220,7 @@ impl Agent {
         rollouts: &RolloutConfig,
         conversation: &mut Vec<Message>,
         instruction: &str,
+        images: &[Image],
         briefings: Vec<Briefing>,
     ) -> Result<RunReport, AgentError> {
         let started = Instant::now();
@@ -228,7 +230,9 @@ impl Agent {
 
         let plan = Plan {
             root: self.context.workspace.root().to_path_buf(),
+            sandbox: self.context.workspace.sandbox(),
             instruction: instruction.to_string(),
+            images: images.to_vec(),
             briefings: briefings.clone(),
         };
 
@@ -311,10 +315,10 @@ impl Agent {
         let Some(winner) = best else {
             // No attempt got as far as an answer. Leave the conversation
             // as a plain run would have it, so the caller can resume.
-            conversation.push(Message::user_text(briefing::compose(
-                &briefings,
-                instruction,
-            )));
+            conversation.push(Message::user_with_images(
+                briefing::compose(&briefings, instruction),
+                images,
+            ));
 
             progress.elapsed = started.elapsed();
 
@@ -401,7 +405,11 @@ struct Plan {
     /// The real project.
     root: PathBuf,
 
+    /// Whether the real project's commands are confined; a copy's are too.
+    sandbox: Sandbox,
+
     instruction: String,
+    images: Vec<Image>,
     briefings: Vec<Briefing>,
 }
 
@@ -426,7 +434,7 @@ async fn make_attempt(mut agent: Agent, plan: Plan, attempt: u32, strategy: Stra
         duration_ms: 0,
     };
 
-    let (copy, workspace) = match copy_project(&plan.root).await {
+    let (copy, workspace) = match copy_project(&plan.root, plan.sandbox).await {
         Ok(copied) => copied,
 
         Err(error) => {
@@ -458,10 +466,10 @@ async fn make_attempt(mut agent: Agent, plan: Plan, attempt: u32, strategy: Stra
         briefings.push(strategy_briefing(&candidate.strategy));
     }
 
-    candidate.conversation = vec![Message::user_text(briefing::compose(
-        &briefings,
-        &plan.instruction,
-    ))];
+    candidate.conversation = vec![Message::user_with_images(
+        briefing::compose(&briefings, &plan.instruction),
+        &plan.images,
+    )];
 
     let worked = agent
         .steps(
@@ -556,7 +564,7 @@ fn describe_choice(winner: &Candidate, made: u32) -> String {
 ///
 /// On macOS the files are cloned, which takes no extra disk space until
 /// one of them is changed. Links are copied as links.
-async fn copy_project(root: &Path) -> io::Result<(TempDir, Workspace)> {
+async fn copy_project(root: &Path, sandbox: Sandbox) -> io::Result<(TempDir, Workspace)> {
     let copy = tempfile::Builder::new()
         .prefix("cortex-attempt-")
         .tempdir()?;
@@ -569,7 +577,7 @@ async fn copy_project(root: &Path) -> io::Result<(TempDir, Workspace)> {
         return Err(io::Error::other("`cp` failed"));
     }
 
-    let workspace = Workspace::new(copy.path())?;
+    let workspace = Workspace::new(copy.path())?.with_sandbox(sandbox);
 
     Ok((copy, workspace))
 }

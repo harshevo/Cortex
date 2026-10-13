@@ -6,6 +6,7 @@ use std::process::ExitCode;
 use anyhow::Result;
 
 use crate::args::ChatArgs;
+use crate::commands::skills;
 use crate::session;
 
 pub async fn execute(args: ChatArgs) -> Result<ExitCode> {
@@ -13,7 +14,7 @@ pub async fn execute(args: ChatArgs) -> Result<ExitCode> {
 
     let mut conversation = Vec::new();
 
-    println!("Cortex. Type an instruction, or `exit` to leave.");
+    println!("Cortex. Type an instruction, `/skills` to list skills, or `exit` to leave.");
 
     loop {
         let Some(line) = read_instruction().await else {
@@ -28,6 +29,12 @@ pub async fn execute(args: ChatArgs) -> Result<ExitCode> {
 
         if matches!(instruction, "exit" | "quit") {
             break;
+        }
+
+        if matches!(instruction, "/skills" | "/help") {
+            print!("{}", skills::list(&args.session.dir));
+
+            continue;
         }
 
         // A failed request should not end the session; show it and let the

@@ -2,7 +2,9 @@
 
 use std::time::{Duration, Instant};
 
-use cortex_core::{CheckOutcome, Event, Outcome, Requirement, ToolCall, ToolResult, Usage, repeat};
+use cortex_core::{
+    CheckOutcome, Event, Image, Outcome, Requirement, ToolCall, ToolResult, Usage, repeat,
+};
 
 use super::stats::{Stats, tokens_per_second};
 
@@ -10,6 +12,10 @@ use super::stats::{Stats, tokens_per_second};
 pub enum Tone {
     Muted,
     Bad,
+
+    /// The engine tidying the context. Counted in the statistics and
+    /// not drawn in the conversation.
+    Housekeeping,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -29,6 +35,9 @@ pub struct ToolItem {
 pub enum Item {
     User {
         text: String,
+
+        /// Pictures sent with it.
+        images: Vec<Image>,
     },
 
     /// Context the engine put in front of the task (memory, routed code).
@@ -169,6 +178,13 @@ impl Session {
     pub fn apply(&mut self, event: &Event) {
         match event {
             Event::BrainObserved { .. } => {}
+
+            Event::ImagesAttached { images } => {
+                if let Some(Item::User { images: shown, .. }) = self.items.last_mut() {
+                    shown.clone_from(images);
+                }
+            }
+
             Event::RunStarted {
                 instruction, model, ..
             } => {
@@ -180,6 +196,7 @@ impl Session {
 
                 self.items.push(Item::User {
                     text: instruction.clone(),
+                    images: Vec::new(),
                 });
             }
 
@@ -264,7 +281,10 @@ impl Session {
             }
 
             Event::UserInterjected { text, .. } => {
-                self.items.push(Item::User { text: text.clone() });
+                self.items.push(Item::User {
+                    text: text.clone(),
+                    images: Vec::new(),
+                });
             }
 
             Event::ContextPruned {
@@ -278,7 +298,7 @@ impl Session {
                     text: format!(
                         "Removed {results_trimmed} superseded tool results ({chars_removed} characters)"
                     ),
-                    tone: Tone::Muted,
+                    tone: Tone::Housekeeping,
                 });
             }
 
@@ -293,7 +313,7 @@ impl Session {
                     text: format!(
                         "Masked {results_masked} old tool results ({chars_removed} characters)"
                     ),
-                    tone: Tone::Muted,
+                    tone: Tone::Housekeeping,
                 });
             }
 
@@ -596,6 +616,7 @@ mod tests {
                 call_id: "call_0".to_string(),
                 output: "rsi.py:4".to_string(),
                 is_error: false,
+                images: Vec::new(),
             },
             duration_ms: 12,
         });
@@ -789,12 +810,14 @@ mod tests {
             call_id: call().id,
             output: text.clone(),
             is_error: false,
+            images: Vec::new(),
         }]));
 
         let mut again = ToolResult {
             call_id: call().id,
             output: text,
             is_error: false,
+            images: Vec::new(),
         };
 
         repeat::fold(&conversation, &call(), &mut again);

@@ -58,10 +58,16 @@ pub fn build_provider(args: &ModelArgs) -> Result<Arc<dyn ModelProvider>> {
 }
 
 pub async fn build_agent(args: &SessionArgs) -> Result<Agent> {
-    let workspace = Workspace::new(&args.dir)
-        .with_context(|| format!("cannot open the project directory {}", args.dir.display()))?;
+    // A session starts with the capabilities that are on unless turned off.
+    let model = args.model.clone().with_defaults();
 
-    let provider = build_provider(&args.model)?;
+    let workspace = Workspace::new(&args.dir)
+        .with_context(|| format!("cannot open the project directory {}", args.dir.display()))?
+        .with_sandbox(model.sandbox());
+
+    eprintln!("{}", workspace.sandbox().summary(workspace.root()));
+
+    let provider = build_provider(&model)?;
 
     let approver: Arc<dyn Approver> = if args.yes {
         Arc::new(AutoApprove)
@@ -81,8 +87,7 @@ pub async fn build_agent(args: &SessionArgs) -> Result<Agent> {
     let state_directory = workspace.root().join(STATE_DIRECTORY);
 
     let memory_location = MemoryLocation {
-        path: args
-            .model
+        path: model
             .memory_db
             .clone()
             .unwrap_or_else(|| state_directory.join("memory.db")),
@@ -90,22 +95,15 @@ pub async fn build_agent(args: &SessionArgs) -> Result<Agent> {
         skip_identical: false,
     };
 
-    let setup = features::setup(&args.model, memory_location).await?;
+    let setup = features::setup(&model, memory_location).await?;
 
-    let mut notes = setup.prompt_notes.clone();
-
-    notes.extend(
-        setup
-            .verifier
-            .as_ref()
-            .and_then(|verifier| prompt::verification_note(&verifier.commands(&workspace))),
-    );
+    let notes = setup.notes(&workspace);
 
     let config = AgentConfig {
         system_prompt: prompt::system_prompt_with(&workspace, &notes),
-        max_steps: args.model.max_steps,
+        max_steps: model.max_steps,
         prune: setup.prune,
-        max_verification_rounds: args.model.max_check_rounds,
+        max_verification_rounds: model.max_check_rounds,
         fold_repeats: setup.fold_repeats,
         extras: setup.extras,
     };

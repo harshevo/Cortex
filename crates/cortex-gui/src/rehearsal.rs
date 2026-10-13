@@ -1,7 +1,7 @@
 //! Driving the app without a person, to test it: send an instruction when
 //! the window opens, and save a picture of the window after a while.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -30,8 +30,26 @@ impl Rehearsal {
         }
     }
 
+    pub fn opens_files(&self) -> bool {
+        self.args.open_files || self.args.open_file.is_some()
+    }
+
+    pub fn opens_file(&self) -> Option<PathBuf> {
+        self.args.open_file.clone()
+    }
+
+    /// Whether a theme was named to try out, which opens the settings
+    /// on their appearance.
+    pub fn tries_theme(&self) -> bool {
+        self.args.theme.is_some()
+    }
+
     pub fn opens_memory(&self) -> bool {
         self.args.open_memory
+    }
+
+    pub fn opens_living(&self) -> bool {
+        self.args.open_living
     }
 
     pub fn opens_settings(&self) -> bool {
@@ -45,6 +63,23 @@ impl Rehearsal {
     /// The instruction to send on opening. Yields it once.
     pub fn take_instruction(&mut self) -> Option<String> {
         self.args.autorun.take()
+    }
+
+    /// The pictures to send with that instruction. Yields them once; one
+    /// that cannot be read is reported and left out.
+    pub fn take_attachments(&mut self) -> Vec<cortex_core::Image> {
+        std::mem::take(&mut self.args.attach)
+            .iter()
+            .filter_map(|path| match crate::attachment::load(path) {
+                Ok(attachment) => Some(attachment.image),
+
+                Err(error) => {
+                    eprintln!("warning: {error:#}");
+
+                    None
+                }
+            })
+            .collect()
     }
 
     /// Whether the moment to press stop has come. True once.

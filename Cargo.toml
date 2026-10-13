@@ -10,7 +10,9 @@ members = [
     "crates/cortex-verify",
     "crates/cortex-router",
     "crates/cortex-brain",
+    "crates/cortex-living",
     "crates/cortex-tools",
+    "crates/cortex-skills",
     "crates/cortex-eval",
     "crates/cortex-cli",
     "crates/cortex-gui",
@@ -29,7 +31,9 @@ default-members = [
     "crates/cortex-verify",
     "crates/cortex-router",
     "crates/cortex-brain",
+    "crates/cortex-living",
     "crates/cortex-tools",
+    "crates/cortex-skills",
     "crates/cortex-eval",
     "crates/cortex-cli",
 ]
@@ -48,8 +52,10 @@ cortex-memory = { path = "crates/cortex-memory" }
 cortex-verify = { path = "crates/cortex-verify" }
 cortex-router = { path = "crates/cortex-router" }
 cortex-brain = { path = "crates/cortex-brain" }
+cortex-living = { path = "crates/cortex-living" }
 cortex-cli = { path = "crates/cortex-cli" }
 cortex-tools = { path = "crates/cortex-tools" }
+cortex-skills = { path = "crates/cortex-skills" }
 cortex-eval = { path = "crates/cortex-eval" }
 
 anyhow = "1"

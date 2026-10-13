@@ -37,9 +37,25 @@ pub struct RehearsalArgs {
     #[arg(long, hide = true)]
     pub autorun: Option<String>,
 
+    /// Draw in this colour theme, without saving the choice.
+    #[arg(long, hide = true)]
+    pub theme: Option<String>,
+
+    /// Start with the files of the project shown on the right.
+    #[arg(long, hide = true)]
+    pub open_files: bool,
+
+    /// Start with this file open in the files panel.
+    #[arg(long, hide = true)]
+    pub open_file: Option<PathBuf>,
+
     /// Start on the memory space instead of the conversation.
     #[arg(long, hide = true)]
     pub open_memory: bool,
+
+    /// Start on the living network instead of the conversation.
+    #[arg(long, hide = true)]
+    pub open_living: bool,
 
     /// Select the newest episode whenever memory changes.
     #[arg(long, hide = true)]
@@ -69,6 +85,10 @@ pub struct RehearsalArgs {
     /// ends in `\n` is followed by the Return key. May be repeated.
     #[arg(long = "type", hide = true)]
     pub typed: Vec<String>,
+
+    /// Attach this picture to the `--autorun` instruction. May be repeated.
+    #[arg(long, hide = true)]
+    pub attach: Vec<PathBuf>,
 
     /// Once the first run has finished, open its session from the
     /// sidebar and send this as the next instruction.

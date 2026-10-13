@@ -38,6 +38,7 @@
 //! - [`calibration`] sets how sure a hunch must be, from how hunches have
 //!   turned out.
 //! - [`bandit`] learns which strategies to give a run's extra attempts.
+//! - [`mind`] connects the learning brain served from the `brain` project.
 
 pub mod accumulator;
 pub mod bandit;
@@ -46,6 +47,7 @@ pub mod connectome;
 pub mod controller;
 pub mod intuition;
 pub mod learner;
+pub mod mind;
 mod persistence;
 pub mod situation;
 pub mod spiking;
@@ -55,5 +57,6 @@ pub use calibration::Calibration;
 pub use connectome::Connectome;
 pub use controller::{Controller, DirectEncoder, Encoder, FlyBrainEncoder};
 pub use intuition::Intuition;
+pub use mind::Mind;
 pub use situation::{Action, Situation};
 pub use spiking::{Brain, BrainConfig};

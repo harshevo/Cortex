@@ -156,7 +156,7 @@ mod tests {
 
         let session = load(&sessions[0].path);
 
-        assert!(matches!(&session.items[0], Item::User { text } if text == "newer task"));
+        assert!(matches!(&session.items[0], Item::User { text, .. } if text == "newer task"));
         assert!(matches!(session.items[1], Item::RunSummary { .. }));
     }
 

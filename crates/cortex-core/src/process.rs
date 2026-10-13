@@ -7,6 +7,8 @@ use std::time::Duration;
 
 use tokio::process::Command;
 
+use crate::workspace::Workspace;
+
 #[derive(Debug, Clone)]
 pub struct CommandOutput {
     /// `None` when the command timed out or was killed by a signal.
@@ -22,12 +24,33 @@ impl CommandOutput {
     }
 }
 
-/// Runs `command` through `sh -c` in `cwd`.
+/// Runs `command` through `sh -c` in `cwd`, with the user's own rights.
+/// For commands the harness itself decides on, such as an evaluation
+/// task's check. What a tool runs goes through [`run_shell_in`].
 ///
 /// On timeout the shell process is killed. Processes it started in the
-/// background may survive; proper containment arrives with the sandbox.
+/// background may survive.
 pub async fn run_shell(command: &str, cwd: &Path, timeout: Duration) -> io::Result<CommandOutput> {
-    let child = Command::new("sh")
+    run(Command::new("sh"), command, cwd, timeout).await
+}
+
+/// Runs `command` through `sh -c` in the project, inside its sandbox when
+/// that is on.
+pub async fn run_shell_in(
+    workspace: &Workspace,
+    command: &str,
+    timeout: Duration,
+) -> io::Result<CommandOutput> {
+    run(workspace.command("sh"), command, workspace.root(), timeout).await
+}
+
+async fn run(
+    mut shell: Command,
+    command: &str,
+    cwd: &Path,
+    timeout: Duration,
+) -> io::Result<CommandOutput> {
+    let child = shell
         .arg("-c")
         .arg(command)
         .current_dir(cwd)

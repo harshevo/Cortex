@@ -171,6 +171,13 @@ pub struct Settings {
     /// Run commands and edit files without asking first.
     pub approve_everything: bool,
 
+    /// Confine the commands tools start to the project folder.
+    pub sandbox: bool,
+
+    /// Share memory between projects: the agent also recalls what it
+    /// learned in the others, and the memory space draws them all.
+    pub combine_memory: bool,
+
     /// Maximum number of model calls per instruction.
     pub max_steps: u32,
 
@@ -190,8 +197,19 @@ pub struct Settings {
     /// first convincing one.
     pub rollouts_parallel: bool,
 
+    /// With the `browser` capability on, show the model the screenshots
+    /// it takes. Only a model that takes images can use them.
+    pub browser_pictures: bool,
+
+    /// With the `browser` capability on, open a browser window that can
+    /// be watched instead of running the browser out of sight.
+    pub browser_window: bool,
+
     /// The project folders listed in the sidebar.
     pub projects: Vec<PathBuf>,
+
+    /// The colour theme, by its name in `theme::palette::THEMES`.
+    pub theme: String,
 }
 
 impl Default for Settings {
@@ -228,6 +246,8 @@ impl Default for Settings {
 
             effort: Effort::default(),
             approve_everything: false,
+            sandbox: true,
+            combine_memory: false,
             max_steps: 60,
             show_thinking: true,
             capabilities: [
@@ -235,14 +255,18 @@ impl Default for Settings {
                 Feature::Brain,
                 Feature::Intuition,
                 Feature::Gate,
+                Feature::Mind,
             ]
             .into_iter()
             .map(capability_name)
             .collect(),
-            brain_integration_version: 1,
+            brain_integration_version: 2,
             rollouts: 3,
             rollouts_parallel: false,
+            browser_pictures: false,
+            browser_window: false,
             projects: Vec::new(),
+            theme: crate::theme::palette::DEFAULT.to_string(),
         }
     }
 }
@@ -280,6 +304,13 @@ impl Settings {
             }
             self.brain_integration_version = 1;
         }
+
+        // The mind is on unless it is switched off, so settings saved
+        // before it existed gain it once. Switching it off afterwards holds.
+        if self.brain_integration_version == 1 {
+            self.set(Feature::Mind, true);
+            self.brain_integration_version = 2;
+        }
     }
 
     pub fn save(&self) -> Result<()> {
@@ -294,7 +325,12 @@ impl Settings {
     }
 
     pub fn current(&self) -> &ProviderSettings {
-        match self.provider {
+        self.of(self.provider)
+    }
+
+    /// The choices that belong to `provider`.
+    pub fn of(&self, provider: Provider) -> &ProviderSettings {
+        match provider {
             Provider::Anthropic => &self.anthropic,
             Provider::Hosted => &self.hosted,
             Provider::Local => &self.local,
@@ -386,6 +422,10 @@ impl Settings {
             self.set(*feature, true);
         }
 
+        for feature in &session.model.without {
+            self.set(*feature, false);
+        }
+
         if session.yes {
             self.approve_everything = true;
         }
@@ -424,6 +464,26 @@ impl Settings {
 
         if self.rollouts_parallel {
             arguments.push("--rollouts-parallel".to_string());
+        }
+
+        if self.browser_pictures {
+            arguments.push("--browser-pictures".to_string());
+        }
+
+        if self.browser_window {
+            arguments.push("--browser-window".to_string());
+        }
+
+        if !self.sandbox {
+            arguments.push("--no-sandbox".to_string());
+        }
+
+        if self.combine_memory {
+            let folders = self.projects.iter().cloned().chain(scratch_folder().ok());
+
+            for folder in folders {
+                arguments.extend(["--memory-from".to_string(), folder.display().to_string()]);
+            }
         }
 
         for capability in &self.capabilities {
@@ -483,6 +543,37 @@ pub fn scratch_folder() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn the_browser_and_its_choices_reach_the_agent() {
+        let mut settings = super::Settings::default();
+
+        assert!(!settings.has(super::Feature::Browser));
+
+        settings.set(super::Feature::Browser, true);
+
+        let plain = settings.model_args().unwrap();
+
+        assert!(plain.features.contains(&super::Feature::Browser));
+        assert!(!plain.browser_pictures && !plain.browser_window);
+
+        settings.browser_pictures = true;
+        settings.browser_window = true;
+
+        let chosen = settings.model_args().unwrap();
+
+        assert!(chosen.browser_pictures && chosen.browser_window);
+
+        settings.set(super::Feature::Browser, false);
+
+        assert!(
+            !settings
+                .model_args()
+                .unwrap()
+                .features
+                .contains(&super::Feature::Browser)
+        );
+    }
+
+    #[test]
     fn brain_defaults_migrate_once_and_preserve_later_opt_outs() {
         let mut settings = Settings {
             capabilities: vec!["memory".into()],
@@ -495,9 +586,11 @@ mod tests {
                 && settings.has(Feature::Intuition)
                 && settings.has(Feature::Gate)
         );
+        assert!(settings.has(Feature::Mind));
         settings.set(Feature::Brain, false);
+        settings.set(Feature::Mind, false);
         settings.migrate_brain();
-        assert!(!settings.has(Feature::Brain));
+        assert!(!settings.has(Feature::Brain) && !settings.has(Feature::Mind));
         settings.set(Feature::Controller, true);
         settings.set(Feature::Brain, true);
         assert!(!settings.has(Feature::Controller));
@@ -533,6 +626,7 @@ mod tests {
                 Feature::Memory,
                 Feature::Brain,
                 Feature::Intuition,
+                Feature::Mind,
                 Feature::Gate
             ]
         );
@@ -559,7 +653,7 @@ mod tests {
 
         assert_eq!(
             settings.capabilities,
-            ["brain", "intuition", "gate", "router"]
+            ["brain", "intuition", "gate", "mind", "router"]
         );
     }
 

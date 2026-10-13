@@ -51,7 +51,7 @@ pub fn show_group(ui: &mut Ui, items: &mut [Item], live: bool, show_thinking: bo
     }
 
     egui::Frame::new()
-        .stroke(Stroke::new(1.0, palette::BORDER))
+        .stroke(Stroke::new(1.0, palette::border()))
         .corner_radius(CornerRadius::same(TABLE_RADIUS))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -77,7 +77,7 @@ pub fn show_group(ui: &mut Ui, items: &mut [Item], live: bool, show_thinking: bo
                     ui.painter().hline(
                         line.x_range(),
                         line.center().y,
-                        Stroke::new(1.0, palette::BORDER),
+                        Stroke::new(1.0, palette::border()),
                     );
                 }
 
@@ -97,9 +97,9 @@ fn group_header(ui: &mut Ui, items: &[Item], live: bool, open: bool) -> egui::Re
         ui.allocate_exact_size(vec2(ui.available_width(), HEADER_HEIGHT), Sense::click());
 
     let color = if response.hovered() {
-        palette::TEXT
+        palette::text()
     } else {
-        palette::TEXT_SECONDARY
+        palette::text_secondary()
     };
 
     let (title, failed, milliseconds) = digest(items, live);
@@ -126,7 +126,7 @@ fn group_header(ui: &mut Ui, items: &[Item], live: bool, open: bool) -> egui::Re
                 Align2::LEFT_CENTER,
                 format!("{failed} failed"),
                 theme::small(),
-                palette::BAD,
+                palette::bad(),
             )
             .right();
     }
@@ -138,7 +138,7 @@ fn group_header(ui: &mut Ui, items: &[Item], live: bool, open: bool) -> egui::Re
                 Align2::LEFT_CENTER,
                 format::duration(milliseconds),
                 theme::small(),
-                palette::TEXT_MUTED,
+                palette::text_muted(),
             )
             .right();
     }
@@ -161,7 +161,11 @@ fn row(ui: &mut Ui, tool: &mut ToolItem) {
     let painter = ui.painter_at(rect);
 
     if response.hovered() {
-        painter.rect_filled(rect, CornerRadius::same(TABLE_RADIUS - 1), palette::SURFACE);
+        painter.rect_filled(
+            rect,
+            CornerRadius::same(TABLE_RADIUS - 1),
+            palette::surface(),
+        );
     }
 
     let font = egui::FontId::proportional(13.0);
@@ -171,7 +175,7 @@ fn row(ui: &mut Ui, tool: &mut ToolItem) {
         Align2::LEFT_CENTER,
         verb(&tool.call.name, tool.result.is_none()),
         font.clone(),
-        palette::TEXT_MUTED,
+        palette::text_muted(),
     );
 
     let (status, status_color) = status(tool);
@@ -191,14 +195,14 @@ fn row(ui: &mut Ui, tool: &mut ToolItem) {
         Align2::LEFT_CENTER,
         format::one_line(&summary(&tool.call.input), room),
         font,
-        palette::TEXT,
+        palette::text(),
     );
 
     chevron(
         &painter,
         Pos2::new(target.right() + 11.0, rect.center().y),
         tool.open,
-        palette::TEXT_MUTED,
+        palette::text_muted(),
     );
 
     if response
@@ -238,7 +242,11 @@ fn thought_row(ui: &mut Ui, thinking: &str) {
     let painter = ui.painter_at(rect);
 
     if response.hovered() {
-        painter.rect_filled(rect, CornerRadius::same(TABLE_RADIUS - 1), palette::SURFACE);
+        painter.rect_filled(
+            rect,
+            CornerRadius::same(TABLE_RADIUS - 1),
+            palette::surface(),
+        );
     }
 
     let font = egui::FontId::proportional(13.0);
@@ -248,7 +256,7 @@ fn thought_row(ui: &mut Ui, thinking: &str) {
         Align2::LEFT_CENTER,
         "Thought",
         font.clone(),
-        palette::TEXT_MUTED,
+        palette::text_muted(),
     );
 
     let room = ((rect.right() - verb.right() - 60.0) / CHAR_WIDTH).max(8.0) as usize;
@@ -258,14 +266,14 @@ fn thought_row(ui: &mut Ui, thinking: &str) {
         Align2::LEFT_CENTER,
         format::one_line(thinking, room),
         font,
-        palette::TEXT_SECONDARY,
+        palette::text_secondary(),
     );
 
     chevron(
         &painter,
         Pos2::new(opening.right() + 11.0, rect.center().y),
         open,
-        palette::TEXT_MUTED,
+        palette::text_muted(),
     );
 
     if response
@@ -431,17 +439,17 @@ fn section_label(ui: &mut Ui, text: &str) {
     ui.label(
         RichText::new(text)
             .font(theme::small())
-            .color(palette::TEXT_MUTED),
+            .color(palette::text_muted()),
     );
 }
 
 fn status(tool: &ToolItem) -> (String, egui::Color32) {
     match &tool.result {
-        None => ("running…".to_string(), palette::WARNING),
+        None => ("running…".to_string(), palette::warning()),
 
-        Some(result) if result.is_error => ("failed".to_string(), palette::BAD),
+        Some(result) if result.is_error => ("failed".to_string(), palette::bad()),
 
-        Some(_) => (format::duration(tool.duration_ms), palette::TEXT_MUTED),
+        Some(_) => (format::duration(tool.duration_ms), palette::text_muted()),
     }
 }
 
@@ -482,6 +490,7 @@ mod tests {
                 call_id: "call".to_string(),
                 output: String::new(),
                 is_error,
+                images: Vec::new(),
             }),
             duration_ms: 1_000,
             open: false,

@@ -24,6 +24,13 @@ pub enum Kind {
 
     /// A failure, by the line that names it.
     Error,
+
+    /// What kind of task it is: fixing, adding, reshaping, explaining.
+    Task,
+
+    /// A way of going about a task, such as running the checks before
+    /// changing anything.
+    Approach,
 }
 
 impl Kind {
@@ -33,6 +40,8 @@ impl Kind {
             Self::File => "file",
             Self::Command => "command",
             Self::Error => "error",
+            Self::Task => "task",
+            Self::Approach => "approach",
         }
     }
 
@@ -41,11 +50,14 @@ impl Kind {
     ///
     /// Only what the model can act on is a target: a file to open, a
     /// command to run. Words and files lead to files; an error leads to
-    /// the file or command that followed it.
+    /// the file or command that followed it. The kind of task, and its
+    /// words, lead to the way of going about it that worked.
     pub fn may_lead_to(self, target: Self) -> bool {
         matches!(
             (self, target),
-            (Self::Word | Self::File | Self::Error, Self::File) | (Self::Error, Self::Command)
+            (Self::Word | Self::File | Self::Error, Self::File)
+                | (Self::Error, Self::Command)
+                | (Self::Word | Self::Task, Self::Approach)
         )
     }
 }
@@ -63,6 +75,119 @@ impl Concept {
             text: text.into(),
         }
     }
+}
+
+/// Ways of going about a task that a run can be seen to take.
+pub const CHECK_FIRST: &str = "run the checks before changing anything";
+pub const TEST_FIRST: &str = "write the test before the fix";
+pub const CHECK_AFTER: &str = "run the checks after the change";
+
+/// The kinds of task an instruction reads as, from its words.
+pub fn task_kinds(instruction: &str) -> Vec<&'static str> {
+    const KINDS: &[(&str, &[&str])] = &[
+        (
+            "fixing something broken",
+            &[
+                "fix", "bug", "broken", "fail", "fails", "failing", "error", "crash", "wrong",
+            ],
+        ),
+        (
+            "adding something new",
+            &["add", "implement", "create", "build", "support", "new"],
+        ),
+        (
+            "reshaping code",
+            &[
+                "refactor", "rename", "clean", "simplify", "extract", "move", "split",
+            ],
+        ),
+        ("testing", &["test", "tests", "coverage"]),
+        (
+            "explaining",
+            &["explain", "why", "how", "what", "describe", "show", "tell"],
+        ),
+        (
+            "changing how it looks",
+            &["style", "design", "layout", "color", "colour", "font", "ui"],
+        ),
+    ];
+
+    let words: Vec<String> = instruction
+        .split(|character: char| !character.is_alphanumeric())
+        .map(str::to_lowercase)
+        .collect();
+
+    KINDS
+        .iter()
+        .filter(|(_, signs)| words.iter().any(|word| signs.contains(&word.as_str())))
+        .map(|(kind, _)| *kind)
+        .collect()
+}
+
+/// How the person's words bear on what was just done.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reaction {
+    Rejects,
+    Accepts,
+}
+
+/// Whether `text` turns down or approves the work before it. Most
+/// instructions do neither.
+pub fn reaction(text: &str) -> Option<Reaction> {
+    let text = text.trim().to_lowercase();
+
+    let first = text
+        .split(|character: char| !character.is_alphanumeric() && character != '\'')
+        .next()
+        .unwrap_or_default();
+
+    const REJECTS: &[&str] = &[
+        "no", "nope", "stop", "wait", "wrong", "don't", "dont", "revert", "undo", "not",
+    ];
+
+    const ACCEPTS: &[&str] = &[
+        "yes", "yep", "ok", "okay", "good", "great", "nice", "perfect", "thanks", "correct",
+        "exactly",
+    ];
+
+    let rejects = REJECTS.contains(&first)
+        || [
+            "that's wrong",
+            "still broken",
+            "still failing",
+            "did not work",
+            "didn't work",
+        ]
+        .iter()
+        .any(|sign| text.contains(sign));
+
+    let accepts = ACCEPTS.contains(&first)
+        || ["looks good", "works now", "that works"]
+            .iter()
+            .any(|sign| text.contains(sign));
+
+    match (rejects, accepts) {
+        (true, _) => Some(Reaction::Rejects),
+        (false, true) => Some(Reaction::Accepts),
+        (false, false) => None,
+    }
+}
+
+/// Whether a path is a test's, by the usual ways of naming one.
+pub fn is_test_path(path: &str) -> bool {
+    let path = path.to_lowercase();
+
+    path.contains("test") || path.contains("spec")
+}
+
+/// Whether a command is one that checks the work: a test run, a build, a
+/// linter or a type check.
+pub fn is_check(command: &str) -> bool {
+    [
+        "test", "check", "lint", "build", "clippy", "tsc", "mypy", "ruff",
+    ]
+    .iter()
+    .any(|sign| command.contains(sign))
 }
 
 /// Words too common to tell one task from another.

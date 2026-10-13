@@ -109,6 +109,7 @@ pub fn mask(conversation: &mut [Message], config: &MaskConfig) -> PruneStats {
         };
 
         result.output = MASK_NOTE.to_string();
+        result.images.clear();
 
         stats.results_trimmed += 1;
         stats.chars_removed += place.chars.saturating_sub(MASK_NOTE.len());
@@ -191,6 +192,7 @@ pub fn prune(conversation: &mut [Message], config: &PruneConfig) -> PruneStats {
         };
 
         result.output = NOTE.to_string();
+        result.images.clear();
 
         stats.results_trimmed += 1;
         stats.chars_removed += place.chars.saturating_sub(NOTE.len());
@@ -198,6 +200,10 @@ pub fn prune(conversation: &mut [Message], config: &PruneConfig) -> PruneStats {
 
     stats
 }
+
+/// A picture is billed by its size on screen, not its bytes; this is about
+/// what a full-size one costs.
+const IMAGE_CHARS: usize = 6_000;
 
 /// Where one tool result sits in the conversation.
 #[derive(Clone, Copy)]
@@ -284,7 +290,7 @@ fn answered_calls(conversation: &[Message]) -> Vec<Answered<'_>> {
                 place: Place {
                     message: index + 1,
                     block,
-                    chars: result.output.len(),
+                    chars: result.output.len() + result.images.len() * IMAGE_CHARS,
                 },
                 current: !result.is_error && !is_note,
             });
@@ -303,7 +309,8 @@ pub fn conversation_chars(conversation: &[Message]) -> usize {
         .map(|block| match block {
             Block::Text { text } => text.len(),
             Block::ToolCall(call) => call.name.len() + call.input.to_string().len(),
-            Block::ToolResult(result) => result.output.len(),
+            Block::ToolResult(result) => result.output.len() + result.images.len() * IMAGE_CHARS,
+            Block::Image(_) => IMAGE_CHARS,
             Block::Opaque { raw } => raw.to_string().len(),
         })
         .sum()
@@ -328,6 +335,7 @@ mod tests {
             call_id: "call_0".to_string(),
             output: output.to_string(),
             is_error: false,
+            images: Vec::new(),
         };
 
         [
@@ -445,6 +453,7 @@ mod tests {
             call_id: "call_0".to_string(),
             output: text.clone(),
             is_error: false,
+            images: Vec::new(),
         };
 
         repeat::fold(&conversation, &call, &mut again);
@@ -533,6 +542,7 @@ mod tests {
             call_id: "call_0".to_string(),
             output: text.clone(),
             is_error: false,
+            images: Vec::new(),
         };
 
         repeat::fold(&conversation, &call, &mut again);

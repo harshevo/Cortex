@@ -23,7 +23,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
-use cortex_core::Event;
+use cortex_core::{Event, Image};
 use eframe::egui;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
@@ -62,7 +62,7 @@ pub enum Command {
     Launch(Box<Launch>),
 
     /// Carry out an instruction in the current conversation.
-    Submit(String),
+    Submit(String, Vec<Image>),
 
     /// Carry on the run that stopped on a provider failure, from the
     /// step that failed.
@@ -140,6 +140,14 @@ pub enum Update {
     /// The agent is ready for the next instruction.
     Idle,
 
+    /// The experimental growing network the agent feeds, for drawing.
+    /// `None` when the capability is off.
+    Living(Option<Arc<cortex_living::Living>>),
+
+    /// What the mind expects the person to ask for next, now that a run
+    /// has ended. `None` when it has no clear guess.
+    Suggestion(Option<String>),
+
     /// Getting the project ready has ended. `text` says what was done,
     /// or what went wrong.
     Prepared {
@@ -176,6 +184,12 @@ pub struct Outbox {
 }
 
 impl Outbox {
+    /// Has the window draw again, for something that changed without an
+    /// update of its own.
+    pub fn wake(&self) {
+        self.window.request_repaint();
+    }
+
     pub fn send(&self, update: Update) {
         // The receiver is gone only when the window has closed.
         let _ = self.updates.send(update);
@@ -269,8 +283,10 @@ impl Engine {
         let _ = self.commands.send(Command::Launch(Box::new(launch)));
     }
 
-    pub fn submit(&self, instruction: &str) {
-        let _ = self.commands.send(Command::Submit(instruction.to_string()));
+    pub fn submit(&self, instruction: &str, images: Vec<Image>) {
+        let _ = self
+            .commands
+            .send(Command::Submit(instruction.to_string(), images));
     }
 
     /// Carries on the run that stopped on a provider failure.

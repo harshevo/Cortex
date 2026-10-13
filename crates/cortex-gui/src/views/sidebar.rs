@@ -1,7 +1,7 @@
 //! The sidebar: either the project folders with their sessions or the
 //! sessions that belong to no project, and the way into settings.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use eframe::egui::{self, Align2, CornerRadius, RichText, ScrollArea, Sense, Stroke, Ui, vec2};
@@ -12,12 +12,14 @@ use crate::format;
 use crate::session::history::PastSession;
 use crate::theme::{self, palette};
 
-const SESSION_ROW_HEIGHT: f32 = 54.0;
-const PROJECT_ROW_HEIGHT: f32 = 36.0;
-const FOOTER_HEIGHT: f32 = 48.0;
+const ROW_HEIGHT: f32 = 28.0;
+const FOOTER_HEIGHT: f32 = 40.0;
+
+/// Radius of the mark in front of a session's title.
+const MARK_RADIUS: f32 = 2.0;
 
 /// Sessions are indented under the project they belong to.
-const INDENT: f32 = 14.0;
+const INDENT: f32 = 16.0;
 
 /// Everything the sidebar shows.
 pub struct Shelf<'a> {
@@ -74,15 +76,16 @@ pub fn show(ui: &mut Ui, shelf: &Shelf<'_>, confirming: &mut Option<PathBuf>) ->
     let mut query = ui
         .data(|data| data.get_temp::<String>(search_id))
         .unwrap_or_default();
-    ui.add_space(8.0);
+    ui.add_space(4.0);
     ui.add(
         egui::TextEdit::singleline(&mut query)
+            .font(egui::FontId::proportional(12.5))
             .hint_text("Search chats and projects")
             .desired_width(ui.available_width())
-            .margin(egui::vec2(10.0, 8.0)),
+            .margin(egui::vec2(8.0, 5.0)),
     );
     ui.data_mut(|data| data.insert_temp(search_id, query.clone()));
-    ui.add_space(12.0);
+    ui.add_space(8.0);
     let query = query.trim().to_lowercase();
     let list_height = (ui.available_height() - FOOTER_HEIGHT).max(0.0);
 
@@ -90,7 +93,7 @@ pub fn show(ui: &mut Ui, shelf: &Shelf<'_>, confirming: &mut Option<PathBuf>) ->
         .auto_shrink(false)
         .max_height(list_height)
         .show(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = 2.0;
+            ui.spacing_mut().item_spacing.y = 1.0;
 
             action = match shelf.section {
                 Section::Chats => chats(ui, shelf, confirming, &query),
@@ -193,7 +196,7 @@ fn projects(
                 if project_matches { "" } else { query },
             )
             .or(action.take());
-            ui.add_space(8.0);
+            ui.add_space(6.0);
         }
     }
     if !shelf.projects.is_empty() && !found {
@@ -210,7 +213,7 @@ fn heading(ui: &mut Ui, title: &str, icon: Icon, tooltip: &str) -> bool {
         ui.label(
             RichText::new(title)
                 .font(theme::strong(11.5))
-                .color(palette::TEXT_MUTED),
+                .color(palette::text_muted()),
         );
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -225,7 +228,7 @@ fn hint(ui: &mut Ui, text: &str) {
     ui.label(
         RichText::new(text)
             .font(theme::small())
-            .color(palette::TEXT_MUTED),
+            .color(palette::text_muted()),
     );
 }
 
@@ -239,7 +242,29 @@ fn project_section(
 ) -> Option<Action> {
     let active = shelf.active == project;
 
-    let mut action = project_row(ui, shelf, project, active, confirming);
+    // Which projects are folded away, kept for as long as the app runs.
+    let folded_id = egui::Id::new("sidebar folded projects");
+    let mut folded = ui
+        .data(|data| data.get_temp::<HashSet<PathBuf>>(folded_id))
+        .unwrap_or_default();
+    let mut open = !folded.contains(project);
+
+    let mut action = project_row(ui, shelf, project, active, &mut open, confirming);
+
+    if open == folded.contains(project) {
+        if open {
+            folded.remove(project);
+        } else {
+            folded.insert(project.to_path_buf());
+        }
+
+        ui.data_mut(|data| data.insert_temp(folded_id, folded));
+    }
+
+    // A search looks inside folded projects too.
+    if !open && query.is_empty() {
+        return action;
+    }
 
     let sessions = shelf
         .sessions
@@ -262,29 +287,41 @@ fn project_row(
     shelf: &Shelf<'_>,
     project: &Path,
     active: bool,
+    open: &mut bool,
     confirming: &mut Option<PathBuf>,
 ) -> Option<Action> {
-    let (rect, response) = ui.allocate_exact_size(
-        vec2(ui.available_width(), PROJECT_ROW_HEIGHT),
-        Sense::click(),
-    );
+    let (rect, response) =
+        ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
 
     let hovered = ui.rect_contains_pointer(rect);
 
     if hovered {
         ui.painter()
-            .rect_filled(rect, CornerRadius::same(7), palette::SURFACE);
+            .rect_filled(rect, CornerRadius::same(6), palette::surface());
     }
 
     let color = if active {
-        palette::TEXT
+        palette::text()
     } else {
-        palette::TEXT_SECONDARY
+        palette::text_secondary()
     };
+
+    // A chevron: pointing down while the sessions are shown.
+    let centre = rect.left_center() + vec2(9.0, 0.0);
+    let chevron = if *open {
+        [vec2(-3.0, -1.5), vec2(0.0, 1.5), vec2(3.0, -1.5)]
+    } else {
+        [vec2(-1.5, -3.0), vec2(1.5, 0.0), vec2(-1.5, 3.0)]
+    };
+
+    ui.painter().line(
+        chevron.iter().map(|offset| centre + *offset).collect(),
+        Stroke::new(1.2, palette::text_muted()),
+    );
 
     icons::paint(
         ui,
-        rect.left_center() + vec2(15.0, 0.0),
+        rect.left_center() + vec2(26.0, 0.0),
         Icon::Folder,
         color,
     );
@@ -294,18 +331,24 @@ fn project_row(
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| project.display().to_string());
 
-    ui.painter_at(rect.with_max_x(icons::slot_from_right(rect, 1).left()))
-        .text(
-            rect.left_center() + vec2(30.0, 0.0),
-            Align2::LEFT_CENTER,
-            name,
-            if active {
-                theme::strong(13.0)
-            } else {
-                egui::FontId::proportional(13.0)
-            },
-            color,
-        );
+    let name_left = rect.left() + 40.0;
+    let name_right = if hovered || confirming.as_deref() == Some(project) {
+        icons::slot_from_right(rect, 1).left()
+    } else {
+        rect.right() - 8.0
+    };
+    elided(
+        ui,
+        egui::pos2(name_left, rect.center().y),
+        name_right - name_left,
+        &name,
+        if active {
+            theme::strong(13.0)
+        } else {
+            egui::FontId::proportional(13.0)
+        },
+        color,
+    );
 
     let mut action = None;
 
@@ -339,9 +382,9 @@ fn project_row(
         }
     }
 
-    // Clicking the row itself opens the project.
-    if action.is_none() && response.clicked() && shelf.can_change && !active {
-        action = Some(Action::NewSession(project.to_path_buf()));
+    // Clicking the row itself shows or hides the project's sessions.
+    if action.is_none() && response.clicked() {
+        *open = !*open;
     }
 
     response.on_hover_text(project.display().to_string());
@@ -356,66 +399,63 @@ fn session_row(
     indent: f32,
     confirming: &mut Option<PathBuf>,
 ) -> Option<Action> {
-    let (rect, response) = ui.allocate_exact_size(
-        vec2(ui.available_width(), SESSION_ROW_HEIGHT),
-        Sense::click(),
-    );
+    let (rect, response) =
+        ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
 
     let selected = shelf.open == Some(session.path.as_path());
     let hovered = ui.rect_contains_pointer(rect);
 
     if selected || hovered {
         let fill = if selected {
-            palette::RAISED
+            palette::raised()
         } else {
-            palette::SURFACE
+            palette::surface()
         };
 
-        ui.painter().rect_filled(rect, CornerRadius::same(7), fill);
+        ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
     }
 
     let left = rect.left() + 10.0 + indent;
-    let text_area = rect.with_max_x(icons::slot_from_right(rect, 0).left());
-    let painter = ui.painter_at(text_area);
+    let running = shelf.running.iter().any(|path| path == &session.path);
+    let acting = hovered || confirming.as_deref() == Some(session.path.as_path());
 
-    painter.text(
-        egui::pos2(left, rect.top() + 9.0),
-        Align2::LEFT_TOP,
-        format::one_line(
-            &session.title,
-            ((text_area.width() - 14.0 - indent).max(0.0) / 7.0) as usize,
-        ),
-        egui::FontId::proportional(13.0),
-        palette::TEXT,
-    );
+    // A mark in front of the title: a ring for a session at rest, a
+    // pulsing dot for one that is running.
+    let mark = egui::pos2(left + 4.0, rect.center().y);
 
-    painter.text(
-        egui::pos2(left, rect.bottom() - 9.0),
-        Align2::LEFT_BOTTOM,
-        if shelf.running.iter().any(|path| path == &session.path) {
-            String::new()
-        } else {
-            format::ago(session.updated_ms)
-        },
-        theme::small(),
-        palette::TEXT_MUTED,
-    );
-
-    if shelf.running.iter().any(|path| path == &session.path) {
-        let dot = egui::pos2(left + 4.0, rect.bottom() - 15.0);
-        icons::activity_dot(ui, dot);
-        ui.painter().text(
-            dot + vec2(10.0, 0.0),
-            Align2::LEFT_CENTER,
-            "Working",
-            theme::small(),
-            palette::TEXT_SECONDARY,
-        );
+    if running {
+        icons::activity_dot_sized(ui, mark, MARK_RADIUS);
+    } else {
+        ui.painter()
+            .circle_stroke(mark, MARK_RADIUS, Stroke::new(1.0, palette::text_muted()));
     }
+
+    let text_left = left + 16.0;
+
+    // The right-hand end holds the delete button while the pointer is
+    // over the row.
+    let right = if acting {
+        icons::slot_from_right(rect, 0).left()
+    } else {
+        rect.right()
+    };
+
+    elided(
+        ui,
+        egui::pos2(text_left, rect.center().y),
+        right - 8.0 - text_left,
+        &format::one_line(&session.title, 200),
+        egui::FontId::proportional(13.0),
+        if selected || running {
+            palette::text()
+        } else {
+            palette::text_secondary()
+        },
+    );
 
     let mut action = None;
 
-    if hovered || confirming.as_deref() == Some(session.path.as_path()) {
+    if acting {
         let delete = delete_button(
             ui,
             icons::slot_from_right(rect, 0),
@@ -463,7 +503,7 @@ fn delete_button(
         ui.painter().rect_stroke(
             rect,
             CornerRadius::same(6),
-            Stroke::new(1.0, palette::BAD),
+            Stroke::new(1.0, palette::bad()),
             egui::StrokeKind::Inside,
         );
     }
@@ -484,22 +524,23 @@ fn delete_button(
 }
 
 fn settings_row(ui: &mut Ui, selected: bool) -> bool {
-    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
+    let (rect, response) =
+        ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
 
     if selected || response.hovered() {
         let fill = if selected {
-            palette::RAISED
+            palette::raised()
         } else {
-            palette::SURFACE
+            palette::surface()
         };
 
-        ui.painter().rect_filled(rect, CornerRadius::same(7), fill);
+        ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
     }
 
     let color = if selected {
-        palette::TEXT
+        palette::text()
     } else {
-        palette::TEXT_SECONDARY
+        palette::text_secondary()
     };
 
     icons::paint(ui, rect.left_center() + vec2(15.0, 0.0), Icon::Gear, color);
@@ -513,6 +554,25 @@ fn settings_row(ui: &mut Ui, selected: bool) -> bool {
     );
 
     response.clicked()
+}
+
+/// Paints one line of text, vertically centred on `left_centre` and cut
+/// off with an ellipsis where it would pass `width`.
+fn elided(
+    ui: &Ui,
+    left_centre: egui::Pos2,
+    width: f32,
+    text: &str,
+    font: egui::FontId,
+    color: egui::Color32,
+) {
+    let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), font, color);
+    job.wrap = egui::text::TextWrapping::truncate_at_width(width.max(0.0));
+
+    let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+    let position = left_centre - vec2(0.0, galley.size().y / 2.0);
+
+    ui.painter().galley(position, galley, color);
 }
 
 fn matches_query(text: &str, query: &str) -> bool {

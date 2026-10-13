@@ -82,6 +82,7 @@ mod tests {
                 call_id: id.to_string(),
                 output: "ok".to_string(),
                 is_error: false,
+                images: Vec::new(),
             },
             duration_ms: 1,
         });

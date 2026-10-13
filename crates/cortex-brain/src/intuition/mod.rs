@@ -15,6 +15,14 @@
 //! - **On a long run**, about unfinished business: a check that failed
 //!   and was left, edits that nothing has checked. See [`loops`].
 //!
+//! Besides where, it learns *how*: the kind of task (fixing, adding,
+//! reshaping) and its words are tied to the way of going about it that a
+//! good run took, such as running the checks before changing anything.
+//! And it listens to the person: a run nothing checked is learned from at
+//! half weight, and their next words settle it. "No, revert that" turns
+//! what the run tied together into the opposite lesson; "looks good"
+//! gives it the other half.
+//!
 //! The task's words stay fully active for the whole run, however long,
 //! while everything else fades step by step. So what the run is *for*
 //! weighs on a recall at step 50 as it did at step 1, and a file opened
@@ -121,11 +129,23 @@ struct Run {
 
     loops: OpenLoops,
     step: u32,
+
+    /// How the run is going about the task, as far as it shows.
+    checked_before_editing: bool,
+    tested_before_editing: bool,
+    edited_source: bool,
+
+    /// The person turned the work down while it was being done.
+    rejected: bool,
 }
 
 struct State {
     network: Network,
     run: Run,
+
+    /// What the last run tied together, when nothing checked it: the
+    /// person's next words may still say whether it was right.
+    unsettled: Option<Evidence>,
 }
 
 /// One thing brought to mind.
@@ -160,6 +180,7 @@ impl Intuition {
             state: Mutex::new(State {
                 network,
                 run: Run::default(),
+                unsettled: None,
             }),
             file,
         }
@@ -281,11 +302,36 @@ impl State {
         neuron
     }
 
-    fn start(&mut self, instruction: &str) {
+    /// Starts a run. Returns whether the instruction also settled the
+    /// run before it, which is then worth saving at once.
+    fn start(&mut self, instruction: &str) -> bool {
         self.run = Run::default();
+
+        let settled = match (self.unsettled.take(), concept::reaction(instruction)) {
+            (Some(evidence), Some(reaction)) => {
+                let verdict = match reaction {
+                    concept::Reaction::Rejects => Verdict::Failed,
+                    concept::Reaction::Accepts => Verdict::Unchecked,
+                };
+
+                self.network.reconsider(&evidence, verdict);
+
+                true
+            }
+
+            _ => false,
+        };
 
         for word in concept::task_words(instruction) {
             let neuron = self.network.neuron(Concept::new(Kind::Word, word));
+
+            self.run.words.push(neuron);
+            self.run.evidence.active.insert(neuron, 1.0);
+        }
+
+        // The kind of task stays active throughout, as its words do.
+        for kind in concept::task_kinds(instruction) {
+            let neuron = self.network.neuron(Concept::new(Kind::Task, kind));
 
             self.run.words.push(neuron);
             self.run.evidence.active.insert(neuron, 1.0);
@@ -302,6 +348,16 @@ impl State {
             })
             .take(FORESEEN)
             .collect();
+
+        settled
+    }
+
+    /// The run was seen to go about the task in this way.
+    fn took(&mut self, approach: &str) {
+        let neuron = self.meet(Concept::new(Kind::Approach, approach), 1.0);
+
+        // Already done, so nothing to be reminded of.
+        self.run.visited.insert(neuron);
     }
 
     fn next_step(&mut self, step: u32) {
@@ -371,6 +427,20 @@ impl State {
 
         if activity > READ {
             self.run.loops.edited(&path, step);
+
+            if concept::is_test_path(&path) && !self.run.edited_source {
+                self.run.tested_before_editing = true;
+            } else if !self.run.edited_source {
+                self.run.edited_source = true;
+
+                if self.run.checked_before_editing {
+                    self.took(concept::CHECK_FIRST);
+                }
+
+                if self.run.tested_before_editing {
+                    self.took(concept::TEST_FIRST);
+                }
+            }
         }
 
         let neuron = self.meet(Concept::new(Kind::File, path), activity);
@@ -384,6 +454,14 @@ impl State {
 
     fn ran(&mut self, commands: &[String], passed: bool, output: &str, step: u32) {
         self.run.loops.ran(commands, passed, step);
+
+        if commands.iter().any(|command| concept::is_check(command)) {
+            if self.run.edited_source {
+                self.took(concept::CHECK_AFTER);
+            } else {
+                self.run.checked_before_editing = true;
+            }
+        }
 
         if passed {
             for command in commands {
@@ -411,6 +489,9 @@ impl State {
         let verdict = match (verified, outcome) {
             (Some(true), _) => Verdict::Passed,
             (Some(false), _) => Verdict::Failed,
+
+            // Nothing checked it, but the person said no on the way.
+            (None, Outcome::Completed) if self.run.rejected => Verdict::Failed,
             (None, Outcome::Completed) => Verdict::Unchecked,
 
             // Cut short with nothing checked: there is no telling what
@@ -430,6 +511,8 @@ impl State {
         let evidence = std::mem::take(&mut self.run.evidence);
 
         self.network.learn(&evidence, verdict);
+
+        self.unsettled = (verdict == Verdict::Unchecked).then_some(evidence);
         self.run = Run::default();
     }
 
@@ -509,6 +592,10 @@ impl TrajectorySink for Intuition {
 
         match event {
             Event::UserInterjected { text, .. } => {
+                if concept::reaction(text) == Some(concept::Reaction::Rejects) {
+                    state.run.rejected = true;
+                }
+
                 for word in concept::task_words(text) {
                     let id = state.network.neuron(Concept::new(Kind::Word, word));
                     if !state.run.words.contains(&id) {
@@ -520,7 +607,12 @@ impl TrajectorySink for Intuition {
                 if let Some(file) = &self.file {
                     state.network = Network::load_or_new(file);
                 }
-                state.start(instruction);
+
+                // What the person's words settled about the last run
+                // would be lost when the network is next read from file.
+                if state.start(instruction) {
+                    self.save(&state);
+                }
             }
 
             Event::ModelResponded { step, .. } => state.next_step(*step),
@@ -648,14 +740,16 @@ impl ContextSource for Intuition {
             state.start(instruction);
         }
 
-        // Only files can be named before anything has happened, and only
-        // ones that are still there.
+        // Before anything has happened only files can be named, and only
+        // ones that are still there, and the way tasks of this kind were
+        // gone about.
         let hunches: Vec<Hunch> = state
             .hunches()
             .into_iter()
-            .filter(|hunch| {
-                hunch.concept.kind == Kind::File
-                    && workspace.root().join(&hunch.concept.text).is_file()
+            .filter(|hunch| match hunch.concept.kind {
+                Kind::File => workspace.root().join(&hunch.concept.text).is_file(),
+                Kind::Approach => true,
+                _ => false,
             })
             .collect();
 
@@ -665,15 +759,35 @@ impl ContextSource for Intuition {
 
         state.mention(&hunches);
 
+        let of = |kind: Kind| {
+            hunches
+                .iter()
+                .filter(move |hunch| hunch.concept.kind == kind)
+        };
+
         let mut text = format!(
-            "## Hunch\n\nFrom {} earlier runs in this repository: the completed ones on tasks worded \
-             like this one changed:\n\n",
+            "## Hunch\n\nFrom {} earlier runs in this repository.",
             state.network.runs()
         );
 
-        for hunch in &hunches {
+        if of(Kind::File).next().is_some() {
+            text.push_str(" The completed ones on tasks worded like this one changed:\n\n");
+        }
+
+        for hunch in of(Kind::File) {
             text.push_str(&format!(
                 "- `{}` ({:.2})\n",
+                hunch.concept.text, hunch.strength
+            ));
+        }
+
+        if of(Kind::Approach).next().is_some() {
+            text.push_str("\nOn tasks of this kind, the runs that went well chose to:\n\n");
+        }
+
+        for hunch in of(Kind::Approach) {
+            text.push_str(&format!(
+                "- {} ({:.2})\n",
                 hunch.concept.text, hunch.strength
             ));
         }
@@ -712,6 +826,16 @@ fn phrase(hunches: &[Hunch]) -> String {
 
     if !commands.is_empty() {
         parts.push(format!("run {}", commands.join(", ")));
+    }
+
+    let approaches: Vec<String> = hunches
+        .iter()
+        .filter(|hunch| hunch.concept.kind == Kind::Approach)
+        .map(|hunch| format!("{} ({:.2})", hunch.concept.text, hunch.strength))
+        .collect();
+
+    if !approaches.is_empty() {
+        parts.push(approaches.join(", "));
     }
 
     parts.join(" and ")
@@ -799,6 +923,7 @@ mod tests {
                 call_id: "call".to_string(),
                 output: output.to_string(),
                 is_error: false,
+                images: Vec::new(),
             },
             duration_ms: 1,
         });
@@ -853,6 +978,133 @@ mod tests {
         edit(intuition, at, changed);
         shell(intuition, at + 1, "npm test", "exit code: 0");
         finish(intuition, Some(true));
+    }
+
+    fn weight(intuition: &Intuition, from: Concept, to: Concept) -> f32 {
+        let state = intuition.state();
+
+        match (state.network.find(&from), state.network.find(&to)) {
+            (Some(from), Some(to)) => state.network.weight(from, to),
+            _ => 0.0,
+        }
+    }
+
+    #[test]
+    fn a_kind_of_task_is_tied_to_the_way_good_runs_went_about_it() {
+        let intuition = Intuition::new(None);
+
+        let fixing = Concept::new(Kind::Task, "fixing something broken");
+        let adding = Concept::new(Kind::Task, "adding something new");
+        let check_first = Concept::new(Kind::Approach, concept::CHECK_FIRST);
+
+        for round in 0..4 {
+            // A fix: see it fail, then change the code, then check again.
+            start(
+                &intuition,
+                &format!("fix the broken rounding in ledger {round}"),
+            );
+            shell(
+                &intuition,
+                1,
+                "npm test",
+                "exit code: 1\n\nstdout:\n1 failed",
+            );
+            edit(&intuition, 2, &format!("src/ledger{round}.ts"));
+            shell(&intuition, 3, "npm test", "exit code: 0");
+            finish(&intuition, Some(true));
+
+            // Something new: written straight away.
+            start(&intuition, &format!("add a new export button {round}"));
+            edit(&intuition, 1, &format!("src/export{round}.ts"));
+            shell(&intuition, 2, "npm test", "exit code: 0");
+            finish(&intuition, Some(true));
+        }
+
+        assert!(weight(&intuition, fixing.clone(), check_first.clone()) > 0.5);
+        assert_eq!(weight(&intuition, adding, check_first.clone()), 0.0);
+
+        // Asked for another fix, that is what comes to mind.
+        start(&intuition, "fix the wrong totals on the summary page");
+
+        let hunches = intuition.hunches();
+
+        assert!(
+            hunches.iter().any(|hunch| hunch.concept == check_first),
+            "{hunches:?}"
+        );
+
+        // And once the run has done it, it is not brought up again.
+        shell(&intuition, 1, "npm test", "exit code: 1");
+        edit(&intuition, 2, "src/summary.ts");
+
+        assert!(
+            !intuition
+                .hunches()
+                .iter()
+                .any(|hunch| hunch.concept == check_first)
+        );
+    }
+
+    #[test]
+    fn what_the_person_says_next_settles_a_run_nothing_checked() {
+        let word = Concept::new(Kind::Word, "calendar");
+        let file = Concept::new(Kind::File, "src/calendar.ts");
+
+        let unchecked = || {
+            let intuition = Intuition::new(None);
+
+            start(&intuition, "the calendar shows the wrong week");
+            edit(&intuition, 1, "src/calendar.ts");
+            finish(&intuition, None);
+
+            intuition
+        };
+
+        let left_alone = weight(&unchecked(), word.clone(), file.clone());
+
+        assert!(left_alone > 0.0);
+
+        let approved = unchecked();
+
+        start(&approved, "looks good, now add a month view");
+
+        assert!(weight(&approved, word.clone(), file.clone()) > left_alone);
+
+        let turned_down = unchecked();
+
+        start(&turned_down, "no, revert that, it broke the header");
+
+        assert!(weight(&turned_down, word.clone(), file.clone()) < left_alone);
+
+        // An instruction that says neither leaves it as it was.
+        let neither = unchecked();
+
+        start(&neither, "add a month view");
+
+        assert_eq!(weight(&neither, word, file), left_alone);
+    }
+
+    #[test]
+    fn a_no_during_the_run_makes_an_unchecked_run_a_failed_one() {
+        let intuition = Intuition::new(None);
+
+        start(&intuition, "the calendar shows the wrong week");
+        edit(&intuition, 1, "src/calendar.ts");
+
+        intuition.record(&Event::UserInterjected {
+            step: 1,
+            text: "no, stop, that is the wrong file".to_string(),
+        });
+
+        finish(&intuition, None);
+
+        let tied = weight(
+            &intuition,
+            Concept::new(Kind::Word, "calendar"),
+            Concept::new(Kind::File, "src/calendar.ts"),
+        );
+
+        assert_eq!(tied, 0.0);
     }
 
     /// Four kinds of task, each ending in its own file, and every one

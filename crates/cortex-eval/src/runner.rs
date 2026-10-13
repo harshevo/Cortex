@@ -8,7 +8,7 @@ use anyhow::{Result, anyhow};
 use cortex_core::trajectory::unix_millis;
 use cortex_core::{
     Adviser, Agent, AgentConfig, AgentError, AutoApprove, ContextSource, Extras, JsonlSink,
-    Message, ModelProvider, Progress, ProviderError, PruneConfig, RunReport, ToolContext,
+    Message, ModelProvider, Progress, ProviderError, PruneConfig, RunReport, Sandbox, ToolContext,
     ToolRegistry, TrajectorySink, Verifier, Workspace, prompt,
 };
 use cortex_providers::pricing;
@@ -39,6 +39,10 @@ pub struct RunOptions {
 
     /// Step limit for tasks that do not set their own.
     pub max_steps: u32,
+
+    /// Whether the agent's commands are confined to the working copy.
+    /// The task's own check never is.
+    pub sandbox: Sandbox,
 
     /// The tools the agent may use.
     pub tools: ToolRegistry,
@@ -92,6 +96,7 @@ impl RunOptions {
             label: label.to_string(),
             results_dir: results_dir.to_path_buf(),
             max_steps: 60,
+            sandbox: Sandbox::default(),
             tools,
             prune: None,
             repeats: 1,
@@ -158,7 +163,7 @@ async fn run_attempt(
     options: &RunOptions,
 ) -> Result<TaskResult> {
     let workdir = workdir::prepare(task)?;
-    let workspace = Workspace::new(workdir.path())?;
+    let workspace = Workspace::new(workdir.path())?.with_sandbox(options.sandbox);
 
     let trajectory_file = run_dir
         .join("trajectories")

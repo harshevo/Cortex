@@ -7,7 +7,7 @@
 //! reasoning travels as an encrypted item that is handed back unchanged.
 
 use cortex_core::{
-    Block, Message, ModelRequest, ModelResponse, ProviderError, Role, StopReason, ToolCall,
+    Block, Image, Message, ModelRequest, ModelResponse, ProviderError, Role, StopReason, ToolCall,
     ToolResult, ToolSpec, Usage,
 };
 use serde_json::{Value, json};
@@ -71,7 +71,16 @@ fn message_to_wire(message: &Message) -> Vec<Value> {
             Block::Text { .. } => {}
 
             Block::ToolCall(call) => items.push(call_to_wire(call)),
-            Block::ToolResult(result) => items.push(result_to_wire(result)),
+            Block::ToolResult(result) => {
+                items.push(result_to_wire(result));
+
+                // A picture that came with the result, such as a
+                // screenshot, follows the results as the person's
+                // pictures do.
+                texts.extend(result.images.iter().map(image_to_wire));
+            }
+
+            Block::Image(image) => texts.push(image_to_wire(image)),
 
             // Reasoning from this service. Anything else was left by
             // another provider and means nothing here.
@@ -107,6 +116,14 @@ fn ordered(message: &Message, items: Vec<Value>, texts: Vec<Value>) -> Vec<Value
             _ => items.next(),
         })
         .collect()
+}
+
+fn image_to_wire(image: &Image) -> Value {
+    json!({
+        "type": "message",
+        "role": "user",
+        "content": [{ "type": "input_image", "image_url": image.data_url() }],
+    })
 }
 
 fn call_to_wire(call: &ToolCall) -> Value {
@@ -326,6 +343,44 @@ fn parse_usage(usage: &Value) -> Usage {
 mod tests {
     use super::*;
 
+    fn picture() -> Message {
+        Message::user_with_images(
+            "what is this?",
+            &[cortex_core::Image {
+                media_type: "image/png".to_string(),
+                data: "QUJD".to_string(),
+            }],
+        )
+    }
+
+    #[test]
+    fn a_picture_is_sent_as_an_input_image() {
+        let wire = message_to_wire(&picture());
+
+        assert_eq!(wire[0]["content"][0]["text"], "what is this?");
+        assert_eq!(wire[1]["content"][0]["type"], "input_image");
+        assert_eq!(
+            wire[1]["content"][0]["image_url"],
+            "data:image/png;base64,QUJD"
+        );
+    }
+
+    #[test]
+    fn a_screenshot_follows_the_tool_results_as_an_input_image() {
+        let wire = message_to_wire(&Message::tool_results(vec![ToolResult {
+            call_id: "call_1".to_string(),
+            output: "saved".to_string(),
+            is_error: false,
+            images: vec![cortex_core::Image {
+                media_type: "image/png".to_string(),
+                data: "QUJD".to_string(),
+            }],
+        }]));
+
+        assert_eq!(wire[0]["type"], "function_call_output");
+        assert_eq!(wire[1]["content"][0]["type"], "input_image");
+    }
+
     fn assemble(lines: &[&str]) -> (Vec<Piece>, Assembler) {
         let mut assembler = Assembler::default();
 
@@ -370,6 +425,7 @@ mod tests {
                         call_id: "call_1".to_string(),
                         output: "no such file".to_string(),
                         is_error: true,
+                        images: Vec::new(),
                     }),
                 ],
             },

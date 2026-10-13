@@ -95,9 +95,42 @@ fn user_to_wire(message: &Message) -> Vec<Value> {
 
     let text = message.text();
 
-    if !text.is_empty() {
-        wire.push(json!({ "role": "user", "content": text }));
+    // A tool message holds text only, so a picture that came with a
+    // result (a screenshot) goes in the user message after the results.
+    let images: Vec<Value> = message
+        .blocks
+        .iter()
+        .flat_map(|block| match block {
+            Block::Image(image) => std::slice::from_ref(image),
+            Block::ToolResult(result) => result.images.as_slice(),
+            _ => &[],
+        })
+        .map(|image| {
+            json!({
+                "type": "image_url",
+                "image_url": { "url": image.data_url() },
+            })
+        })
+        .collect();
+
+    // Plain text stays a string, which every server takes; only a message
+    // with pictures needs the list form.
+    if images.is_empty() {
+        if !text.is_empty() {
+            wire.push(json!({ "role": "user", "content": text }));
+        }
+
+        return wire;
     }
+
+    let mut content = Vec::new();
+
+    if !text.is_empty() {
+        content.push(json!({ "type": "text", "text": text }));
+    }
+
+    content.extend(images);
+    wire.push(json!({ "role": "user", "content": content }));
 
     wire
 }
@@ -262,6 +295,57 @@ fn decode_error(message: &str) -> ProviderError {
 mod tests {
     use super::*;
 
+    fn picture() -> Message {
+        Message::user_with_images(
+            "what is this?",
+            &[cortex_core::Image {
+                media_type: "image/png".to_string(),
+                data: "QUJD".to_string(),
+            }],
+        )
+    }
+
+    #[test]
+    fn a_picture_turns_the_content_into_a_list_with_a_data_address() {
+        let wire = message_to_wire(&picture());
+
+        assert_eq!(wire.len(), 1);
+        assert_eq!(wire[0]["content"][0]["text"], "what is this?");
+        assert_eq!(
+            wire[0]["content"][1]["image_url"]["url"],
+            "data:image/png;base64,QUJD"
+        );
+    }
+
+    #[test]
+    fn a_screenshot_follows_the_tool_results_in_a_user_message() {
+        let wire = message_to_wire(&Message::tool_results(vec![ToolResult {
+            call_id: "call_1".to_string(),
+            output: "saved".to_string(),
+            is_error: false,
+            images: vec![cortex_core::Image {
+                media_type: "image/png".to_string(),
+                data: "QUJD".to_string(),
+            }],
+        }]));
+
+        assert_eq!(wire.len(), 2);
+        assert_eq!(wire[0]["role"], "tool");
+        assert_eq!(wire[0]["content"], "saved");
+        assert_eq!(wire[1]["role"], "user");
+        assert_eq!(
+            wire[1]["content"][0]["image_url"]["url"],
+            "data:image/png;base64,QUJD"
+        );
+    }
+
+    #[test]
+    fn a_message_without_pictures_keeps_plain_text_content() {
+        let wire = message_to_wire(&Message::user_text("hello"));
+
+        assert_eq!(wire[0]["content"], "hello");
+    }
+
     fn ids() -> impl FnMut() -> String {
         let mut next = 0;
 
@@ -288,6 +372,7 @@ mod tests {
                 call_id: "call_1".to_string(),
                 output: "no such file".to_string(),
                 is_error: true,
+                images: Vec::new(),
             }]),
         ];
 

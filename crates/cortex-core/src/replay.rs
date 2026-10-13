@@ -10,7 +10,7 @@
 
 use crate::briefing::{self, Briefing};
 use crate::inbox;
-use crate::message::{Block, Message, Role, ToolResult};
+use crate::message::{Block, Image, Message, Role, ToolResult};
 use crate::provider::StopReason;
 use crate::trajectory::Event;
 use crate::verify::Verification;
@@ -34,6 +34,7 @@ struct Replay {
     /// An instruction whose first model call has not been seen yet, and
     /// the context gathered for it.
     instruction: Option<String>,
+    images: Vec<Image>,
     briefings: Vec<Briefing>,
 
     /// What is being sent back after a response that called tools.
@@ -52,8 +53,11 @@ impl Replay {
                 self.settle();
 
                 self.instruction = Some(instruction.clone());
+                self.images.clear();
                 self.briefings.clear();
             }
+
+            Event::ImagesAttached { images } => self.images = images.clone(),
 
             Event::ContextPrepared {
                 source,
@@ -150,7 +154,10 @@ impl Replay {
         if let Some(instruction) = self.instruction.take() {
             let text = briefing::compose(&self.briefings, &instruction);
 
-            self.conversation.push(Message::user_text(text));
+            let images = std::mem::take(&mut self.images);
+
+            self.conversation
+                .push(Message::user_with_images(text, &images));
         }
     }
 
@@ -182,6 +189,7 @@ impl Replay {
                     call_id: call.id,
                     output: "This call was not run because the run stopped first.".to_string(),
                     is_error: true,
+                    images: Vec::new(),
                 })
             })
             .collect();
@@ -225,6 +233,27 @@ mod tests {
         }
     }
 
+    #[test]
+    fn pictures_sent_with_an_instruction_come_back_with_it() {
+        let image = Image {
+            media_type: "image/png".to_string(),
+            data: "QUJD".to_string(),
+        };
+
+        let events = [
+            started("what is this?"),
+            Event::ImagesAttached {
+                images: vec![image.clone()],
+            },
+            started("and now?"),
+        ];
+
+        let conversation = conversation(&events);
+
+        assert_eq!(conversation[0].blocks[1], Block::Image(image));
+        assert_eq!(conversation[1].blocks.len(), 1);
+    }
+
     fn calls_tool(step: u32, id: &str) -> Event {
         Event::ModelResponded {
             step,
@@ -260,6 +289,7 @@ mod tests {
                 call_id: id.to_string(),
                 output: "contents".to_string(),
                 is_error: false,
+                images: Vec::new(),
             },
             duration_ms: 1,
         }

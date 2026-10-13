@@ -3,7 +3,9 @@
 
 pub mod composer;
 pub mod conversation;
+pub mod files;
 pub mod icons;
+pub mod living;
 pub mod memory_space;
 pub mod prose;
 pub mod settings;
@@ -17,6 +19,9 @@ pub mod top_bar;
 pub enum View {
     Conversation,
     MemorySpace,
+
+    /// The experimental growing network, drawn live.
+    Living,
     Settings,
 }
 

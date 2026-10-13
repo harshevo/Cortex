@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::approval::{ApprovalRequest, Approver};
 use crate::error::ToolError;
-use crate::message::{ToolCall, ToolResult};
+use crate::message::{Image, ToolCall, ToolResult};
 use crate::provider::ToolSpec;
 use crate::workspace::Workspace;
 
@@ -29,6 +29,24 @@ pub struct ToolContext {
     pub approver: Arc<dyn Approver>,
 }
 
+/// What a tool hands back: text, and sometimes pictures with it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ToolOutput {
+    pub text: String,
+
+    /// For the model to look at, such as a screenshot.
+    pub images: Vec<Image>,
+}
+
+impl ToolOutput {
+    pub fn text(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            images: Vec::new(),
+        }
+    }
+}
+
 #[async_trait]
 pub trait Tool: Send + Sync {
     fn spec(&self) -> ToolSpec;
@@ -41,6 +59,16 @@ pub trait Tool: Send + Sync {
     }
 
     async fn run(&self, input: Value, context: &ToolContext) -> Result<String, ToolError>;
+
+    /// The same call for a tool whose answer can carry pictures. This is
+    /// what the registry runs; a tool that only returns text leaves it be.
+    async fn run_with_images(
+        &self,
+        input: Value,
+        context: &ToolContext,
+    ) -> Result<ToolOutput, ToolError> {
+        self.run(input, context).await.map(ToolOutput::text)
+    }
 }
 
 /// The set of tools available to an agent.
@@ -81,13 +109,14 @@ impl ToolRegistry {
 
         let (output, is_error) = match outcome {
             Ok(output) => (output, false),
-            Err(error) => (error.to_string(), true),
+            Err(error) => (ToolOutput::text(error.to_string()), true),
         };
 
         ToolResult {
             call_id: call.id.clone(),
-            output: truncate_middle(&output, MAX_OUTPUT_CHARS),
+            output: truncate_middle(&output.text, MAX_OUTPUT_CHARS),
             is_error,
+            images: output.images,
         }
     }
 
@@ -95,7 +124,7 @@ impl ToolRegistry {
         &self,
         call: &ToolCall,
         context: &ToolContext,
-    ) -> Result<String, ToolError> {
+    ) -> Result<ToolOutput, ToolError> {
         let tool = self.tools.get(&call.name).ok_or_else(|| {
             ToolError::InvalidInput(format!("there is no tool named `{}`", call.name))
         })?;
@@ -111,7 +140,7 @@ impl ToolRegistry {
             }
         }
 
-        tool.run(call.input.clone(), context).await
+        tool.run_with_images(call.input.clone(), context).await
     }
 }
 

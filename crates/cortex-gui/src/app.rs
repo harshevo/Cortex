@@ -4,9 +4,11 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 
+use cortex_core::Image;
 use cortex_memory::WorkingMemory;
 use eframe::egui::{self, Margin, RichText, Stroke};
 
+use crate::attachment::Attachment;
 use crate::engine::{Engine, Info, Launch, PendingApproval, Update};
 use crate::memory::working;
 use crate::rehearsal::Rehearsal;
@@ -15,14 +17,23 @@ use crate::session::{Session, Tone};
 use crate::settings::{Provider, Settings, secrets};
 use crate::theme::{self, palette};
 use crate::views::composer::{self, Mode};
+use crate::views::files::Files;
 use crate::views::memory_space::{self, MemoryView};
 use crate::views::settings::Form;
 use crate::views::sidebar::{self, Shelf};
 use crate::views::stats_strip::{self, Change, Reading};
 use crate::views::{Section, View, conversation, settings as settings_page, top_bar};
 
-const TOP_BAR_HEIGHT: f32 = 40.0;
-const SIDEBAR_WIDTH: f32 = 244.0;
+/// Low enough that its buttons sit on a line with the window's own.
+const TOP_BAR_HEIGHT: f32 = 32.0;
+const SIDEBAR_WIDTH: f32 = 350.0;
+const SIDEBAR_MIN_WIDTH: f32 = 180.0;
+const SIDEBAR_MAX_WIDTH: f32 = 520.0;
+
+const FILES_WIDTH: f32 = 250.0;
+const FILES_WIDTH_WITH_FILE: f32 = 640.0;
+const FILES_MIN_WIDTH: f32 = 180.0;
+const FILES_MAX_WIDTH: f32 = 1100.0;
 
 /// Whether there is an agent to talk to.
 enum Status {
@@ -81,7 +92,22 @@ pub struct CortexApp {
     approvals: VecDeque<PendingApproval>,
 
     /// The instruction being typed.
+    /// The files of the project, shown on the right.
+    files: Files,
+
     draft: String,
+
+    /// The experimental growing network, when the capability is on, and
+    /// how it is being drawn.
+    living: Option<std::sync::Arc<cortex_living::Living>>,
+    living_view: crate::views::living::LivingView,
+
+    /// What the mind expects to be asked next. Shown in the empty
+    /// composer; Tab takes it.
+    suggestion: Option<String>,
+
+    /// Pictures waiting to go with the next instruction.
+    attachments: Vec<Attachment>,
 
     /// What has been sent to the run in progress and not yet read by the
     /// model.
@@ -126,7 +152,9 @@ impl CortexApp {
             .or_else(|| settings.projects.first().cloned())
             .unwrap_or_else(|| scratch.clone());
 
-        let view = if rehearsal.opens_memory() {
+        let view = if rehearsal.opens_living() {
+            View::Living
+        } else if rehearsal.opens_memory() {
             View::MemorySpace
         } else {
             View::Conversation
@@ -156,7 +184,12 @@ impl CortexApp {
             history_revision: 0,
             confirming: None,
             approvals: VecDeque::new(),
+            files: Files::opened(rehearsal.opens_files(), rehearsal.opens_file()),
             draft: String::new(),
+            living: None,
+            living_view: Default::default(),
+            suggestion: None,
+            attachments: Vec::new(),
             queued: Vec::new(),
             live_log: None,
             memory: MemoryView::default(),
@@ -173,6 +206,12 @@ impl CortexApp {
 
         if app.rehearsal.opens_settings() {
             app.open_settings();
+
+            if app.rehearsal.tries_theme()
+                && let Some(form) = &mut app.form
+            {
+                form.show_appearance();
+            }
         }
 
         app
@@ -188,6 +227,10 @@ impl CortexApp {
     /// As [`Self::launch`], taking up the session logged in `open` once
     /// the agent is built.
     fn launch_into(&mut self, fresh: bool, open: Option<PathBuf>) {
+        if fresh || open.is_some() {
+            self.suggestion = None;
+        }
+
         let provider = self.settings.provider;
 
         let api_key = if self.demo {
@@ -309,6 +352,13 @@ impl CortexApp {
                     self.refresh_sessions();
                 }
 
+                Update::Living(living) => self.living = living,
+
+                // One that arrives after the next run began is too late.
+                Update::Suggestion(suggestion) => {
+                    self.suggestion = suggestion.filter(|_| !self.live.running);
+                }
+
                 Update::Prepared { text, failed } => {
                     self.preparing = false;
 
@@ -346,11 +396,12 @@ impl CortexApp {
         self.memory.activity.agent_rebuilt();
     }
 
-    fn submit(&mut self, instruction: &str) {
+    fn submit(&mut self, instruction: &str, images: Vec<Image>) {
         self.viewing = None;
         self.live.running = true;
+        self.suggestion = None;
 
-        self.engine.submit(instruction);
+        self.engine.submit(instruction, images);
     }
 
     /// Tells the run in progress something. It waits, shown as queued,
@@ -562,17 +613,20 @@ impl CortexApp {
     /// A choice made in the row under the composer.
     fn apply_change(&mut self, change: Change) {
         match change {
-            Change::Model(model) => self.settings.current_mut().model = model,
-            Change::Effort(effort) => self.settings.effort = effort,
-            Change::ApproveEverything(approve) => self.settings.approve_everything = approve,
+            Change::Model(provider, model) => {
+                // A different provider cannot carry on another's conversation.
+                let fresh = provider != self.settings.provider;
 
-            // Only what the window draws changes: the agent is left alone.
-            Change::ShowThinking(show) => {
-                self.settings.show_thinking = show;
+                self.settings.provider = provider;
+                self.settings.current_mut().model = model;
+
                 self.save_settings();
+                self.launch(fresh);
 
                 return;
             }
+            Change::Effort(effort) => self.settings.effort = effort,
+            Change::ApproveEverything(approve) => self.settings.approve_everything = approve,
         }
 
         self.save_settings();
@@ -608,16 +662,32 @@ impl CortexApp {
     }
 
     pub(crate) fn top_bar(&mut self, ui: &mut egui::Ui) {
-        self.top_bar_with_menu(ui, |_| {});
+        self.top_bar_with_menu(ui, top_bar::Steps::default(), |_| {});
     }
 
     pub(crate) fn top_bar_with_menu(
         &mut self,
         ui: &mut egui::Ui,
+        steps: top_bar::Steps,
         workspace_menu: impl FnOnce(&mut egui::Ui),
-    ) {
+    ) -> Option<top_bar::Step> {
+        // As wide as the sidebar was dragged to, so that the switch in
+        // the bar stays at its edge.
+        let sidebar_width =
+            egui::containers::panel::PanelState::load(ui.ctx(), ui.id().with("sidebar"))
+                .map_or(SIDEBAR_WIDTH + 16.0, |state| state.size().x);
+
+        let files_width = self.files.visible.then(|| {
+            let (id, width) = self.files_panel_id();
+
+            egui::containers::panel::PanelState::load(ui.ctx(), ui.id().with(id))
+                .map_or(width + 16.0, |state| state.size().x)
+        });
+
+        // The bar is not a strip of its own: it is the top of whatever is
+        // under it, so it takes the chat's colour.
         let frame = egui::Frame::new()
-            .fill(palette::SIDEBAR)
+            .fill(palette::background())
             .inner_margin(Margin::symmetric(8, 0));
 
         let project = (self.place != self.scratch)
@@ -628,7 +698,6 @@ impl CortexApp {
         let place = top_bar::Place {
             project: project.as_deref(),
             demo: self.demo,
-            memories: self.memory.episode_count(),
             busy: self.live.running || self.preparing || matches!(self.status, Status::Starting),
         };
 
@@ -637,28 +706,88 @@ impl CortexApp {
             .show_separator_line(false)
             .frame(frame)
             .show(ui, |ui| {
-                let can_prepare = matches!(self.status, Status::Ready(_))
-                    && !self.live.running
-                    && !self.preparing;
+                // Over the sidebar, and over the files on the right, it
+                // takes theirs.
+                let bar = ui.max_rect().expand2(egui::vec2(8.0, 0.0));
 
-                let asked = top_bar::show(
+                if self.sidebar_open {
+                    ui.painter().rect_filled(
+                        bar.with_max_x(bar.left() + sidebar_width),
+                        0.0,
+                        palette::sidebar(),
+                    );
+                }
+
+                if let Some(width) = files_width {
+                    ui.painter().rect_filled(
+                        bar.with_min_x(bar.right() - width),
+                        0.0,
+                        palette::sidebar(),
+                    );
+                }
+
+                top_bar::show(
                     ui,
                     &place,
                     &mut self.view,
                     &mut self.section,
                     &mut self.sidebar_open,
-                    can_prepare,
+                    &mut self.files.visible,
+                    sidebar_width,
+                    steps,
                     workspace_menu,
-                );
+                )
+            })
+            .inner
+    }
 
-                if asked {
-                    self.preparing = true;
-                    self.view = View::Conversation;
+    /// Gets the project ready ahead of any task.
+    fn prepare(&mut self) {
+        self.preparing = true;
+        self.view = View::Conversation;
 
-                    self.live.notice("Getting the project ready…", Tone::Muted);
-                    self.engine.prepare();
-                }
-            });
+        self.live.notice("Getting the project ready…", Tone::Muted);
+        self.engine.prepare();
+    }
+
+    fn can_prepare(&self) -> bool {
+        matches!(self.status, Status::Ready(_)) && !self.live.running && !self.preparing
+    }
+
+    /// The name the files panel keeps its width under, and the width it
+    /// starts with: it is wider with a file open in it, and each of the
+    /// two keeps the width it was dragged to.
+    fn files_panel_id(&self) -> (&'static str, f32) {
+        if self.files.has_file() {
+            ("files and viewer", FILES_WIDTH_WITH_FILE)
+        } else {
+            ("files", FILES_WIDTH)
+        }
+    }
+
+    /// The files of the project, on the right, while they are switched on.
+    pub(crate) fn files_panel(&mut self, ui: &mut egui::Ui) {
+        if ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::E)) {
+            self.files.visible = !self.files.visible;
+        }
+
+        if !self.files.visible {
+            return;
+        }
+
+        let frame = egui::Frame::new()
+            .fill(palette::sidebar())
+            .inner_margin(Margin::symmetric(8, 6));
+
+        let (id, width) = self.files_panel_id();
+
+        egui::Panel::right(ui.id().with(id))
+            .default_size(width)
+            .size_range(FILES_MIN_WIDTH..=FILES_MAX_WIDTH)
+            .resizable(true)
+            .show_separator_line(false)
+            .frame(frame)
+            .show(ui, |ui| self.files.show(ui, &self.place));
     }
 
     pub(crate) fn sidebar(&mut self, ui: &mut egui::Ui) {
@@ -673,8 +802,8 @@ impl CortexApp {
 
     pub(crate) fn sidebar_with_activity(&mut self, ui: &mut egui::Ui, running: &[PathBuf]) {
         let frame = egui::Frame::new()
-            .fill(palette::SIDEBAR)
-            .inner_margin(Margin::symmetric(10, 6));
+            .fill(palette::sidebar())
+            .inner_margin(Margin::symmetric(8, 6));
 
         let shelf = Shelf {
             section: self.section,
@@ -692,8 +821,9 @@ impl CortexApp {
         };
 
         let action = egui::Panel::left(ui.id().with("sidebar"))
-            .exact_size(SIDEBAR_WIDTH)
-            .resizable(false)
+            .default_size(SIDEBAR_WIDTH)
+            .size_range(SIDEBAR_MIN_WIDTH..=SIDEBAR_MAX_WIDTH)
+            .resizable(true)
             .show_separator_line(false)
             .frame(frame)
             .show(ui, |ui| sidebar::show(ui, &shelf, &mut self.confirming))
@@ -722,7 +852,7 @@ impl CortexApp {
 
     fn footer(&mut self, ui: &mut egui::Ui) {
         let frame = egui::Frame::new()
-            .fill(palette::BACKGROUND)
+            .fill(palette::background())
             .inner_margin(Margin::symmetric(24, 10));
 
         let mode = self.composer_mode();
@@ -732,7 +862,7 @@ impl CortexApp {
         // session is the one on screen.
         let can_change = matches!(mode, Mode::Ready | Mode::Unavailable) && !self.demo;
 
-        let (action, change) = egui::Panel::bottom(ui.id().with("footer"))
+        let (action, change, moved) = egui::Panel::bottom(ui.id().with("footer"))
             .show_separator_line(false)
             .frame(frame)
             .show(ui, |ui| {
@@ -754,8 +884,26 @@ impl CortexApp {
                             None => &self.queued,
                         };
 
-                        let action =
-                            composer::show(ui, &mut self.draft, mode, can_continue, queued);
+                        let moved = if self.view == View::Conversation {
+                            composer::place_row(
+                                ui,
+                                &self.place,
+                                &self.scratch,
+                                &self.settings.projects,
+                            )
+                        } else {
+                            None
+                        };
+
+                        let action = composer::show(
+                            ui,
+                            &mut self.draft,
+                            &mut self.attachments,
+                            mode,
+                            can_continue,
+                            queued,
+                            self.suggestion.as_deref(),
+                        );
 
                         let settings = self.settings.clone();
 
@@ -778,7 +926,7 @@ impl CortexApp {
 
                         let change = stats_strip::show(ui, &reading, &settings, can_change);
 
-                        (action, change)
+                        (action, change, moved)
                     })
                     .inner
                 })
@@ -787,7 +935,8 @@ impl CortexApp {
             .inner;
 
         match action {
-            Some(composer::Action::Send(instruction)) => self.submit(&instruction),
+            Some(composer::Action::Send(instruction, images)) => self.submit(&instruction, images),
+            Some(composer::Action::Refused(why)) => self.live.notice(&why, Tone::Bad),
             Some(composer::Action::Steer(message)) => self.steer(&message),
             Some(composer::Action::Continue) => self.carry_on(),
             Some(composer::Action::Stop) => self.engine.stop(),
@@ -797,11 +946,19 @@ impl CortexApp {
         if let Some(change) = change {
             self.apply_change(change);
         }
+
+        match moved {
+            Some(composer::PlaceAction::Open(folder)) => {
+                self.requested_session = Some((folder, None));
+            }
+            Some(composer::PlaceAction::AddProject) => self.add_project(),
+            None => {}
+        }
     }
 
     fn centre(&mut self, ui: &mut egui::Ui) {
         let frame = egui::Frame::new()
-            .fill(palette::BACKGROUND)
+            .fill(palette::background())
             .stroke(Stroke::NONE);
 
         egui::CentralPanel::default()
@@ -809,6 +966,7 @@ impl CortexApp {
             .show(ui, |ui| match self.view {
                 View::Conversation => self.conversation(ui),
                 View::MemorySpace => self.memory_space(ui),
+                View::Living => self.living_space(ui),
                 View::Settings => self.settings_page(ui),
             });
     }
@@ -819,14 +977,59 @@ impl CortexApp {
         }
         let form = self.form.get_or_insert_with(|| Form::new(&self.settings));
 
-        match settings_page::show(ui, form) {
+        let workspace = settings_page::Workspace {
+            memories: self.memory.episode_count(),
+            can_prepare: matches!(self.status, Status::Ready(_))
+                && !self.live.running
+                && !self.preparing,
+        };
+
+        match settings_page::show(ui, form, &workspace) {
             Some(settings_page::Action::Apply(settings)) => {
                 self.form = None;
                 self.apply_settings(*settings);
             }
             Some(settings_page::Action::Back) => self.show_chat(),
+            Some(settings_page::Action::OpenMemory) => self.view = View::MemorySpace,
+            Some(settings_page::Action::OpenLiving) => self.view = View::Living,
+
+            // Only what the window draws changes: the agent is left alone.
+            Some(settings_page::Action::Theme(name)) => {
+                palette::choose(name);
+                theme::restyle(ui.ctx());
+
+                self.settings.theme = name.to_string();
+                self.save_settings();
+            }
+
+            Some(settings_page::Action::Prepare) => {
+                if self.can_prepare() {
+                    self.prepare();
+                }
+            }
             None => {}
         }
+    }
+
+    fn living_space(&mut self, ui: &mut egui::Ui) {
+        let Some(living) = &self.living else {
+            ui.add_space(40.0);
+            ui.vertical_centered(|ui| {
+                ui.label("The living network is switched off.");
+                ui.label(
+                    egui::RichText::new(
+                        "Turn on the `living` capability under Settings → Capabilities.",
+                    )
+                    .color(palette::text_muted()),
+                );
+            });
+
+            return;
+        };
+
+        let snapshot = living.snapshot();
+
+        crate::views::living::show(ui, &mut self.living_view, &snapshot);
     }
 
     fn memory_space(&mut self, ui: &mut egui::Ui) {
@@ -902,7 +1105,7 @@ impl CortexApp {
                     ui.add_space(margin);
 
                     theme::card()
-                        .stroke(Stroke::new(1.0, palette::WARNING.gamma_multiply(0.6)))
+                        .stroke(Stroke::new(1.0, palette::warning().gamma_multiply(0.6)))
                         .show(ui, |ui| {
                             ui.set_width(width - 26.0);
 
@@ -910,7 +1113,7 @@ impl CortexApp {
                                 RichText::new("Cortex is not set up yet").font(theme::strong(14.0)),
                             );
 
-                            ui.label(RichText::new(problem).color(palette::TEXT_SECONDARY));
+                            ui.label(RichText::new(problem).color(palette::text_secondary()));
 
                             ui.button("Open settings").clicked()
                         })
@@ -933,11 +1136,12 @@ impl eframe::App for CortexApp {
         if self.sidebar_open {
             self.sidebar(ui);
         }
+        self.files_panel(ui);
         self.render_pane(ui);
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        palette::BACKGROUND.to_normalized_gamma_f32()
+        palette::background().to_normalized_gamma_f32()
     }
 }
 
@@ -956,7 +1160,9 @@ impl CortexApp {
         if matches!(self.status, Status::Ready(_))
             && let Some(instruction) = self.rehearsal.take_instruction()
         {
-            self.submit(&instruction);
+            let images = self.rehearsal.take_attachments();
+
+            self.submit(&instruction, images);
         }
 
         if self.live.can_continue && self.rehearsal.take_continue() {
@@ -988,7 +1194,7 @@ impl CortexApp {
             && let Some(instruction) = self.rehearsal.take_reopen()
         {
             self.open_past_session(path);
-            self.submit(&instruction);
+            self.submit(&instruction, Vec::new());
         }
 
         // The "thinking" square pulses while a run is in progress.
@@ -1057,7 +1263,7 @@ impl CortexApp {
             .items
             .iter()
             .find_map(|item| match item {
-                crate::session::Item::User { text } => Some(text.chars().take(28).collect()),
+                crate::session::Item::User { text, .. } => Some(text.chars().take(28).collect()),
                 _ => None,
             })
             .unwrap_or_else(|| "New chat".to_string())
@@ -1087,6 +1293,7 @@ mod navigation_tests {
         app.live_log = Some(PathBuf::from("current.jsonl"));
         app.live.items.push(crate::session::Item::User {
             text: "Current task".into(),
+            images: Vec::new(),
         });
         app.live.running = true;
         app.open_settings();

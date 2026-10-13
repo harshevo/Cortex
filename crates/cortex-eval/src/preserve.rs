@@ -292,6 +292,7 @@ mod tests {
                     call_id: "call_0".to_string(),
                     output: "x".repeat(2_000),
                     is_error: false,
+                    images: Vec::new(),
                 },
                 duration_ms: 1,
             });

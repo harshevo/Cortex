@@ -1,8 +1,8 @@
 //! Conversion between Cortex types and the Messages API JSON.
 
 use cortex_core::{
-    Block, Message, ModelRequest, ModelResponse, ProviderError, Role, StopReason, ToolCall,
-    ToolSpec, Usage,
+    Block, Image, Message, ModelRequest, ModelResponse, ProviderError, Role, StopReason, ToolCall,
+    ToolResult, ToolSpec, Usage,
 };
 use serde_json::{Value, json};
 
@@ -77,13 +77,44 @@ fn block_to_wire(block: &Block) -> Option<Value> {
         Block::ToolResult(result) => Some(json!({
             "type": "tool_result",
             "tool_use_id": result.call_id,
-            "content": result.output,
+            "content": result_content(result),
             "is_error": result.is_error,
         })),
+
+        Block::Image(image) => Some(image_to_wire(image)),
 
         // Reasoning and other provider blocks go back exactly as received.
         Block::Opaque { raw } => Some(raw.clone()),
     }
+}
+
+/// Plain text, or a list when the result carries pictures such as a
+/// screenshot.
+fn result_content(result: &ToolResult) -> Value {
+    if result.images.is_empty() {
+        return json!(result.output);
+    }
+
+    let mut content = Vec::new();
+
+    if !result.output.is_empty() {
+        content.push(json!({ "type": "text", "text": result.output }));
+    }
+
+    content.extend(result.images.iter().map(image_to_wire));
+
+    json!(content)
+}
+
+fn image_to_wire(image: &Image) -> Value {
+    json!({
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": image.media_type,
+            "data": image.data,
+        },
+    })
 }
 
 pub fn parse_response(json: &Value) -> Result<ModelResponse, ProviderError> {
@@ -184,9 +215,47 @@ fn decode_error(message: &str) -> ProviderError {
 
 #[cfg(test)]
 mod tests {
-    use cortex_core::ToolResult;
-
     use super::*;
+
+    fn picture() -> Message {
+        Message::user_with_images(
+            "what is this?",
+            &[cortex_core::Image {
+                media_type: "image/png".to_string(),
+                data: "QUJD".to_string(),
+            }],
+        )
+    }
+
+    #[test]
+    fn a_picture_is_sent_as_a_base64_image_block() {
+        let wire = message_to_wire(&picture());
+
+        assert_eq!(wire["content"][0]["text"], "what is this?");
+        assert_eq!(wire["content"][1]["type"], "image");
+        assert_eq!(wire["content"][1]["source"]["media_type"], "image/png");
+        assert_eq!(wire["content"][1]["source"]["data"], "QUJD");
+    }
+
+    #[test]
+    fn a_screenshot_travels_inside_its_tool_result() {
+        let message = Message::tool_results(vec![ToolResult {
+            call_id: "call_1".to_string(),
+            output: "saved".to_string(),
+            is_error: false,
+            images: vec![Image {
+                media_type: "image/png".to_string(),
+                data: "QUJD".to_string(),
+            }],
+        }]);
+
+        let wire = message_to_wire(&message);
+        let content = &wire["content"][0]["content"];
+
+        assert_eq!(content[0]["text"], "saved");
+        assert_eq!(content[1]["type"], "image");
+        assert_eq!(content[1]["source"]["data"], "QUJD");
+    }
 
     fn config() -> AnthropicConfig {
         AnthropicConfig {
@@ -225,6 +294,7 @@ mod tests {
                 call_id: "call_1".to_string(),
                 output: "print(1)".to_string(),
                 is_error: false,
+                images: Vec::new(),
             }]),
         ];
 

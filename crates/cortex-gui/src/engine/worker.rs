@@ -4,11 +4,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
+use cortex_brain::Mind;
 use cortex_cli::args::ModelArgs;
 use cortex_cli::commands::prepare;
 use cortex_core::agent::close_unanswered_calls;
 use cortex_core::{
-    Agent, AgentError, Approver, AutoApprove, Block, Event, Inbox, Message, ModelProvider,
+    Agent, AgentError, Approver, AutoApprove, Block, Event, Image, Inbox, Message, ModelProvider,
     Progress, ToolContext, Workspace, replay,
 };
 use tempfile::TempDir;
@@ -47,6 +48,9 @@ struct Running {
 
     /// `None` for the stand-in model, which cannot describe a project.
     describer: Option<Arc<dyn ModelProvider>>,
+
+    /// Guesses what the person will ask for next, when the mind is on.
+    mind: Option<Arc<Mind>>,
 }
 
 pub async fn run(
@@ -72,7 +76,7 @@ pub async fn run(
             _ = member.changed.notified() => {
                 let messages = member.take_pending();
                 if messages.is_empty() { continue; }
-                Command::Submit(messages.join("\n\n"))
+                Command::Submit(messages.join("\n\n"), Vec::new())
             }
         };
         match command {
@@ -121,7 +125,13 @@ pub async fn run(
 
             // With nothing running, something to tell the agent is simply
             // the next instruction.
-            Command::Submit(instruction) | Command::Steer(instruction) => {
+            command @ (Command::Submit(..) | Command::Steer(_)) => {
+                let (instruction, mut images) = match command {
+                    Command::Submit(instruction, images) => (instruction, images),
+                    Command::Steer(instruction) => (instruction, Vec::new()),
+                    _ => unreachable!("the arm takes only these two"),
+                };
+
                 let Some(running) = &running else {
                     outbox.send(not_set_up());
                     outbox.send(Update::Idle);
@@ -130,9 +140,12 @@ pub async fn run(
                 };
 
                 let mut instruction = instruction;
+                let mut finished;
 
                 loop {
-                    let start = Start::Instruction(&instruction);
+                    // Pictures belong to the instruction they came with.
+                    let sent = std::mem::take(&mut images);
+                    let start = Start::Instruction(&instruction, &sent);
 
                     let ended = carry_out(
                         running,
@@ -148,6 +161,7 @@ pub async fn run(
                     let unheard = running.inbox.take();
 
                     interrupted = ended.interrupted;
+                    finished = ended.finished;
 
                     // After a run that finished, it is the next
                     // instruction. After one that was stopped or failed,
@@ -160,6 +174,8 @@ pub async fn run(
                 }
 
                 outbox.send(Update::Idle);
+
+                suggest_next(running, finished, &outbox);
 
                 // The engine has just consolidated the run. Reading it back
                 // may wait on the embedding service, and the next
@@ -202,6 +218,8 @@ pub async fn run(
 
                 outbox.send(Update::Idle);
 
+                suggest_next(running, ended.finished, &outbox);
+
                 tokio::spawn(report_memory(running.memory.clone(), outbox.clone()));
             }
 
@@ -213,6 +231,8 @@ pub async fn run(
                 if let Some(running) = &running {
                     conversation = take_up(running, &log);
                     interrupted = None;
+
+                    turn_away(running);
                 }
             }
 
@@ -224,6 +244,8 @@ pub async fn run(
 
                 if let Some(running) = &running {
                     running.log.start_new_session();
+
+                    turn_away(running);
                 }
             }
 
@@ -301,6 +323,14 @@ async fn build(
     }
 
     let workspace = blueprint.workspace.clone();
+    let mind = blueprint.setup.mind.clone();
+
+    outbox.send(Update::Living(blueprint.setup.living.clone()));
+
+    if let Some(living) = &blueprint.setup.living {
+        tokio::spawn(let_rest(Arc::downgrade(living), outbox.clone()));
+    }
+
     let model = blueprint.model.clone();
     let describer = (!blueprint.info.demo).then(|| blueprint.provider.clone());
 
@@ -316,6 +346,7 @@ async fn build(
         workspace,
         model,
         describer,
+        mind,
     })
 }
 
@@ -404,6 +435,44 @@ fn create_demo_project(launch: &Launch) -> Result<TempDir> {
     Ok(project)
 }
 
+/// Asks the mind what the person is likely to want now, and tells the
+/// window. Only after a run that reached its end: one that was stopped
+/// or failed is usually followed by sending the same thing again.
+fn suggest_next(running: &Running, finished: bool, outbox: &Outbox) {
+    let Some(mind) = running.mind.clone().filter(|_| finished) else {
+        return;
+    };
+
+    let outbox = outbox.clone();
+
+    // The mind answers over a blocking connection.
+    tokio::task::spawn_blocking(move || outbox.send(Update::Suggestion(mind.suggest())));
+}
+
+/// Lets the growing network go over recent moments whenever nothing is
+/// happening, for as long as anything still holds it.
+async fn let_rest(living: std::sync::Weak<cortex_living::Living>, outbox: Outbox) {
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+        let Some(living) = living.upgrade() else {
+            return;
+        };
+
+        if living.rest() {
+            outbox.wake();
+        }
+    }
+}
+
+/// Another session is on screen: the next instruction does not follow
+/// from the run that ended in the one before.
+fn turn_away(running: &Running) {
+    if let Some(mind) = &running.mind {
+        mind.turn_away();
+    }
+}
+
 fn not_set_up() -> Update {
     Update::RunFailed {
         error: "The agent is not set up yet. Check Settings.".to_string(),
@@ -414,7 +483,7 @@ fn not_set_up() -> Update {
 /// Where a run begins.
 enum Start<'a> {
     /// A new instruction.
-    Instruction(&'a str),
+    Instruction(&'a str, &'a [Image]),
 
     /// The step a provider failure stopped an earlier run on.
     CarryOn(Progress),
@@ -450,7 +519,11 @@ async fn carry_out(
     let stopped = {
         let run = async {
             match start {
-                Start::Instruction(instruction) => agent.run(conversation, instruction).await,
+                Start::Instruction(instruction, images) => {
+                    agent
+                        .run_with_images(conversation, instruction, images)
+                        .await
+                }
                 Start::CarryOn(progress) => agent.resume(conversation, progress).await,
             }
         };
@@ -486,7 +559,9 @@ async fn carry_out(
                     // A closed window stops the run as well.
                     Some(Command::Stop) | None => break true,
 
-                    Some(Command::Steer(message) | Command::Submit(message)) => running.inbox.push(message),
+                    Some(Command::Steer(message) | Command::Submit(message, _)) => {
+                        running.inbox.push(message)
+                    }
 
                     // The window does not send anything else mid-run.
                     Some(

@@ -48,7 +48,7 @@ impl ProjectVerifier {
     async fn run_check(&self, command: &str, workspace: &Workspace) -> CheckOutcome {
         let started = Instant::now();
 
-        let result = process::run_shell(command, workspace.root(), self.timeout).await;
+        let result = process::run_shell_in(workspace, command, self.timeout).await;
 
         let (passed, output) = match result {
             Ok(output) if output.timed_out => (

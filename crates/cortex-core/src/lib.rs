@@ -30,6 +30,7 @@ pub mod repeat;
 pub mod replay;
 pub mod review;
 pub mod rollout;
+pub mod sandbox;
 pub mod tool;
 pub mod trajectory;
 pub mod usage;
@@ -43,14 +44,15 @@ pub use briefing::{Briefing, ContextSource};
 pub use context::{MaskConfig, PruneConfig};
 pub use error::{AgentError, ProviderError, ToolError};
 pub use inbox::Inbox;
-pub use message::{Block, Message, Role, ToolCall, ToolResult};
+pub use message::{Block, Image, Message, Role, ToolCall, ToolResult};
 pub use provider::{
     ModelProvider, ModelRequest, ModelResponse, StopReason, StreamObserver, ToolSpec,
 };
 pub use reflect::Lesson;
 pub use review::{Requirement, Review};
 pub use rollout::{FixedStrategies, RolloutConfig, Strategy, StrategyPolicy};
-pub use tool::{Access, Tool, ToolContext, ToolRegistry};
+pub use sandbox::Sandbox;
+pub use tool::{Access, Tool, ToolContext, ToolOutput, ToolRegistry};
 pub use trajectory::{Event, JsonlSink, TrajectorySink};
 pub use usage::Usage;
 pub use verify::{CheckOutcome, Verification, Verifier};

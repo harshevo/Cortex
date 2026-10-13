@@ -2,13 +2,14 @@
 
 use std::time::Instant;
 
-use cortex_core::{ApprovalRequest, CheckOutcome, Outcome, Requirement, Usage};
+use cortex_core::{ApprovalRequest, CheckOutcome, Image, Outcome, Requirement, Usage};
 use cortex_providers::pricing;
 use eframe::egui::{self, Align, CornerRadius, Layout, RichText, ScrollArea, Sense, Stroke, Ui};
 
 use super::icons::{self, Icon};
 use super::prose::{self, code_block};
 use super::tool_card;
+use crate::attachment;
 use crate::engine::Decision;
 use crate::format;
 use crate::session::{Activity, Doing, Item, Session, Tone, Writing};
@@ -18,6 +19,16 @@ use crate::theme::{self, palette};
 const MIN_MARGIN: f32 = 20.0;
 
 const MAX_CHECK_OUTPUT_HEIGHT: f32 = 220.0;
+
+/// How much of the column what the person said may take, so that it
+/// reads as theirs: set to the right, with room left of it.
+const USER_SHARE: f32 = 0.78;
+
+/// Largest a sent picture is drawn.
+const PICTURE_SIZE: egui::Vec2 = egui::vec2(220.0, 160.0);
+
+/// Room kept right of what the agent says for its copy button.
+const GUTTER: f32 = 28.0;
 
 /// Most of the reasoning shown while it is still arriving, in characters:
 /// the newest of it.
@@ -52,8 +63,8 @@ pub fn show(
 
                 ui.vertical(|ui| {
                     ui.set_width(column);
-                    ui.spacing_mut().item_spacing.y = 6.0;
-                    ui.add_space(16.0);
+                    ui.spacing_mut().item_spacing.y = 4.0;
+                    ui.add_space(12.0);
 
                     let model = session.model.clone().unwrap_or_default();
                     let running = session.running;
@@ -64,7 +75,13 @@ pub fn show(
                     while index < items.len() {
                         let end = activity_end(items, index);
 
-                        if end > index {
+                        let briefed = briefings_end(items, index);
+
+                        if briefed > index {
+                            ui.push_id(index, |ui| briefings(ui, &mut items[index..briefed]));
+
+                            index = briefed;
+                        } else if end > index {
                             // Only the run of calls at the very end can
                             // still be growing.
                             let live = running && end == items.len();
@@ -118,11 +135,73 @@ fn activity_end(items: &[Item], start: usize) -> usize {
         match item {
             Item::Tool(_) => end = index + 1,
             Item::Assistant { text, .. } if text.is_empty() => {}
+
+            // Not drawn, so it does not split a run of calls in two.
+            Item::Notice {
+                tone: Tone::Housekeeping,
+                ..
+            } => {}
             _ => break,
         }
     }
 
     end
+}
+
+/// Where the run of briefings starting at `start` ends.
+fn briefings_end(items: &[Item], start: usize) -> usize {
+    items[start..]
+        .iter()
+        .position(|item| !matches!(item, Item::Briefing { .. }))
+        .map_or(items.len(), |length| start + length)
+}
+
+/// The context put in front of an instruction, as one quiet line naming
+/// where each piece came from. A name unfolds into what it brought.
+fn briefings(ui: &mut Ui, items: &mut [Item]) {
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+
+        ui.label(
+            RichText::new("Context")
+                .font(theme::small())
+                .color(palette::text_muted()),
+        );
+
+        for item in items.iter_mut() {
+            let Item::Briefing { source, open, .. } = item else {
+                continue;
+            };
+
+            let color = if *open {
+                palette::text()
+            } else {
+                palette::text_secondary()
+            };
+
+            let name = RichText::new(source.replace('_', " "))
+                .font(theme::small())
+                .color(color);
+
+            let response = ui
+                .add(egui::Label::new(name).sense(Sense::click()))
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text("What the engine showed the model before your message");
+
+            if response.clicked() {
+                *open = !*open;
+            }
+        }
+    });
+
+    for item in items.iter() {
+        if let Item::Briefing {
+            text, open: true, ..
+        } = item
+        {
+            code_block(ui, text, MAX_CHECK_OUTPUT_HEIGHT);
+        }
+    }
 }
 
 fn empty_state(ui: &mut Ui) {
@@ -135,22 +214,17 @@ fn empty_state(ui: &mut Ui) {
 
         ui.label(
             RichText::new("Ask a question, explore your code, or give an agent a task.")
-                .color(palette::TEXT_MUTED),
+                .color(palette::text_muted()),
         );
     });
 }
 
 fn show_item(ui: &mut Ui, item: &mut Item, model: &str, show_thinking: bool) {
     match item {
-        Item::User { text } => user_message(ui, text),
+        Item::User { text, images } => user_message(ui, text, images),
 
-        Item::Briefing { source, text, open } => {
-            let title = format!("Context from {source}");
-
-            foldable(ui, &title, palette::TEXT_SECONDARY, open, |ui| {
-                code_block(ui, text, MAX_CHECK_OUTPUT_HEIGHT);
-            });
-        }
+        // Drawn in runs, by `briefings`.
+        Item::Briefing { .. } => {}
 
         // A step that only called tools has nothing to say; its calls
         // are drawn as a table.
@@ -160,9 +234,7 @@ fn show_item(ui: &mut Ui, item: &mut Item, model: &str, show_thinking: bool) {
                     thought(ui, thinking);
                 }
 
-                message_header(ui, "Cortex", Some(text));
-                prose::show(ui, text, egui::FontId::proportional(14.0));
-                ui.add_space(10.0);
+                agent_message(ui, text);
             }
         }
 
@@ -183,8 +255,9 @@ fn show_item(ui: &mut Ui, item: &mut Item, model: &str, show_thinking: bool) {
 
         Item::Notice { text, tone } => {
             let color = match tone {
-                Tone::Muted => palette::TEXT_MUTED,
-                Tone::Bad => palette::BAD,
+                Tone::Muted => palette::text_muted(),
+                Tone::Bad => palette::bad(),
+                Tone::Housekeeping => return,
             };
 
             ui.label(
@@ -204,35 +277,130 @@ fn show_item(ui: &mut Ui, item: &mut Item, model: &str, show_thinking: bool) {
     }
 }
 
-fn user_message(ui: &mut Ui, text: &str) {
-    ui.add_space(8.0);
-    message_header(ui, "You", Some(text));
+/// What the person said: a bubble set to the right, as wide as its text
+/// and no wider than its share of the column, under any pictures sent
+/// with it.
+fn user_message(ui: &mut Ui, text: &str, images: &[Image]) {
+    ui.add_space(10.0);
 
-    egui::Frame::new()
-        .fill(palette::SURFACE)
-        .corner_radius(CornerRadius::same(7))
-        .inner_margin(egui::Margin::symmetric(12, 8))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.add(egui::Label::new(text).selectable(true));
+    if !images.is_empty() {
+        ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+
+            // Laid out from the right, so the last is placed first.
+            for image in images.iter().rev() {
+                picture(ui, image);
+            }
         });
+    }
+
+    let padding = egui::vec2(12.0, 7.0);
+    let widest = (ui.available_width() * USER_SHARE - 2.0 * padding.x).max(40.0);
+
+    let galley = ui.painter().layout(
+        text.to_string(),
+        egui::FontId::proportional(14.0),
+        palette::text(),
+        widest,
+    );
+
+    let size = galley.size() + 2.0 * padding;
+
+    let (row, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), size.y), Sense::hover());
+
+    let bubble = egui::Rect::from_min_size(egui::pos2(row.right() - size.x, row.top()), size);
+
+    ui.painter()
+        .rect_filled(bubble, CornerRadius::same(12), palette::raised());
+
+    // A label rather than painted text, so that it can be selected.
+    let inside = egui::UiBuilder::new()
+        .max_rect(bubble.shrink2(padding))
+        .layout(Layout::top_down(Align::Min));
+
+    ui.scope_builder(inside, |ui| {
+        ui.add(
+            egui::Label::new(RichText::new(text).size(14.0).color(palette::text()))
+                .selectable(true)
+                .wrap(),
+        );
+    });
+
+    if ui.rect_contains_pointer(row) {
+        let place = egui::Rect::from_center_size(
+            egui::pos2(bubble.left() - 16.0, bubble.top() + 15.0),
+            egui::vec2(22.0, 22.0),
+        );
+
+        copy_button(ui, place, text);
+    }
+
+    ui.add_space(4.0);
 }
 
-fn message_header(ui: &mut Ui, author: &str, text: Option<&str>) {
-    ui.horizontal(|ui| {
+/// A picture that was sent, scaled to fit and kept in its proportions.
+fn picture(ui: &mut Ui, image: &Image) {
+    let Some(texture) = attachment::texture(ui.ctx(), image) else {
         ui.label(
-            RichText::new(author)
-                .font(theme::strong(12.0))
-                .color(palette::TEXT_SECONDARY),
+            RichText::new("A picture that cannot be shown")
+                .font(theme::small())
+                .color(palette::text_muted()),
         );
-        if let Some(text) = text {
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if icons::button(ui, Icon::Copy, "Copy message", false).clicked() {
-                    ui.ctx().copy_text(text.to_string());
-                }
-            });
-        }
-    });
+
+        return;
+    };
+
+    let natural = texture.size_vec2();
+    let scale = (PICTURE_SIZE.x / natural.x)
+        .min(PICTURE_SIZE.y / natural.y)
+        .min(1.0);
+
+    let (rect, _) = ui.allocate_exact_size(natural * scale, Sense::hover());
+
+    attachment::paint_cover(ui, rect, &texture, 10);
+
+    ui.painter().rect_stroke(
+        rect,
+        CornerRadius::same(10),
+        Stroke::new(1.0, palette::border()),
+        egui::StrokeKind::Inside,
+    );
+}
+
+/// What the agent said: plain text on the left, with no frame around it.
+/// A copy button shows in the gutter while the pointer is over it.
+fn agent_message(ui: &mut Ui, text: &str) {
+    ui.add_space(4.0);
+
+    let written = ui
+        .scope(|ui| {
+            ui.set_max_width(ui.available_width() - GUTTER);
+
+            prose::show(ui, text, egui::FontId::proportional(14.0));
+        })
+        .response
+        .rect;
+
+    let row = written.with_max_x(written.left() + ui.available_width());
+
+    if ui.rect_contains_pointer(row) {
+        let place = egui::Rect::from_min_size(
+            egui::pos2(row.right() - 22.0, row.top()),
+            egui::vec2(22.0, 22.0),
+        );
+
+        copy_button(ui, place, text);
+    }
+
+    ui.add_space(4.0);
+}
+
+fn copy_button(ui: &Ui, place: egui::Rect, text: &str) {
+    let id = ui.id().with("copy");
+
+    if icons::button_at(ui, place, id, Icon::Copy, "Copy message", false).clicked() {
+        ui.ctx().copy_text(text.to_string());
+    }
 }
 
 /// The response the model is writing right now. Until its text begins,
@@ -244,7 +412,7 @@ fn writing_message(ui: &mut Ui, writing: &Writing, show_thinking: bool) {
             ui.label(
                 RichText::new("Thinking…")
                     .size(13.0)
-                    .color(palette::TEXT_SECONDARY),
+                    .color(palette::text_secondary()),
             );
 
             thinking_text(ui, &newest(&writing.thinking, LIVE_THINKING_CHARS));
@@ -254,8 +422,13 @@ fn writing_message(ui: &mut Ui, writing: &Writing, show_thinking: bool) {
     }
 
     if !writing.text.is_empty() {
-        message_header(ui, "Cortex · writing", None);
-        prose::show(ui, &writing.text, egui::FontId::proportional(14.0));
+        ui.add_space(4.0);
+
+        ui.scope(|ui| {
+            ui.set_max_width(ui.available_width() - GUTTER);
+
+            prose::show(ui, &writing.text, egui::FontId::proportional(14.0));
+        });
     }
 }
 
@@ -293,7 +466,7 @@ fn doing_line(ui: &mut Ui, doing: &Doing, model: &str) {
     ui.label(
         RichText::new(text)
             .size(13.0)
-            .color(palette::TEXT_SECONDARY.gamma_multiply(pulse)),
+            .color(palette::text_secondary().gamma_multiply(pulse)),
     );
 }
 
@@ -325,9 +498,9 @@ fn thought(ui: &mut Ui, thinking: &str) {
         ui.allocate_exact_size(egui::vec2(ui.available_width(), 20.0), Sense::click());
 
     let color = if response.hovered() {
-        palette::TEXT
+        palette::text()
     } else {
-        palette::TEXT_SECONDARY
+        palette::text_secondary()
     };
 
     let painter = ui.painter_at(rect);
@@ -375,7 +548,7 @@ pub fn thinking_text(ui: &mut Ui, thinking: &str) {
             ui.label(
                 RichText::new(thinking.trim())
                     .font(theme::small())
-                    .color(palette::TEXT_MUTED),
+                    .color(palette::text_muted()),
             );
         });
 
@@ -384,15 +557,15 @@ pub fn thinking_text(ui: &mut Ui, thinking: &str) {
     ui.painter().vline(
         rect.left() + 2.0,
         rect.y_range(),
-        Stroke::new(1.5, palette::BORDER),
+        Stroke::new(1.5, palette::border()),
     );
 }
 
 fn checks_card(ui: &mut Ui, passed: bool, checks: &[CheckOutcome], open: &mut bool) {
     let (title, color) = if passed {
-        ("The project's checks pass", palette::GOOD)
+        ("The project's checks pass", palette::good())
     } else {
-        ("The project's checks fail", palette::BAD)
+        ("The project's checks fail", palette::bad())
     };
 
     foldable(ui, title, color, open, |ui| {
@@ -406,7 +579,7 @@ fn checks_card(ui: &mut Ui, passed: bool, checks: &[CheckOutcome], open: &mut bo
                     format::duration(check.duration_ms)
                 ))
                 .font(theme::mono())
-                .color(palette::TEXT_SECONDARY),
+                .color(palette::text_secondary()),
             );
 
             if !check.output.is_empty() {
@@ -434,17 +607,17 @@ fn review_card(ui: &mut Ui, requirements: &[Requirement], sent_back: bool, open:
     };
 
     let color = if sent_back {
-        palette::BAD
+        palette::bad()
     } else {
-        palette::GOOD
+        palette::good()
     };
 
     foldable(ui, &title, color, open, |ui| {
         for requirement in requirements {
             let (mark, color) = if requirement.met {
-                ("met", palette::TEXT_SECONDARY)
+                ("met", palette::text_secondary())
             } else {
-                ("not met", palette::BAD)
+                ("not met", palette::bad())
             };
 
             ui.label(RichText::new(format!("{mark} · {}", requirement.text)).color(color));
@@ -453,7 +626,7 @@ fn review_card(ui: &mut Ui, requirements: &[Requirement], sent_back: bool, open:
                 ui.label(
                     RichText::new(requirement.why.as_str())
                         .font(theme::small())
-                        .color(palette::TEXT_MUTED),
+                        .color(palette::text_muted()),
                 );
             }
         }
@@ -472,7 +645,7 @@ fn foldable(
         ui.allocate_exact_size(egui::vec2(ui.available_width(), 22.0), Sense::click());
     let painter = ui.painter_at(rect);
     let color = if response.hovered() {
-        palette::TEXT
+        palette::text()
     } else {
         color
     };
@@ -510,12 +683,12 @@ fn run_summary(
     model: &str,
 ) {
     let (ending, color) = match (outcome, verified) {
-        (Outcome::Completed, Some(true)) => ("Finished and verified", palette::GOOD),
-        (Outcome::Completed, Some(false)) => ("Finished, checks still failing", palette::WARNING),
-        (Outcome::Completed, None) => ("Finished", palette::GOOD),
-        (Outcome::StepLimit, _) => ("Stopped at the step limit", palette::WARNING),
-        (Outcome::Truncated, _) => ("Stopped: the response was cut off", palette::WARNING),
-        (Outcome::Refused, _) => ("Stopped: the model declined", palette::BAD),
+        (Outcome::Completed, Some(true)) => ("Finished and verified", palette::good()),
+        (Outcome::Completed, Some(false)) => ("Finished, checks still failing", palette::warning()),
+        (Outcome::Completed, None) => ("Finished", palette::good()),
+        (Outcome::StepLimit, _) => ("Stopped at the step limit", palette::warning()),
+        (Outcome::Truncated, _) => ("Stopped: the response was cut off", palette::warning()),
+        (Outcome::Refused, _) => ("Stopped: the model declined", palette::bad()),
     };
 
     let mut facts = vec![
@@ -537,7 +710,7 @@ fn run_summary(
         ui.label(
             RichText::new(facts.join(" · "))
                 .font(theme::small())
-                .color(palette::TEXT_MUTED),
+                .color(palette::text_muted()),
         );
     });
 
@@ -546,7 +719,7 @@ fn run_summary(
     ui.painter().hline(
         line.x_range(),
         line.center().y,
-        Stroke::new(1.0, palette::BORDER),
+        Stroke::new(1.0, palette::border()),
     );
 }
 
@@ -554,7 +727,7 @@ pub fn approval_card(ui: &mut Ui, request: &ApprovalRequest) -> Option<Decision>
     let mut decision = None;
 
     theme::card()
-        .stroke(Stroke::new(1.0, palette::ACCENT.gamma_multiply(0.7)))
+        .stroke(Stroke::new(1.0, palette::accent().gamma_multiply(0.7)))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
 
@@ -563,8 +736,8 @@ pub fn approval_card(ui: &mut Ui, request: &ApprovalRequest) -> Option<Decision>
             code_block(ui, &request.summary, 120.0);
 
             ui.horizontal(|ui| {
-                let allow = egui::Button::new(RichText::new("Allow").color(palette::SUNKEN))
-                    .fill(palette::ACCENT);
+                let allow = egui::Button::new(RichText::new("Allow").color(palette::sunken()))
+                    .fill(palette::accent());
 
                 if ui.add(allow).clicked() {
                     decision = Some(Decision::Allow);

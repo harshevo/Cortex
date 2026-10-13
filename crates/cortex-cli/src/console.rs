@@ -24,7 +24,7 @@ impl ConsoleSink {
 impl TrajectorySink for ConsoleSink {
     fn record(&self, event: &Event) {
         match event {
-            Event::BrainObserved { .. } => {}
+            Event::BrainObserved { .. } | Event::ImagesAttached { .. } => {}
             Event::RunStarted { .. } | Event::ModelStarted { .. } => {}
 
             Event::RunResumed { steps } => {

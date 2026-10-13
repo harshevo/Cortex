@@ -2,8 +2,10 @@
 
 mod app;
 mod args;
+mod attachment;
 mod brain;
 mod engine;
+mod environment;
 mod format;
 mod memory;
 mod rehearsal;
@@ -28,6 +30,8 @@ use crate::rehearsal::Rehearsal;
 use crate::settings::Settings;
 
 fn main() -> ExitCode {
+    environment::adopt_shell_path();
+
     match run() {
         Ok(()) => ExitCode::SUCCESS,
 
@@ -72,6 +76,7 @@ fn run() -> Result<()> {
         .build()
         .context("cannot start the async runtime")?;
 
+    let tried_theme = args.rehearsal.theme.clone();
     let rehearsal = Rehearsal::new(args.rehearsal);
     let demo = args.demo;
     let split = args.split;
@@ -80,6 +85,9 @@ fn run() -> Result<()> {
         .with_title("Cortex")
         .with_inner_size([1280.0, 820.0])
         .with_min_inner_size([900.0, 560.0])
+        // Open filling the screen; the size above is what the window
+        // returns to when it is un-zoomed.
+        .with_maximized(true)
         // Let the app draw its own top bar under the window's buttons.
         .with_fullsize_content_view(true)
         .with_titlebar_shown(false)
@@ -100,6 +108,13 @@ fn run() -> Result<()> {
                 .wgpu_render_state
                 .as_ref()
                 .ok_or("the app needs the wgpu renderer")?;
+
+            // A theme that is no longer offered leaves the default in use.
+            theme::palette::choose(&settings.theme);
+
+            if let Some(theme) = &tried_theme {
+                theme::palette::choose(theme);
+            }
 
             theme::apply(&creation.egui_ctx);
             brain::install(render_state);

@@ -1,0 +1,15 @@
+[package]
+name = "cortex-living"
+description = "Experimental: a network that grows and rewires itself as it watches the agent work, with a workspace and a model of its own state. It never advises and never acts."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cortex-core.workspace = true
+
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

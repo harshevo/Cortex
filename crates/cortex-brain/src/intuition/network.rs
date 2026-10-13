@@ -231,6 +231,32 @@ impl Network {
         self.tidy();
     }
 
+    /// Applies a second verdict on a run already learned from, when the
+    /// person's next words say what nothing had checked. It is the same
+    /// run, so it is not counted again.
+    pub fn reconsider(&mut self, evidence: &Evidence, verdict: Verdict) {
+        let known = |neuron: &u32| (*neuron as usize) < self.neurons.len();
+
+        // The network may have been reloaded smaller since.
+        if !evidence.active.keys().all(known)
+            || !evidence
+                .tags
+                .keys()
+                .all(|(source, target)| known(source) && known(target))
+        {
+            return;
+        }
+
+        match verdict {
+            Verdict::Failed => self.punish(evidence),
+            Verdict::Passed | Verdict::Unchecked => {
+                self.strengthen(evidence, LEARNING_RATE * 0.5);
+            }
+        }
+
+        self.tidy();
+    }
+
     fn strengthen(&mut self, evidence: &Evidence, rate: f32) {
         // Unused synapses weaken first, so that a synapse tagged in this
         // run is not weakened and strengthened at once.
@@ -363,10 +389,19 @@ impl Network {
     pub fn recall(&self, sources: &[(u32, f32)]) -> Vec<(u32, f32)> {
         let is_word = |neuron: u32| self.neurons[neuron as usize].concept.kind == Kind::Word;
 
-        // A source met in most runs says little about this one.
+        // A source met in most runs says little about this one. The kind
+        // of task is the exception: there are only a handful, so each is
+        // met in many runs and still tells them apart.
         let weighed: Vec<(u32, f32)> = sources
             .iter()
-            .map(|(source, activity)| (*source, activity * (1.0 - self.share(*source))))
+            .map(|(source, activity)| {
+                let common = match self.neurons[*source as usize].concept.kind {
+                    Kind::Task => 0.0,
+                    _ => self.share(*source),
+                };
+
+                (*source, activity * (1.0 - common))
+            })
             .collect();
 
         type Active = Vec<(u32, f32)>;

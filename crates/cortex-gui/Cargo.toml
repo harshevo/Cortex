@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 cortex-brain.workspace = true
+cortex-living.workspace = true
 cortex-cli.workspace = true
 cortex-core.workspace = true
 cortex-memory.workspace = true
@@ -25,7 +26,8 @@ dirs = "7"
 eframe = { version = "0.36", default-features = false, features = ["default_fonts", "wgpu"] }
 glam = { version = "0.34", features = ["bytemuck"] }
 keyring = "4"
-image = { version = "0.25", default-features = false, features = ["png"] }
+base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
 rayon = "1"
 reqwest.workspace = true
 rfd = { version = "0.17", default-features = false }

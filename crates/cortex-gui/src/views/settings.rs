@@ -23,6 +23,8 @@ enum Section {
     Provider,
     Permissions,
     Capabilities,
+    Workspace,
+    Appearance,
 }
 
 /// The settings as they are being edited, before they are applied.
@@ -61,6 +63,11 @@ impl Form {
         }
     }
 
+    /// Opens the page on its themes.
+    pub fn show_appearance(&mut self) {
+        self.section = Section::Appearance;
+    }
+
     fn slot(provider: Provider) -> usize {
         Provider::ALL
             .iter()
@@ -97,10 +104,29 @@ impl Form {
 pub enum Action {
     Apply(Box<Settings>),
     Back,
+
+    /// Show the memory space.
+    OpenMemory,
+    OpenLiving,
+
+    /// Use this colour theme, from now on.
+    Theme(&'static str),
+
+    /// Get the project ready ahead of any task.
+    Prepare,
+}
+
+/// What the page shows about the session, besides the settings.
+pub struct Workspace {
+    /// How many earlier tasks are remembered.
+    pub memories: usize,
+
+    /// The agent is free, so the project can be got ready.
+    pub can_prepare: bool,
 }
 
 /// Returns the requested navigation or settings change.
-pub fn show(ui: &mut Ui, form: &mut Form) -> Option<Action> {
+pub fn show(ui: &mut Ui, form: &mut Form, workspace: &Workspace) -> Option<Action> {
     let mut applied = None;
     let width = (ui.available_width() - 72.0).clamp(1.0, PAGE_WIDTH);
     let margin = ((ui.available_width() - width) / 2.0).max(0.0);
@@ -137,6 +163,8 @@ pub fn show(ui: &mut Ui, form: &mut Form) -> Option<Action> {
                     (Section::Provider, "Models & accounts"),
                     (Section::Permissions, "Permissions"),
                     (Section::Capabilities, "Capabilities"),
+                    (Section::Workspace, "Workspace"),
+                    (Section::Appearance, "Appearance"),
                 ] {
                     if choice(ui, label, form.section == section).clicked() {
                         form.section = section;
@@ -156,6 +184,23 @@ pub fn show(ui: &mut Ui, form: &mut Form) -> Option<Action> {
                         Section::Provider => provider_section(ui, form),
                         Section::Permissions => permissions_section(ui, form),
                         Section::Capabilities => capabilities_section(ui, form),
+
+                        Section::Appearance => {
+                            if let Some(name) = appearance_section(ui) {
+                                // Kept in the draft too, so that applying
+                                // other settings does not bring the old
+                                // theme back.
+                                form.draft.theme = name.to_string();
+
+                                applied = Some(Action::Theme(name));
+                            }
+                        }
+
+                        Section::Workspace => {
+                            if let Some(action) = workspace_section(ui, form, workspace) {
+                                applied = Some(action);
+                            }
+                        }
                     }
                     ui.add_space(24.0);
                 });
@@ -183,7 +228,7 @@ fn caption(ui: &mut Ui, text: &str) {
     ui.label(
         RichText::new(text)
             .font(theme::small())
-            .color(palette::TEXT_MUTED),
+            .color(palette::text_muted()),
     );
 }
 
@@ -193,7 +238,7 @@ fn field_label(ui: &mut Ui, text: &str) {
     ui.label(
         RichText::new(text)
             .font(theme::small())
-            .color(palette::TEXT_SECONDARY),
+            .color(palette::text_secondary()),
     );
 }
 
@@ -268,6 +313,16 @@ fn provider_section(ui: &mut Ui, form: &mut Form) {
     caption(
         ui,
         "These are offered in the model selector under the message box.",
+    );
+
+    ui.add_space(12.0);
+
+    switch_row(
+        ui,
+        &mut form.draft.show_thinking,
+        RichText::new("Show the model's thinking"),
+        "Shows the model's reasoning in the chat as it arrives, for models and providers that send it.",
+        true,
     );
 }
 
@@ -415,6 +470,14 @@ fn permissions_section(ui: &mut Ui, form: &mut Form) {
         true,
     );
 
+    switch_row(
+        ui,
+        &mut form.draft.sandbox,
+        RichText::new("Run commands in a sandbox"),
+        sandbox_caption(),
+        true,
+    );
+
     field_label(ui, "Most model calls per instruction");
 
     ui.add(
@@ -426,6 +489,167 @@ fn permissions_section(ui: &mut Ui, form: &mut Form) {
         ui,
         "The agent pauses when it reaches this limit. Allowed range: 1–500 calls.",
     );
+}
+
+fn sandbox_caption() -> &'static str {
+    if cortex_core::Sandbox::available() {
+        "On, a command the agent runs can write only in the project and temporary folders, \
+         and cannot read where keys are kept. Off, it runs with your own rights."
+    } else {
+        "This system has no sandbox yet, so commands are not confined either way."
+    }
+}
+
+/// What used to be in the top bar: the memory space and getting the
+/// project ready.
+fn workspace_section(ui: &mut Ui, form: &mut Form, workspace: &Workspace) -> Option<Action> {
+    let mut action = None;
+
+    section(ui, "Memory space");
+    caption(
+        ui,
+        &format!(
+            "What Cortex remembers, drawn as a brain: {} earlier tasks so far.",
+            workspace.memories
+        ),
+    );
+    ui.add_space(8.0);
+
+    if ui.button("Open memory space").clicked() {
+        action = Some(Action::OpenMemory);
+    }
+
+    section(ui, "Living network");
+    caption(
+        ui,
+        "Experimental: a network that grows and rewires itself as it watches runs, drawn as \
+         it is. It needs the `living` capability and never advises the model.",
+    );
+    ui.add_space(8.0);
+
+    if ui.button("Open living network").clicked() {
+        action = Some(Action::OpenLiving);
+    }
+
+    section(ui, "Shared memory");
+
+    switch_row(
+        ui,
+        &mut form.draft.combine_memory,
+        RichText::new("Share memory between projects"),
+        "Off, each project has its own memory. On, the agent also recalls the closest tasks \
+         and general lessons from your other projects, and the memory space shows them all \
+         as one brain. What it knows about a project's own files stays with that project.",
+        true,
+    );
+
+    section(ui, "Prepare project");
+    caption(
+        ui,
+        "Get this project ready ahead of any task: parse it, embed it, and have the model \
+         write a short description that every later task is shown.",
+    );
+    ui.add_space(8.0);
+
+    let prepare = ui
+        .add_enabled(workspace.can_prepare, egui::Button::new("Prepare project"))
+        .on_disabled_hover_text("Available when a model is set up and no task is running.");
+
+    if prepare.clicked() {
+        action = Some(Action::Prepare);
+    }
+
+    action
+}
+
+/// The colour themes, each with a few of its colours beside its name.
+/// Returns the one that was clicked. It takes effect at once.
+fn appearance_section(ui: &mut Ui) -> Option<&'static str> {
+    let mut chosen = None;
+
+    section(ui, "Theme");
+    caption(
+        ui,
+        "The colours of the whole app. A theme is used as soon as it is picked.",
+    );
+    ui.add_space(10.0);
+
+    let current = palette::current().name;
+
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing.y = 2.0;
+
+        let mut heading = None;
+
+        for theme in &palette::THEMES {
+            // The list is in two parts, each under its name.
+            if heading != Some(theme.dark) {
+                if heading.is_some() {
+                    ui.add_space(12.0);
+                }
+
+                heading = Some(theme.dark);
+
+                ui.label(
+                    RichText::new(if theme.dark { "Dark" } else { "Light" })
+                        .font(theme::strong(11.5))
+                        .color(palette::text_muted()),
+                );
+                ui.add_space(2.0);
+            }
+
+            let selected = theme.name == current;
+
+            let (rect, response) = ui.allocate_exact_size(
+                egui::vec2(ui.available_width().min(FIELD_WIDTH + 60.0), 34.0),
+                egui::Sense::click(),
+            );
+
+            if selected || response.hovered() {
+                let fill = if selected {
+                    palette::raised()
+                } else {
+                    palette::surface()
+                };
+
+                ui.painter()
+                    .rect_filled(rect, egui::CornerRadius::same(7), fill);
+            }
+
+            ui.painter().text(
+                rect.left_center() + egui::vec2(12.0, 0.0),
+                egui::Align2::LEFT_CENTER,
+                theme.name,
+                egui::FontId::proportional(13.5),
+                if selected {
+                    palette::text()
+                } else {
+                    palette::text_secondary()
+                },
+            );
+
+            // The theme's own grounds, text and accent, right to left.
+            let swatches = [theme.accent, theme.text, theme.sidebar, theme.background];
+
+            for (position, color) in swatches.into_iter().enumerate() {
+                let centre = rect.right_center() - egui::vec2(20.0 + position as f32 * 20.0, 0.0);
+
+                ui.painter().circle_filled(centre, 7.0, color);
+                ui.painter()
+                    .circle_stroke(centre, 7.0, egui::Stroke::new(1.0, palette::border()));
+            }
+
+            if response
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .clicked()
+                && !selected
+            {
+                chosen = Some(theme.name);
+            }
+        }
+    });
+
+    chosen
 }
 
 fn capabilities_section(ui: &mut Ui, form: &mut Form) {
@@ -454,9 +678,37 @@ fn capabilities_section(ui: &mut Ui, form: &mut Form) {
         if *feature == Feature::Rollouts && on {
             attempts_rows(ui, form);
         }
+
+        if *feature == Feature::Browser && on {
+            browser_rows(ui, form);
+        }
         ui.add_space(10.0);
         ui.separator();
     }
+}
+
+/// How the `browser` capability shows its work: to the model, and to you.
+fn browser_rows(ui: &mut Ui, form: &mut Form) {
+    ui.indent("browser", |ui| {
+        switch_row(
+            ui,
+            &mut form.draft.browser_pictures,
+            RichText::new("Show screenshots to the model"),
+            "On, the model sees the screenshots it takes, so it can judge how a page looks. \
+             Only for a model that takes images: another may refuse the request. Off, it \
+             reads pages as text and screenshots are only saved in the project.",
+            true,
+        );
+
+        switch_row(
+            ui,
+            &mut form.draft.browser_window,
+            RichText::new("Show the browser window"),
+            "Off, the browser runs out of sight. On, it opens a window so you can watch what \
+             the agent does in it.",
+            true,
+        );
+    });
 }
 
 /// How many attempts the `rollouts` capability makes, and how.
@@ -492,14 +744,14 @@ fn switch_row(ui: &mut Ui, on: &mut bool, title: RichText, help: &str, enabled: 
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 1.0;
 
-            ui.label(title.color(palette::TEXT));
+            ui.label(title.color(palette::text()));
 
             // The explanation wraps inside the page rather than running on.
             ui.add(
                 egui::Label::new(
                     RichText::new(help)
                         .font(theme::small())
-                        .color(palette::TEXT_MUTED),
+                        .color(palette::text_muted()),
                 )
                 .wrap(),
             );
@@ -524,9 +776,9 @@ fn switch(ui: &mut Ui, on: &mut bool) -> bool {
     let position = ui.ctx().animate_bool(response.id, *on);
 
     let track = if *on {
-        palette::ACCENT
+        palette::accent()
     } else {
-        palette::RAISED
+        palette::raised()
     };
     let track = if ui.is_enabled() {
         track
@@ -544,7 +796,7 @@ fn switch(ui: &mut Ui, on: &mut bool) -> bool {
     );
 
     ui.painter()
-        .circle_filled(knob, radius - 2.5, palette::TEXT);
+        .circle_filled(knob, radius - 2.5, palette::text());
 
     response.clicked()
 }
@@ -563,14 +815,18 @@ fn one_sentence(text: &str) -> String {
 /// pressed.
 fn apply_row(ui: &mut Ui, form: &mut Form) -> bool {
     ui.horizontal_wrapped(|ui| {
-        let apply = egui::Button::new(RichText::new("Apply settings").color(palette::SUNKEN))
+        let apply = egui::Button::new(RichText::new("Apply settings").color(palette::sunken()))
             .min_size(egui::vec2(120.0, 34.0))
-            .fill(palette::ACCENT);
+            .fill(palette::accent());
 
         let pressed = ui.add(apply).clicked();
 
         if let Some((text, good)) = &form.notice {
-            let color = if *good { palette::GOOD } else { palette::BAD };
+            let color = if *good {
+                palette::good()
+            } else {
+                palette::bad()
+            };
 
             ui.label(RichText::new(text).font(theme::small()).color(color));
         }
@@ -584,15 +840,15 @@ fn apply_row(ui: &mut Ui, form: &mut Form) -> bool {
 fn choice(ui: &mut Ui, label: &str, selected: bool) -> egui::Response {
     let (fill, text, stroke) = if selected {
         (
-            palette::RAISED,
-            palette::TEXT,
-            Stroke::new(1.0, palette::ACCENT),
+            palette::raised(),
+            palette::text(),
+            Stroke::new(1.0, palette::accent()),
         )
     } else {
         (
             Color32::TRANSPARENT,
-            palette::TEXT_SECONDARY,
-            Stroke::new(1.0, palette::BORDER),
+            palette::text_secondary(),
+            Stroke::new(1.0, palette::border()),
         )
     };
 
@@ -623,7 +879,14 @@ mod tests {
             },
             |ui| {
                 egui::CentralPanel::default().show(ui, |ui| {
-                    show(ui, &mut form);
+                    show(
+                        ui,
+                        &mut form,
+                        &Workspace {
+                            memories: 0,
+                            can_prepare: false,
+                        },
+                    );
                 });
             },
         );
@@ -665,7 +928,13 @@ mod tests {
                 ..Default::default()
             },
             |ui| {
-                egui::CentralPanel::default().show(ui, |ui| action = show(ui, &mut form));
+                let workspace = Workspace {
+                    memories: 0,
+                    can_prepare: false,
+                };
+
+                egui::CentralPanel::default()
+                    .show(ui, |ui| action = show(ui, &mut form, &workspace));
             },
         );
         assert!(matches!(action, Some(Action::Back)));

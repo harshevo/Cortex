@@ -572,6 +572,8 @@ fn neuron_node(neuron: &PictureNeuron) -> Node {
         Kind::File => "A file runs here have worked on",
         Kind::Command => "A command that passed here",
         Kind::Error => "A failure met here",
+        Kind::Task => "A kind of task asked for here",
+        Kind::Approach => "A way of going about a task that runs here took",
     };
 
     let runs = match neuron.runs {

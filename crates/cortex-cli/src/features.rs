@@ -1,7 +1,8 @@
 //! Optional capabilities, switched on with `--with`.
 //!
-//! Each one is off by default so that an evaluation run can turn on exactly
-//! one and compare the result with the plain agent.
+//! Each one is off unless asked for, so that an evaluation run can turn on
+//! exactly one and compare the result with the plain agent. `run`, `chat`
+//! and the app start with [`DEFAULTS`] on top, which `--without` takes away.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -10,17 +11,20 @@ use std::time::Instant;
 use anyhow::{Context, Result, bail};
 use clap::ValueEnum;
 use cortex_brain::{
-    Brain, BrainConfig, Controller, DirectEncoder, Encoder, FlyBrainEncoder, Intuition,
+    Brain, BrainConfig, Controller, DirectEncoder, Encoder, FlyBrainEncoder, Intuition, Mind,
     StrategyBandit,
 };
 use cortex_core::{
     Adviser, ContextSource, Extras, MaskConfig, PruneConfig, RolloutConfig, ToolRegistry,
-    TrajectorySink, Verifier, prompt,
+    TrajectorySink, Verifier, Workspace, prompt,
 };
 use cortex_index::{CodeGraph, CodeIndex};
+use cortex_living::Living;
 use cortex_memory::{HopeClient, MemoryConfig, MemorySystem};
 use cortex_retrieval::{EmbeddingClient, SemanticIndex};
 use cortex_router::{ContextRouter, LikelyFiles, ProjectMap};
+use cortex_skills::{SkillLibrary, SkillSource, UseSkill};
+use cortex_tools::BrowserOptions;
 use cortex_verify::ProjectVerifier;
 
 use crate::args::{ModelArgs, ProviderKind};
@@ -115,11 +119,73 @@ pub enum Feature {
     /// words, and those closely tied to them by imports.
     Likely,
 
+    /// The learning brain from the `brain` project, watching every step
+    /// and listening to what you say. It learns which actions work here,
+    /// keeps your corrections, and says a line when it has one: a habit
+    /// it is sure of, something you said before, an action that failed
+    /// here before, a choice worth asking you about, or something untried.
+    /// The model can also have it imagine how actions would turn out. Its
+    /// service is started when needed. On in `run`, `chat` and the app
+    /// unless turned off; silent in a share of runs so that `cortex mind`
+    /// can measure its effect. Without `--with gate` it learns from
+    /// commands and from you, not from checks.
+    Mind,
+
     /// Make up to `--rollouts` attempts, each in its own copy of the
     /// project and each told to go about the task differently, and keep
     /// the best. Stops at the first convincing attempt unless
     /// `--rollouts-parallel` is given.
     Rollouts,
+
+    /// Let the model pick a skill itself: the list of skills goes in the
+    /// system prompt and the `skill` tool loads one. Skills are written
+    /// procedures such as `code-review`, `security-review` and
+    /// `ui-design`; typing `/name` starts one with or without this.
+    Skills,
+
+    /// GitHub tools, through the `gh` command: `github` reads pull
+    /// requests, diffs, checks, comments, issues and workflow logs, and
+    /// `github_write` opens pull requests and posts comments and reviews,
+    /// asking first each time.
+    Github,
+
+    /// A real web browser the agent can see and use: `browser` opens
+    /// pages, clicks, types and runs scripts, asking first each time, and
+    /// `browser_view` reads the page as text, takes screenshots and
+    /// reports console errors and failed requests. For looking at an
+    /// interface, testing it, and automating work on web pages. Needs
+    /// Chrome, Chromium, Edge or Brave to be installed.
+    Browser,
+
+    /// Experimental: a network that grows and rewires itself as it
+    /// watches runs. It creates a neuron for each new thing it meets and
+    /// for things that keep happening together, wires what follows what,
+    /// holds the new and unexpected in a workspace, and predicts its own
+    /// surprise. It only watches: nothing it learns reaches the model.
+    /// One network for all projects, in `~/.cortex/living`, drawn live in
+    /// the app.
+    Living,
+}
+
+/// On in `run`, `chat` and the app unless turned off with `--without`.
+pub const DEFAULTS: [Feature; 1] = [Feature::Mind];
+
+impl crate::args::ModelArgs {
+    /// Switches on the capabilities a session starts with, leaving out
+    /// those turned off by name.
+    pub fn with_defaults(mut self) -> Self {
+        for feature in DEFAULTS {
+            if !self.features.contains(&feature) {
+                self.features.push(feature);
+            }
+        }
+
+        let without = self.without.clone();
+
+        self.features.retain(|feature| !without.contains(feature));
+
+        self
+    }
 }
 
 /// Where memory is kept and what it is about.
@@ -162,10 +228,43 @@ pub struct Setup {
 
     /// Masking, the review, lessons and repeated attempts.
     pub extras: Extras,
+
+    /// The model has been told which skills there are.
+    pub skill_listing: bool,
+
+    /// The mind, when it is on, for a caller that wants its guess at
+    /// what the person will ask for next.
+    pub mind: Option<Arc<Mind>>,
+
+    /// The experimental growing network, when it is on, for a caller
+    /// that wants to draw it.
+    pub living: Option<Arc<Living>>,
+}
+
+impl Setup {
+    /// Everything to add to the system prompt for an agent that works in
+    /// `workspace`: the capabilities' own notes, the checks the work will
+    /// answer to, and the skills the project brings.
+    pub fn notes(&self, workspace: &Workspace) -> Vec<String> {
+        let mut notes = self.prompt_notes.clone();
+
+        notes.extend(
+            self.verifier
+                .as_ref()
+                .and_then(|verifier| prompt::verification_note(&verifier.commands(workspace))),
+        );
+
+        if self.skill_listing {
+            notes.extend(SkillLibrary::for_project(workspace.root()).project_listing());
+        }
+
+        notes
+    }
 }
 
 pub async fn setup(args: &ModelArgs, memory_location: MemoryLocation) -> Result<Setup> {
-    let has = |feature: Feature| args.features.contains(&feature);
+    let has =
+        |feature: Feature| args.features.contains(&feature) && !args.without.contains(&feature);
 
     let mut tools = cortex_tools::default_registry();
 
@@ -219,6 +318,7 @@ pub async fn setup(args: &ModelArgs, memory_location: MemoryLocation) -> Result<
 
     let controller = controller(args, &memory_location).await?;
     let intuition = intuition(args, &memory_location);
+    let mind = mind(args, &memory_location).await;
 
     let memory = if has(Feature::Memory) {
         let memory = open_memory(
@@ -226,6 +326,7 @@ pub async fn setup(args: &ModelArgs, memory_location: MemoryLocation) -> Result<
             &client,
             hope_client(args).await?,
             has(Feature::Priors),
+            &args.memory_from,
         )
         .await?;
 
@@ -250,6 +351,12 @@ pub async fn setup(args: &ModelArgs, memory_location: MemoryLocation) -> Result<
         sinks.push(memory.clone());
     }
 
+    let living = has(Feature::Living).then(living).flatten();
+
+    if let Some(living) = &living {
+        sinks.push(living.clone());
+    }
+
     let mut advisers: Vec<Arc<dyn Adviser>> = Vec::new();
 
     if let Some(controller) = controller {
@@ -260,6 +367,13 @@ pub async fn setup(args: &ModelArgs, memory_location: MemoryLocation) -> Result<
     if let Some(intuition) = &intuition {
         sinks.push(intuition.clone());
         advisers.push(intuition.clone());
+    }
+    let mind_listens = mind.is_some();
+    let suggester = mind.clone();
+
+    if let Some(mind) = &mind {
+        sinks.push(mind.clone());
+        advisers.push(mind.clone());
     }
     if !advisers.is_empty() {
         tools.register(cortex_tools::BrainState(advisers.clone()));
@@ -289,10 +403,17 @@ pub async fn setup(args: &ModelArgs, memory_location: MemoryLocation) -> Result<
         context_sources.push(Arc::new(LikelyFiles::new(graph)));
     }
 
-    // Last, so that it reads straight before the task.
+    if let Some(mind) = mind {
+        context_sources.push(mind);
+    }
+
     if let Some(intuition) = intuition {
         context_sources.push(intuition);
     }
+
+    // Last, so that it reads straight before the task. A task that does
+    // not begin with `/name` gets nothing from it, so it is always there.
+    context_sources.push(Arc::new(SkillSource));
 
     let mut prompt_notes = Vec::new();
 
@@ -304,7 +425,38 @@ pub async fn setup(args: &ModelArgs, memory_location: MemoryLocation) -> Result<
         prompt_notes.push(prompt::reproduction_note());
     }
 
+    if has(Feature::Skills) {
+        tools.register(UseSkill);
+
+        prompt_notes.extend(SkillLibrary::standard().listing());
+    }
+
+    if has(Feature::Github) {
+        cortex_tools::add_github_tools(&mut tools);
+
+        prompt_notes.push(prompt::github_note());
+    }
+
+    if has(Feature::Browser) {
+        cortex_tools::add_browser_tools(
+            &mut tools,
+            BrowserOptions {
+                show_window: args.browser_window,
+                pictures: args.browser_pictures,
+            },
+        );
+
+        prompt_notes.push(prompt::browser_note(args.browser_pictures));
+    }
+
+    if mind_listens {
+        prompt_notes.push(cortex_brain::mind::PROMPT_NOTE.to_string());
+    }
+
     Ok(Setup {
+        skill_listing: has(Feature::Skills),
+        mind: suggester,
+        living,
         semantic,
         tools,
         prune: prune_config(args)?,
@@ -442,6 +594,68 @@ fn intuition(args: &ModelArgs, memory_location: &MemoryLocation) -> Option<Arc<I
     Some(Arc::new(intuition))
 }
 
+/// The learning brain, when it is asked for. Its service is started if it
+/// is not running; one that cannot be started switches the capability off
+/// with a note, and never stops the agent from starting.
+async fn mind(args: &ModelArgs, memory_location: &MemoryLocation) -> Option<Arc<Mind>> {
+    if !args.features.contains(&Feature::Mind) || args.without.contains(&Feature::Mind) {
+        return None;
+    }
+
+    let mind = Mind::new(&args.mind_url, &memory_location.scope).with_control(args.mind_control);
+
+    let mind = Arc::new(mind);
+    let waking = mind.clone();
+
+    // Starting the service can take seconds the first time.
+    let woken = tokio::task::spawn_blocking(move || waking.wake()).await;
+
+    let health = match woken.unwrap_or_else(|error| Err(error.to_string())) {
+        Ok(health) => health,
+
+        Err(reason) => {
+            eprintln!(
+                "mind: off for this session: {reason}. `--without mind` leaves it out without \
+                 this note"
+            );
+
+            return None;
+        }
+    };
+
+    eprintln!(
+        "mind: {} steps remembered, {} rules, {} things you said ({})",
+        health["remembered"],
+        health["rules"],
+        health["told"].as_u64().unwrap_or_default(),
+        args.mind_url
+    );
+
+    Some(mind)
+}
+
+/// The experimental growing network. It is one for all projects, and
+/// shared by everything in this process.
+fn living() -> Option<Arc<Living>> {
+    let file = std::env::home_dir()?
+        .join(".cortex")
+        .join("living")
+        .join("network.json");
+
+    let living = Living::shared(&file);
+    let meters = living.snapshot().meters;
+
+    eprintln!(
+        "living: {} neurons, {} synapses, {} moments lived ({})",
+        meters.neurons,
+        meters.synapses,
+        meters.moments,
+        file.display()
+    );
+
+    Some(living)
+}
+
 /// Where the associative network for the memory at `memory` is kept.
 pub fn intuition_file(memory: &std::path::Path) -> PathBuf {
     memory.with_extension("intuition.json")
@@ -573,6 +787,7 @@ async fn open_memory(
     client: &EmbeddingClient,
     hope: Option<HopeClient>,
     show_track_record: bool,
+    others: &[PathBuf],
 ) -> Result<Arc<MemorySystem>> {
     let config = MemoryConfig {
         skip_identical: location.skip_identical,
@@ -607,6 +822,37 @@ async fn open_memory(
 
     if let Some(hope) = hope {
         memory = memory.with_reranker(Arc::new(hope));
+    }
+
+    for folder in others {
+        // A project is known to its memory by its real path. One that has
+        // no memory yet has nothing to add.
+        let Ok(folder) = folder.canonicalize() else {
+            continue;
+        };
+
+        let file = folder.join(".cortex").join("memory.db");
+
+        if !file.is_file() {
+            continue;
+        }
+
+        let name = folder
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| folder.display().to_string());
+
+        match cortex_memory::Store::open(&file) {
+            Ok(store) => memory = memory.with_other(store, &folder.display().to_string(), &name),
+            Err(error) => eprintln!("memory: {} is left out: {error}", file.display()),
+        }
+    }
+
+    if memory.others() > 0 {
+        eprintln!(
+            "memory: also recalling from {} other projects",
+            memory.others()
+        );
     }
 
     Ok(Arc::new(memory))

@@ -16,6 +16,10 @@ const RELATIVE_FLOOR: f32 = 0.6;
 /// Lessons shown for one task at most.
 pub const MAX_LESSONS: usize = 3;
 
+/// Episodes, and lessons, from other projects shown for one task at most.
+/// They are about different code, so only the closest earn their place.
+pub const MAX_ELSEWHERE: usize = 2;
+
 /// Checked tasks needed before the track record says anything.
 const MIN_CHECKED_TASKS: usize = 5;
 
@@ -117,6 +121,13 @@ pub struct Recall {
     /// Advice taken from earlier runs, closest to the task first.
     pub lessons: Vec<ScoredLesson>,
 
+    /// The closest tasks from other projects, each with the project's
+    /// name, when memory is shared between projects.
+    pub episodes_elsewhere: Vec<(String, ScoredEpisode)>,
+
+    /// Advice from other projects that is not about any one file.
+    pub lessons_elsewhere: Vec<(String, ScoredLesson)>,
+
     /// How earlier tasks here went, when that is switched on and enough
     /// of them were checked.
     pub track_record: Option<TrackRecord>,
@@ -134,6 +145,8 @@ impl Recall {
             && self.facts.is_empty()
             && self.lessons.is_empty()
             && self.track_record.is_none()
+            && self.episodes_elsewhere.is_empty()
+            && self.lessons_elsewhere.is_empty()
     }
 
     /// The memory as shown to the model. `exists` says whether a path is
@@ -183,6 +196,25 @@ impl Recall {
                     "{}. {}\n",
                     position + 1,
                     scored.episode.render(exists)
+                ));
+            }
+        }
+
+        if !self.episodes_elsewhere.is_empty() || !self.lessons_elsewhere.is_empty() {
+            text.push_str(
+                "\nFrom your other projects. The code there is different: take the approach, \
+                 not the paths.\n",
+            );
+
+            for (project, scored) in &self.lessons_elsewhere {
+                text.push_str(&format!("- In `{project}`: {}\n", scored.lesson.render()));
+            }
+
+            for (project, scored) in &self.episodes_elsewhere {
+                // Its files are not in this project, so none is named.
+                text.push_str(&format!(
+                    "- In `{project}`: {}\n",
+                    scored.episode.render(|_| false)
                 ));
             }
         }
@@ -238,6 +270,22 @@ impl Recall {
             "episodes": episodes,
             "facts": facts,
             "lessons": lessons,
+            "elsewhere": self
+                .episodes_elsewhere
+                .iter()
+                .map(|(project, scored)| {
+                    json!({
+                        "project": project,
+                        "instruction": scored.episode.instruction,
+                        "score": scored.score,
+                    })
+                })
+                .collect::<Vec<Value>>(),
+            "lessons_elsewhere": self
+                .lessons_elsewhere
+                .iter()
+                .map(|(project, scored)| json!({ "project": project, "title": scored.lesson.lesson.title }))
+                .collect::<Vec<Value>>(),
             "track_record": track_record,
         })
     }
@@ -260,6 +308,25 @@ pub fn select_episodes(
     scored.truncate(limit);
 
     scored
+}
+
+/// Keeps the best few of what other projects hold: those that clear
+/// `floor` and are not far behind the best one.
+pub fn select_elsewhere<T>(
+    mut found: Vec<(String, T)>,
+    score: impl Fn(&T) -> f32,
+    floor: f32,
+) -> Vec<(String, T)> {
+    found.sort_by(|left, right| score(&right.1).total_cmp(&score(&left.1)));
+
+    let Some(best) = found.first().map(|first| score(&first.1)) else {
+        return found;
+    };
+
+    found.retain(|(_, item)| score(item) >= floor && score(item) >= best * RELATIVE_FLOOR);
+    found.truncate(MAX_ELSEWHERE);
+
+    found
 }
 
 /// Keeps the best lessons that clear `floor`. A lesson seen in several
@@ -340,6 +407,8 @@ mod tests {
     fn the_briefing_lists_facts_then_episodes() {
         let recall = Recall {
             episodes: vec![scored("fix the calendar", 0.8)],
+            episodes_elsewhere: Vec::new(),
+            lessons_elsewhere: Vec::new(),
             facts: vec![Fact {
                 kind: FactKind::CheckCommand,
                 key: "npm test".to_string(),

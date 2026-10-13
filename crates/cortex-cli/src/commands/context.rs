@@ -18,7 +18,8 @@ use crate::features::{self, MemoryLocation};
 
 pub async fn execute(args: ContextArgs) -> Result<ExitCode> {
     let workspace = Workspace::new(&args.dir)
-        .with_context(|| format!("cannot open the project directory {}", args.dir.display()))?;
+        .with_context(|| format!("cannot open the project directory {}", args.dir.display()))?
+        .with_sandbox(args.model.sandbox());
 
     let memory_location = MemoryLocation {
         path: args

@@ -199,6 +199,7 @@ mod tests {
                 call_id: "call_0".to_string(),
                 output: output.to_string(),
                 is_error,
+                images: Vec::new(),
             }])
         };
 

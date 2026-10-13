@@ -326,6 +326,7 @@ pub(crate) mod tests {
                 call_id: "call".to_string(),
                 output: output.to_string(),
                 is_error: false,
+                images: Vec::new(),
             },
             duration_ms: 1,
         };

@@ -64,7 +64,8 @@ impl Blueprint {
         };
 
         let workspace = Workspace::new(place)
-            .with_context(|| format!("cannot open the folder {}", place.display()))?;
+            .with_context(|| format!("cannot open the folder {}", place.display()))?
+            .with_sandbox(model.sandbox());
 
         let provider: Arc<dyn ModelProvider> = match demo_project {
             Some(_) => Arc::new(DemoProvider::new(workspace.root())),
@@ -79,17 +80,18 @@ impl Blueprint {
 
         model.memory_db = Some(memory_file.clone());
 
-        let memory = MemoryReader::open(&memory_file, &scope, &model.embedding_url).await?;
+        let mut memory = MemoryReader::open(&memory_file, &scope, &model.embedding_url).await?;
+
+        if launch.settings.combine_memory && demo_project.is_none() {
+            let mut folders = launch.settings.projects.clone();
+
+            folders.extend(crate::settings::scratch_folder().ok());
+
+            memory = memory.combined_with(&folders, STATE_DIRECTORY);
+        }
 
         // With a verifier, the model is told which checks it answers to.
-        let mut notes = setup.prompt_notes.clone();
-
-        notes.extend(
-            setup
-                .verifier
-                .as_ref()
-                .and_then(|verifier| prompt::verification_note(&verifier.commands(&workspace))),
-        );
+        let notes = setup.notes(&workspace);
 
         let config = AgentConfig {
             system_prompt: prompt::system_prompt_with(&workspace, &notes),
@@ -190,6 +192,9 @@ fn prepare_demo(model: &mut ModelArgs) {
     model.provider = ProviderKind::Local;
 
     switch_on(model, Feature::Gate);
+
+    // The stand-in's made-up runs are nothing for the mind to learn from.
+    model.features.retain(|feature| *feature != Feature::Mind);
 
     if model.checks.is_empty() {
         model.checks = vec![demo::CHECK.to_string()];

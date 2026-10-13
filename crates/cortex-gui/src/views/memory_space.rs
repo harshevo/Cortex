@@ -301,7 +301,7 @@ fn region_names(ui: &Ui, view: &MemoryView, rect: Rect) {
             Align2::CENTER_CENTER,
             holds(region, graph.count(region)),
             theme::small(),
-            palette::TEXT_MUTED,
+            palette::text_muted(),
         );
     }
 }
@@ -352,9 +352,9 @@ fn node_names(ui: &Ui, view: &MemoryView, rect: Rect) {
         let emphasised = scene.selected() == Some(index) || scene.hovered() == Some(index);
 
         let color = if emphasised {
-            palette::TEXT
+            palette::text()
         } else {
-            palette::TEXT_SECONDARY
+            palette::text_secondary()
         };
 
         let galley = painter.layout_no_wrap(
@@ -387,7 +387,7 @@ fn heading(ui: &Ui, view: &MemoryView, rect: Rect) {
             graph.links.len()
         ),
         egui::FontId::proportional(14.0),
-        palette::TEXT,
+        palette::text(),
     );
 
     let placement = match &view.placement {
@@ -403,7 +403,7 @@ fn heading(ui: &Ui, view: &MemoryView, rect: Rect) {
         Align2::LEFT_TOP,
         placement,
         theme::small(),
-        palette::TEXT_MUTED,
+        palette::text_muted(),
     );
 
     let (neurons, synapses, runs) = view.intuition;
@@ -424,7 +424,7 @@ fn heading(ui: &Ui, view: &MemoryView, rect: Rect) {
         Align2::LEFT_TOP,
         intuition,
         theme::small(),
-        palette::TEXT_MUTED,
+        palette::text_muted(),
     );
 
     if let Some(problem) = &view.problem {
@@ -433,7 +433,7 @@ fn heading(ui: &Ui, view: &MemoryView, rect: Rect) {
             Align2::LEFT_TOP,
             format::one_line(problem, 90),
             theme::small(),
-            palette::BAD,
+            palette::bad(),
         );
     }
 
@@ -442,7 +442,7 @@ fn heading(ui: &Ui, view: &MemoryView, rect: Rect) {
         Align2::LEFT_BOTTOM,
         "Bright points are memories and sampled neurons. Faint dots, glow and green tracts are scenery.",
         theme::small(),
-        palette::TEXT_MUTED,
+        palette::text_muted(),
     );
 
     painter.text(
@@ -450,7 +450,7 @@ fn heading(ui: &Ui, view: &MemoryView, rect: Rect) {
         Align2::RIGHT_BOTTOM,
         "Drag to orbit · scroll to zoom · click a memory",
         theme::small(),
-        palette::TEXT_MUTED,
+        palette::text_muted(),
     );
 }
 
@@ -467,7 +467,7 @@ fn card(ui: &mut Ui, view: &mut MemoryView, index: usize, rect: Rect) -> Rect {
         .scope_builder(UiBuilder::new().max_rect(area), |ui| {
             egui::Frame::new()
                 .fill(CARD_FILL)
-                .stroke(Stroke::new(1.0, palette::BORDER))
+                .stroke(Stroke::new(1.0, palette::border()))
                 .corner_radius(CornerRadius::same(12))
                 .inner_margin(egui::Margin::same(14))
                 .show(ui, |ui| {
@@ -504,7 +504,7 @@ fn about(ui: &mut Ui, node: &Node) {
         ui.label(
             RichText::new(fact)
                 .font(theme::small())
-                .color(palette::TEXT_SECONDARY),
+                .color(palette::text_secondary()),
         );
     }
 }
@@ -525,7 +525,7 @@ fn connections(ui: &mut Ui, graph: &Graph, index: usize) -> Option<usize> {
     ui.label(
         RichText::new(title)
             .font(theme::small())
-            .color(palette::TEXT_MUTED),
+            .color(palette::text_muted()),
     );
 
     let mut clicked = None;
@@ -551,7 +551,7 @@ fn connection_row(ui: &mut Ui, node: &Node, tie: Tie) -> egui::Response {
     let painter = ui.painter_at(rect);
 
     if response.hovered() {
-        painter.rect_filled(rect, CornerRadius::same(6), palette::RAISED);
+        painter.rect_filled(rect, CornerRadius::same(6), palette::raised());
     }
 
     painter.circle_filled(
@@ -565,7 +565,7 @@ fn connection_row(ui: &mut Ui, node: &Node, tie: Tie) -> egui::Response {
         Align2::LEFT_CENTER,
         format::one_line(&node.title, 36),
         egui::FontId::proportional(12.5),
-        palette::TEXT,
+        palette::text(),
     );
 
     painter.text(
@@ -573,7 +573,7 @@ fn connection_row(ui: &mut Ui, node: &Node, tie: Tie) -> egui::Response {
         Align2::RIGHT_CENTER,
         tie.label(),
         theme::small(),
-        palette::TEXT_MUTED,
+        palette::text_muted(),
     );
 
     let why = match tie {

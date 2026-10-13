@@ -56,9 +56,22 @@ impl MemoryConfig {
 const EMBEDDING_FLOOR: f32 = 0.25;
 const LEXICAL_FLOOR: f32 = 0.08;
 
+/// Another project's memory. It is read, and never added to: only the
+/// vectors of its episodes are filled in, as that project would itself.
+struct Other {
+    store: Store,
+    scope: String,
+
+    /// The project's folder name, to say where a memory is from.
+    name: String,
+}
+
 pub struct MemorySystem {
     store: Store,
     config: MemoryConfig,
+
+    /// Other projects whose memory is recalled along with this one's.
+    others: Vec<Other>,
     embedder: Option<Arc<dyn Embedder>>,
     reranker: Option<Arc<dyn Reranker>>,
     working: Mutex<WorkingMemory>,
@@ -81,6 +94,7 @@ impl MemorySystem {
         Self {
             store,
             config,
+            others: Vec::new(),
             embedder: None,
             reranker: None,
             working: Mutex::new(WorkingMemory::default()),
@@ -104,6 +118,30 @@ impl MemorySystem {
         self.reranker = Some(reranker);
 
         self
+    }
+
+    /// Also recall what was learned in another project: the tasks there
+    /// most like the one at hand, and advice that is not about any one
+    /// file. Its facts stay its own, since they are about its code. The
+    /// project this memory is for adds nothing.
+    pub fn with_other(mut self, store: Store, scope: &str, name: &str) -> Self {
+        let known =
+            scope == self.config.scope || self.others.iter().any(|other| other.scope == scope);
+
+        if !known {
+            self.others.push(Other {
+                store,
+                scope: scope.to_string(),
+                name: name.to_string(),
+            });
+        }
+
+        self
+    }
+
+    /// How many other projects are recalled from.
+    pub fn others(&self) -> usize {
+        self.others.len()
     }
 
     pub fn store(&self) -> &Store {
@@ -229,16 +267,97 @@ impl MemorySystem {
             self.keep_shown(query_vector, &episodes, &vector_by_id);
         }
 
+        let (episodes_elsewhere, lessons_elsewhere) =
+            self.recall_elsewhere(query, query_vector.as_deref()).await;
+
         let recalled = Recall {
             episodes,
             facts: self.current_facts(exists)?,
             lessons,
+            episodes_elsewhere,
+            lessons_elsewhere,
             track_record,
             method,
             reranked,
         };
 
         Ok(recalled)
+    }
+
+    /// What the other projects hold that is close to `query`. A project
+    /// whose memory cannot be read is passed over: it is extra, and must
+    /// not cost the task its own memory.
+    async fn recall_elsewhere(
+        &self,
+        query: &str,
+        query_vector: Option<&[f32]>,
+    ) -> (Vec<(String, ScoredEpisode)>, Vec<(String, ScoredLesson)>) {
+        let floor = if query_vector.is_some() {
+            EMBEDDING_FLOOR
+        } else {
+            LEXICAL_FLOOR
+        };
+
+        let mut episodes = Vec::new();
+        let mut lessons = Vec::new();
+
+        for other in &self.others {
+            let mut stored = other.store.episodes(&other.scope).unwrap_or_default();
+
+            if self.config.skip_identical {
+                stored.retain(|stored| stored.episode.instruction.trim() != query.trim());
+            }
+
+            if query_vector.is_some() {
+                self.embed_episodes(&other.store, &mut stored).await;
+            }
+
+            for stored in stored {
+                let score = match (query_vector, &stored.embedding) {
+                    (Some(query_vector), Some(vector)) => similarity::cosine(query_vector, vector),
+                    (Some(_), None) => continue,
+                    (None, _) => similarity::lexical(query, &stored.episode.search_text()),
+                };
+
+                episodes.push((
+                    other.name.clone(),
+                    ScoredEpisode {
+                        episode: stored.episode,
+                        score,
+                    },
+                ));
+            }
+
+            // Advice about a file is advice about that project's file.
+            let rows: Vec<LessonRow> = other
+                .store
+                .lessons(&other.scope)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|row| row.lesson.lesson.paths.is_empty())
+                .collect();
+
+            for row in rows {
+                let score = match (query_vector, &row.embedding) {
+                    (Some(query_vector), Some(vector)) => similarity::cosine(query_vector, vector),
+                    (Some(_), None) => continue,
+                    (None, _) => similarity::lexical(query, &row.lesson.search_text()),
+                };
+
+                lessons.push((
+                    other.name.clone(),
+                    ScoredLesson {
+                        lesson: row.lesson,
+                        score,
+                    },
+                ));
+            }
+        }
+
+        (
+            recall::select_elsewhere(episodes, |scored| scored.score, floor),
+            recall::select_elsewhere(lessons, |scored| scored.score, floor),
+        )
     }
 
     /// Remembers the run's first recall. Later recalls in the same run
@@ -454,6 +573,16 @@ impl MemorySystem {
     async fn embed_missing(&self, query: &str, stored: &mut [StoredEpisode]) -> Option<Vec<f32>> {
         let embedder = self.embedder.as_ref()?;
 
+        self.embed_episodes(&self.store, stored).await?;
+
+        embedder.embed_query(query).await
+    }
+
+    /// Gives every episode of `store` that has no vector yet one, and
+    /// saves it there. `None` when embeddings cannot be used.
+    async fn embed_episodes(&self, store: &Store, stored: &mut [StoredEpisode]) -> Option<()> {
+        let embedder = self.embedder.as_ref()?;
+
         let missing: Vec<usize> = stored
             .iter()
             .enumerate()
@@ -471,15 +600,13 @@ impl MemorySystem {
 
             for (&position, vector) in missing.iter().zip(vectors) {
                 // A vector that cannot be saved is only recomputed later.
-                let _ = self
-                    .store
-                    .set_episode_embedding(stored[position].episode.id, &vector);
+                let _ = store.set_episode_embedding(stored[position].episode.id, &vector);
 
                 stored[position].embedding = Some(vector);
             }
         }
 
-        embedder.embed_query(query).await
+        Some(())
     }
 
     /// Lets the learned reranker replace the similarity scores. Returns
@@ -649,6 +776,7 @@ mod tests {
                 call_id: "math".into(),
                 output: "7*24 = 168".into(),
                 is_error: false,
+                images: Vec::new(),
             },
             duration_ms: 0,
         });
@@ -763,6 +891,7 @@ mod tests {
                     call_id: id,
                     output: output.to_string(),
                     is_error: false,
+                    images: Vec::new(),
                 },
                 duration_ms: 1,
             });
@@ -911,6 +1040,73 @@ mod tests {
 
         assert_eq!(briefing.detail["method"], "lexical");
         assert_eq!(memory.store().recall_count("repo").unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_task_in_another_project_is_recalled_without_its_files_or_facts() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("memory.db");
+
+        {
+            let shop = MemorySystem::open(&file, MemoryConfig::for_scope("/work/shop")).unwrap();
+
+            play_run(
+                &shop,
+                "the calendar month view drops its last week",
+                "calendar.ts",
+                Some(true),
+            );
+            play_run(
+                &shop,
+                "commission rounding drifts by a cent",
+                "money.ts",
+                Some(true),
+            );
+        }
+
+        let (_dir, workspace) = workspace_with(&["calendar.ts"]);
+
+        // On its own this project remembers nothing.
+        assert!(system().brief("anything", &workspace).await.is_none());
+
+        let memory = system()
+            .with_other(Store::open(&file).unwrap(), "/work/shop", "shop")
+            // The project itself, listed among the others, adds nothing.
+            .with_other(Store::open(&file).unwrap(), "repo", "repo");
+
+        assert_eq!(memory.others(), 1);
+
+        let briefing = memory
+            .brief(
+                "calendar shows evening trades on the wrong day of the month",
+                &workspace,
+            )
+            .await
+            .unwrap();
+
+        assert!(briefing.text.contains("From your other projects"));
+        assert!(
+            briefing
+                .text
+                .contains("In `shop`: \"the calendar month view")
+        );
+        assert!(!briefing.text.contains("commission rounding"));
+
+        // A file of the same name here is not the one that was changed
+        // there, and that project's check is not this project's.
+        assert!(!briefing.text.contains("Changed:"));
+        assert!(!briefing.text.contains("is the project's check"));
+
+        assert_eq!(briefing.detail["elsewhere"][0]["project"], "shop");
+
+        // Nothing was written to the other project's memory.
+        assert_eq!(
+            Store::open(&file)
+                .unwrap()
+                .recall_count("/work/shop")
+                .unwrap(),
+            0
+        );
     }
 
     #[tokio::test]

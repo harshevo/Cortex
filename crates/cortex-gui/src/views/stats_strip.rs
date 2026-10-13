@@ -1,6 +1,7 @@
 //! The quiet row under the composer: on the left one line of numbers
-//! (speed, cache, step) that opens into the detail; on the right the
-//! model, how hard it thinks, and whether it asks before changing things.
+//! (cache, step) that opens into the detail; in the middle the speed; on
+//! the right the model, how hard it thinks, and whether it asks before
+//! changing things.
 
 use eframe::egui::containers::menu::{MenuButton, MenuConfig};
 use eframe::egui::{
@@ -9,7 +10,7 @@ use eframe::egui::{
 
 use crate::format;
 use crate::session::{Cell, Stats};
-use crate::settings::{Effort, Settings};
+use crate::settings::{Effort, Provider, Settings};
 use crate::theme::{self, palette};
 
 const ROW_HEIGHT: f32 = 14.0;
@@ -30,16 +31,21 @@ const DETAIL_WIDTH: f32 = 270.0;
 /// Longest model name shown before it is cut.
 const MAX_MODEL_CHARS: usize = 26;
 
+const MENU_ROW_HEIGHT: f32 = 26.0;
+const MODEL_MENU_WIDTH: f32 = 230.0;
+const EFFORT_MENU_WIDTH: f32 = 170.0;
+
+/// Clear space kept on each side of the speed in the middle of the row.
+const SPEED_GAP: f32 = 12.0;
+
 /// A choice made in the row.
 pub enum Change {
-    Model(String),
+    /// A model, and the provider it belongs to.
+    Model(Provider, String),
     Effort(Effort),
 
     /// Whether to edit and run without asking.
     ApproveEverything(bool),
-
-    /// Whether the model's reasoning is shown.
-    ShowThinking(bool),
 }
 
 /// What the row shows about the session.
@@ -65,36 +71,79 @@ pub fn show(
 ) -> Option<Change> {
     let mut change = None;
 
-    ui.horizontal(|ui| {
+    let row = ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 5.0;
 
         summary(ui, reading);
 
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.spacing_mut().item_spacing.x = 2.0;
+        let left_end = ui.cursor().left();
 
-            if let Some(model) = reading.stand_in {
-                quiet(ui, model);
+        let right_start = ui
+            .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
 
-                change = thinking_toggle(ui, settings);
+                if let Some(model) = reading.stand_in {
+                    quiet(ui, model);
+                } else {
+                    ui.add_enabled_ui(can_change, |ui| {
+                        change = effort_selector(ui, settings)
+                            .or_else(|| model_selector(ui, settings))
+                            .or_else(|| approval_toggle(ui, settings));
+                    });
+                }
 
-                return;
-            }
+                ui.min_rect().left()
+            })
+            .inner;
 
-            ui.add_enabled_ui(can_change, |ui| {
-                change = effort_selector(ui, settings)
-                    .or_else(|| model_selector(ui, settings))
-                    .or_else(|| approval_toggle(ui, settings));
-            });
-
-            // What is shown can be changed at any time, mid-run included.
-            if let Some(shown) = thinking_toggle(ui, settings) {
-                change = Some(shown);
-            }
-        });
+        (left_end, right_start)
     });
 
+    let (left_end, right_start) = row.inner;
+
+    speed_in_the_middle(ui, reading, row.response.rect, left_end, right_start);
+
     change
+}
+
+/// The speed, centred in the row. Left out when the two ends leave no
+/// room for it; the detail on the left still has it.
+fn speed_in_the_middle(
+    ui: &Ui,
+    reading: &Reading<'_>,
+    row: egui::Rect,
+    left_end: f32,
+    right_start: f32,
+) {
+    let text = match (reading.live_speed, reading.stats.speed()) {
+        (Some(speed), _) => format!("~{speed:.0} tok/s"),
+        (None, Some(speed)) => format!("{speed:.0} tok/s"),
+        (None, None) => return,
+    };
+
+    let galley = ui.painter().layout_no_wrap(
+        text,
+        theme::small(),
+        if reading.live_speed.is_some() {
+            palette::text_secondary()
+        } else {
+            palette::text_muted()
+        },
+    );
+
+    let half = galley.size().x / 2.0;
+    let lowest = left_end + SPEED_GAP + half;
+    let highest = right_start - SPEED_GAP - half;
+
+    if lowest > highest {
+        return;
+    }
+
+    let centre = row.center().x.clamp(lowest, highest);
+    let position = Pos2::new(centre - half, row.center().y - galley.size().y / 2.0);
+
+    ui.painter()
+        .galley(position, galley, palette::text_secondary());
 }
 
 /// The numbers in one line. Clicking it opens the detail.
@@ -119,16 +168,8 @@ fn summary(ui: &mut Ui, reading: &Reading<'_>) {
 
     let mut parts = Vec::new();
 
-    if roomy {
-        match (reading.live_speed, stats.speed()) {
-            (Some(speed), _) => parts.push(format!("~{speed:.0} tok/s")),
-            (None, Some(speed)) => parts.push(format!("{speed:.0} tok/s")),
-            (None, None) => {}
-        }
-
-        if let Some(ratio) = stats.cache_hit_ratio() {
-            parts.push(format!("{} cached", format::percent(ratio)));
-        }
+    if roomy && let Some(ratio) = stats.cache_hit_ratio() {
+        parts.push(format!("{} cached", format::percent(ratio)));
     }
 
     parts.push(format!("step {}/{}", stats.step, reading.max_steps));
@@ -160,7 +201,7 @@ fn summary(ui: &mut Ui, reading: &Reading<'_>) {
                 ui.label(
                     RichText::new(format!("Spared: {savings}."))
                         .font(theme::small())
-                        .color(palette::TEXT_MUTED),
+                        .color(palette::text_muted()),
                 );
             }
         });
@@ -178,7 +219,7 @@ fn detail(ui: &mut Ui, name: &str, content: impl FnOnce(&mut Ui)) {
             egui::Align2::LEFT_CENTER,
             name,
             theme::small(),
-            palette::TEXT_MUTED,
+            palette::text_muted(),
         );
 
         content(ui);
@@ -226,7 +267,7 @@ fn speed(ui: &mut Ui, reading: &Reading<'_>) {
         })
         .collect();
 
-    ui.painter().line(points, Stroke::new(1.2, palette::GOOD));
+    ui.painter().line(points, Stroke::new(1.2, palette::good()));
 }
 
 fn cache(ui: &mut Ui, stats: &Stats) {
@@ -236,7 +277,7 @@ fn cache(ui: &mut Ui, stats: &Stats) {
     let bar = egui::Rect::from_center_size(rect.center(), vec2(rect.width(), 4.0));
     let radius = CornerRadius::same(2);
 
-    ui.painter().rect_filled(bar, radius, palette::RAISED);
+    ui.painter().rect_filled(bar, radius, palette::raised());
 
     let ratio = stats.cache_hit_ratio();
 
@@ -245,7 +286,7 @@ fn cache(ui: &mut Ui, stats: &Stats) {
 
         hit.set_width(bar.width() * ratio);
 
-        ui.painter().rect_filled(hit, radius, palette::GOOD);
+        ui.painter().rect_filled(hit, radius, palette::good());
     }
 
     let text = match ratio {
@@ -306,12 +347,12 @@ fn agent_loop(ui: &mut Ui, reading: &Reading<'_>) {
 
 fn cell_color(cell: Cell, pulse: f32) -> Color32 {
     match cell {
-        Cell::Thinking => palette::MODEL.gamma_multiply(pulse),
-        Cell::Model => palette::MODEL,
-        Cell::Observation => palette::GOOD,
-        Cell::FailedObservation => palette::BAD,
-        Cell::Check { passed: true } => palette::TEXT,
-        Cell::Check { passed: false } => palette::WARNING,
+        Cell::Thinking => palette::model().gamma_multiply(pulse),
+        Cell::Model => palette::model(),
+        Cell::Observation => palette::good(),
+        Cell::FailedObservation => palette::bad(),
+        Cell::Check { passed: true } => palette::text(),
+        Cell::Check { passed: false } => palette::warning(),
     }
 }
 
@@ -320,7 +361,7 @@ fn selector<'a>(label: &str) -> MenuButton<'a> {
     let button = egui::Button::new(
         RichText::new(label.to_string())
             .font(theme::small())
-            .color(palette::TEXT_SECONDARY),
+            .color(palette::text_secondary()),
     )
     .fill(Color32::TRANSPARENT)
     .stroke(Stroke::NONE);
@@ -328,6 +369,95 @@ fn selector<'a>(label: &str) -> MenuButton<'a> {
     MenuButton::from_button(button)
 }
 
+/// A button that looks like one and opens a menu: the model and the
+/// effort. A small chevron at its right-hand end says so.
+fn dropdown<R>(
+    ui: &mut Ui,
+    label: &str,
+    config: MenuConfig,
+    content: impl FnOnce(&mut Ui) -> R,
+) -> Option<R> {
+    // The spaces keep room for the chevron.
+    let button = egui::Button::new(
+        RichText::new(format!("{label}\u{a0}\u{a0}\u{a0}\u{a0}"))
+            .font(theme::small())
+            .color(palette::text()),
+    )
+    .fill(palette::surface())
+    .stroke(Stroke::new(1.0, palette::border()))
+    .corner_radius(CornerRadius::same(6));
+
+    let (response, inner) = MenuButton::from_button(button)
+        .config(config)
+        .ui(ui, content);
+
+    let centre = Pos2::new(response.rect.right() - 10.0, response.rect.center().y + 0.5);
+    let color = if ui.is_enabled() {
+        palette::text_secondary()
+    } else {
+        palette::text_muted()
+    };
+
+    ui.painter().line(
+        vec![
+            centre + vec2(-3.0, -1.5),
+            centre + vec2(0.0, 1.5),
+            centre + vec2(3.0, -1.5),
+        ],
+        Stroke::new(1.2, color),
+    );
+
+    inner.map(|inner| inner.inner)
+}
+
+/// One choice in a menu. Returns its rectangle, for whatever the caller
+/// draws at its right-hand end.
+fn menu_row(
+    ui: &mut Ui,
+    label: &str,
+    font: egui::FontId,
+    selected: bool,
+) -> (egui::Rect, egui::Response) {
+    let (rect, response) =
+        ui.allocate_exact_size(vec2(ui.available_width(), MENU_ROW_HEIGHT), Sense::click());
+
+    if selected || response.hovered() {
+        let fill = if selected {
+            palette::raised()
+        } else {
+            palette::surface()
+        };
+
+        ui.painter().rect_filled(rect, CornerRadius::same(5), fill);
+    }
+
+    ui.painter().text(
+        rect.left_center() + vec2(8.0, 0.0),
+        egui::Align2::LEFT_CENTER,
+        label,
+        font,
+        if selected {
+            palette::text()
+        } else {
+            palette::text_secondary()
+        },
+    );
+
+    (rect, response)
+}
+
+fn menu_title(ui: &mut Ui, text: &str) {
+    ui.horizontal(|ui| {
+        ui.add_space(8.0);
+        ui.label(
+            RichText::new(text)
+                .font(theme::strong(11.0))
+                .color(palette::text_muted()),
+        );
+    });
+}
+
+/// Every provider's models in one menu, under the provider's name.
 fn model_selector(ui: &mut Ui, settings: &Settings) -> Option<Change> {
     let current = settings.current();
 
@@ -339,31 +469,71 @@ fn model_selector(ui: &mut Ui, settings: &Settings) -> Option<Change> {
 
     let mut change = None;
 
-    selector(&label).ui(ui, |ui| {
-        let choices = current.choices();
+    dropdown(ui, &label, MenuConfig::new(), |ui| {
+        ui.set_width(MODEL_MENU_WIDTH);
+        ui.spacing_mut().item_spacing.y = 1.0;
 
-        if choices.is_empty() {
-            ui.label(RichText::new("Add models in Settings.").color(palette::TEXT_MUTED));
+        let mut any = false;
+
+        for provider in Provider::ALL {
+            let choices = settings.of(provider).choices();
+
+            if choices.is_empty() {
+                continue;
+            }
+
+            if any {
+                ui.add_space(6.0);
+            }
+
+            any = true;
+
+            menu_title(ui, provider.label());
+
+            for model in choices {
+                let selected = provider == settings.provider && model == current.model;
+
+                let (rect, response) = menu_row(
+                    ui,
+                    &format::one_line(&model, MAX_MODEL_CHARS),
+                    theme::mono(),
+                    selected,
+                );
+
+                if selected {
+                    let centre = rect.right_center() - vec2(14.0, 0.0);
+
+                    ui.painter().line(
+                        vec![
+                            centre + vec2(-4.0, 0.0),
+                            centre + vec2(-1.0, 3.0),
+                            centre + vec2(4.0, -3.0),
+                        ],
+                        Stroke::new(1.4, palette::accent()),
+                    );
+                }
+
+                if response.clicked() && !selected {
+                    change = Some(Change::Model(provider, model));
+                }
+            }
         }
 
-        for model in choices {
-            let selected = model == current.model;
-
-            if ui
-                .selectable_label(selected, RichText::new(&model).font(theme::mono()))
-                .clicked()
-                && !selected
-            {
-                change = Some(Change::Model(model));
-            }
+        if !any {
+            ui.label(RichText::new("Add models in Settings.").color(palette::text_muted()));
+        } else if Provider::ALL.len() > 1 {
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.add_space(8.0);
+                quiet(ui, "Another provider starts a new chat.");
+            });
         }
     });
 
     change
 }
 
-/// A slider in a popup. The choice is made when the slider is let go, so
-/// dragging across it does not rebuild the agent at every stop.
+/// The levels as a short list, each with as many bars lit as it is deep.
 fn effort_selector(ui: &mut Ui, settings: &Settings) -> Option<Change> {
     if !settings.provider.takes_effort() {
         return None;
@@ -371,47 +541,59 @@ fn effort_selector(ui: &mut Ui, settings: &Settings) -> Option<Change> {
 
     let mut change = None;
 
-    let stay_open = MenuConfig::new().close_behavior(PopupCloseBehavior::CloseOnClickOutside);
+    dropdown(ui, settings.effort.label(), MenuConfig::new(), |ui| {
+        ui.set_width(EFFORT_MENU_WIDTH);
+        ui.spacing_mut().item_spacing.y = 1.0;
 
-    selector(settings.effort.label())
-        .config(stay_open)
-        .ui(ui, |ui| {
-            ui.set_width(190.0);
+        menu_title(ui, "Reasoning effort");
 
-            // The slider's position between frames, while it is being dragged.
-            let id = ui.id().with("effort");
+        for effort in Effort::ALL {
+            let selected = effort == settings.effort;
 
-            let mut position = ui
-                .data(|data| data.get_temp::<usize>(id))
-                .unwrap_or(settings.effort.position());
-
-            ui.label(RichText::new("How hard the model thinks").font(theme::small()));
-
-            let slider = ui.add(
-                egui::Slider::new(&mut position, 0..=Effort::ALL.len() - 1)
-                    .show_value(false)
-                    .step_by(1.0),
+            let (rect, response) = menu_row(
+                ui,
+                effort.label(),
+                egui::FontId::proportional(12.5),
+                selected,
             );
 
-            ui.label(RichText::new(Effort::ALL[position].label()).color(palette::TEXT));
+            let lit = effort.position() + 1;
+            let total = Effort::ALL.len();
+            let right = rect.right() - 10.0;
 
-            ui.data_mut(|data| data.insert_temp(id, position));
+            for bar in 0..total {
+                let height = 4.0 + bar as f32 * 2.0;
+                let left = right - (total - bar) as f32 * 5.0;
 
-            let settled = slider.drag_stopped() || (slider.changed() && !slider.dragged());
+                let shape = egui::Rect::from_min_max(
+                    Pos2::new(left, rect.center().y + 6.0 - height),
+                    Pos2::new(left + 3.0, rect.center().y + 6.0),
+                );
 
-            if settled && Effort::ALL[position] != settings.effort {
-                change = Some(Change::Effort(Effort::ALL[position]));
+                let color = match (bar < lit, selected) {
+                    (true, true) => palette::accent(),
+                    (true, false) => palette::text_secondary(),
+                    (false, _) => palette::border(),
+                };
+
+                ui.painter()
+                    .rect_filled(shape, CornerRadius::same(1), color);
             }
-        });
+
+            if response.clicked() && !selected {
+                change = Some(Change::Effort(effort));
+            }
+        }
+    });
 
     change
 }
 
 fn approval_toggle(ui: &mut Ui, settings: &Settings) -> Option<Change> {
     let (label, color) = if settings.approve_everything {
-        ("Bypass permissions", palette::WARNING)
+        ("Bypass permissions", palette::warning())
     } else {
-        ("Ask before changes", palette::TEXT_SECONDARY)
+        ("Ask before changes", palette::text_secondary())
     };
 
     let button = egui::Button::new(RichText::new(label).font(theme::small()).color(color))
@@ -427,32 +609,11 @@ fn approval_toggle(ui: &mut Ui, settings: &Settings) -> Option<Change> {
         .then_some(Change::ApproveEverything(!settings.approve_everything))
 }
 
-fn thinking_toggle(ui: &mut Ui, settings: &Settings) -> Option<Change> {
-    let (label, color) = if settings.show_thinking {
-        ("Thinking shown", palette::TEXT_SECONDARY)
-    } else {
-        ("Thinking hidden", palette::TEXT_MUTED)
-    };
-
-    let button = egui::Button::new(RichText::new(label).font(theme::small()).color(color))
-        .fill(Color32::TRANSPARENT)
-        .stroke(Stroke::NONE);
-
-    let response = ui.add(button).on_hover_text(
-        "Whether the model's reasoning is shown as it arrives, for models and providers \
-         that send it. Click to switch.",
-    );
-
-    response
-        .clicked()
-        .then_some(Change::ShowThinking(!settings.show_thinking))
-}
-
 fn value(ui: &mut Ui, text: &str) -> egui::Response {
     ui.label(
         RichText::new(text)
             .font(theme::small())
-            .color(palette::TEXT_SECONDARY),
+            .color(palette::text_secondary()),
     )
 }
 
@@ -460,6 +621,6 @@ fn quiet(ui: &mut Ui, text: &str) -> egui::Response {
     ui.label(
         RichText::new(text)
             .font(theme::small())
-            .color(palette::TEXT_MUTED),
+            .color(palette::text_muted()),
     )
 }

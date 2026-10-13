@@ -1,7 +1,8 @@
-use eframe::egui::{self, Layout, Sense, Stroke, UiBuilder};
+use eframe::egui::{self, Layout, Sense, UiBuilder};
 
 use crate::app::CortexApp;
 use crate::theme::palette;
+use crate::views::top_bar::{Step, Steps};
 
 #[derive(Clone, Copy, PartialEq)]
 enum Split {
@@ -17,6 +18,11 @@ pub struct Workspace {
     next_id: u64,
     split: Split,
     ratio: f32,
+
+    /// The chats that have been on screen, oldest first, and which of
+    /// them is on screen now: what the bar's arrows step through.
+    visited: Vec<u64>,
+    position: usize,
 }
 
 impl Workspace {
@@ -28,6 +34,8 @@ impl Workspace {
             next_id: 2,
             split: Split::Off,
             ratio: 0.5,
+            visited: vec![1],
+            position: 0,
         };
         if split {
             workspace.choose_split(Split::Columns);
@@ -80,7 +88,48 @@ impl Workspace {
         }
     }
 
+    /// Puts the chat `id` on screen and remembers it as visited. Whatever
+    /// could have been stepped forward to is forgotten, as in a browser.
     fn activate(&mut self, id: u64) {
+        if self.visited.get(self.position) != Some(&id) {
+            self.visited.truncate(self.position + 1);
+            self.visited.push(id);
+            self.position = self.visited.len() - 1;
+        }
+
+        self.show(id);
+    }
+
+    /// Where a step from the chat on screen leads: the nearest visited
+    /// chat in that direction that is still open and is a different one.
+    fn step_target(&self, step: Step) -> Option<usize> {
+        let open = |position: &usize| {
+            let id = self.visited[*position];
+
+            id != self.active && self.chats.iter().any(|(key, _)| *key == id)
+        };
+
+        match step {
+            Step::Back => (0..self.position).rev().find(open),
+            Step::Forward => (self.position + 1..self.visited.len()).find(open),
+        }
+    }
+
+    fn take_step(&mut self, step: Step) {
+        if let Some(position) = self.step_target(step) {
+            let id = self.visited[position];
+
+            self.position = position;
+            self.show(id);
+
+            // A step leads to the session itself, even if its settings
+            // or memory space were open when it was left.
+            let index = self.index(id);
+            self.chats[index].1.show_chat();
+        }
+    }
+
+    fn show(&mut self, id: u64) {
         if self.secondary == Some(id) {
             self.secondary = Some(self.active);
         }
@@ -112,8 +161,10 @@ impl eframe::App for Workspace {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let mut history_changed = false;
-        for (id, app) in &mut self.chats {
-            history_changed |= ui.push_id(*id, |ui| app.tick(ui)).inner;
+        // Called on the window's own `ui`: a scope for each chat would take
+        // up a line's spacing above the top bar.
+        for (_, app) in &mut self.chats {
+            history_changed |= app.tick(ui);
         }
         let active = self.index(self.active);
         if history_changed {
@@ -132,45 +183,57 @@ impl eframe::App for Workspace {
             .map(|(id, app)| (*id, app.label(), app.running(), app.agent_id().to_string()))
             .collect();
         let active_id = self.active;
-        self.chats[active].1.top_bar_with_menu(ui, |ui| {
-            ui.menu_button("...", |ui| {
-                if ui.button("New chat    ⌘N").clicked() {
-                    added = true;
+        let steps = Steps {
+            back: self.step_target(Step::Back).is_some(),
+            forward: self.step_target(Step::Forward).is_some(),
+        };
+        let step = self.chats[active].1.top_bar_with_menu(ui, steps, |ui| {
+            if ui.button("New chat    ⌘N").clicked() {
+                added = true;
+                ui.close();
+            }
+            if chats.len() > 1 {
+                ui.separator();
+                for (id, label, running, agent_id) in &chats {
+                    let label = format!("{}{}", if *running { "● " } else { "" }, label);
+                    if ui
+                        .selectable_label(*id == active_id, label)
+                        .on_hover_text(agent_id)
+                        .clicked()
+                    {
+                        selected = Some(*id);
+                        ui.close();
+                    }
+                }
+                if ui.button("Close current chat").clicked() {
+                    closed = Some(active_id);
                     ui.close();
                 }
-                if chats.len() > 1 {
-                    ui.separator();
-                    for (id, label, running, agent_id) in &chats {
-                        let label = format!("{}{}", if *running { "● " } else { "" }, label);
-                        if ui
-                            .selectable_label(*id == active_id, label)
-                            .on_hover_text(agent_id)
-                            .clicked()
-                        {
-                            selected = Some(*id);
-                            ui.close();
-                        }
-                    }
-                    if ui.button("Close current chat").clicked() {
-                        closed = Some(active_id);
-                        ui.close();
-                    }
+            }
+            ui.separator();
+            for (value, label) in [
+                (Split::Off, "Single pane"),
+                (Split::Columns, "Side by side"),
+                (Split::Rows, "Top and bottom"),
+            ] {
+                if ui.selectable_label(split == value, label).clicked() {
+                    split = value;
+                    ui.close();
                 }
-                ui.separator();
-                for (value, label) in [
-                    (Split::Off, "Single pane"),
-                    (Split::Columns, "Side by side"),
-                    (Split::Rows, "Top and bottom"),
-                ] {
-                    if ui.selectable_label(split == value, label).clicked() {
-                        split = value;
-                        ui.close();
-                    }
-                }
-            })
-            .response
-            .on_hover_text("Chat and layout options");
+            }
         });
+        let keyed = ui.input_mut(|input| {
+            if input.consume_key(egui::Modifiers::COMMAND, egui::Key::OpenBracket) {
+                Some(Step::Back)
+            } else if input.consume_key(egui::Modifiers::COMMAND, egui::Key::CloseBracket) {
+                Some(Step::Forward)
+            } else {
+                None
+            }
+        });
+        if let Some(step) = step.or(keyed) {
+            self.take_step(step);
+        }
         if let Some(id) = selected {
             self.activate(id);
         }
@@ -194,6 +257,7 @@ impl eframe::App for Workspace {
                 .collect();
             self.chats[active].1.sidebar_with_activity(ui, &running);
         }
+        self.chats[active].1.files_panel(ui);
         if let Some((folder, log)) = self.chats[active].1.take_requested_session() {
             let existing = log.as_ref().and_then(|path| {
                 self.chats
@@ -281,9 +345,9 @@ impl eframe::App for Workspace {
                 divider,
                 0.0,
                 if drag.hovered() || drag.dragged() {
-                    palette::ACCENT
+                    palette::accent()
                 } else {
-                    palette::BORDER
+                    palette::border()
                 },
             );
             self.pane(ui, self.active, first);
@@ -292,14 +356,10 @@ impl eframe::App for Workspace {
                 self.activate(secondary);
             }
         }
-        ui.painter().line_segment(
-            [rect.left_top(), rect.right_top()],
-            Stroke::new(1.0, palette::BORDER),
-        );
     }
 
     fn clear_color(&self, _: &egui::Visuals) -> [f32; 4] {
-        palette::BACKGROUND.to_normalized_gamma_f32()
+        palette::background().to_normalized_gamma_f32()
     }
 }
 
@@ -307,6 +367,75 @@ impl eframe::App for Workspace {
 mod tests {
     use super::*;
     use crate::{args::RehearsalArgs, engine::Engine, rehearsal::Rehearsal, settings::Settings};
+
+    fn workspace() -> (tokio::runtime::Runtime, Workspace) {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let app = CortexApp::new(
+            Engine::start(runtime.handle(), egui::Context::default()),
+            Settings::default(),
+            None,
+            true,
+            Rehearsal::new(RehearsalArgs::default()),
+        );
+
+        (runtime, Workspace::new(app, false))
+    }
+
+    #[test]
+    fn the_arrows_step_through_sessions_in_the_order_they_were_opened() {
+        let (_runtime, mut workspace) = workspace();
+
+        assert!(workspace.step_target(Step::Back).is_none());
+
+        let second = workspace.add();
+        workspace.activate(second);
+        let third = workspace.add();
+        workspace.activate(third);
+
+        workspace.take_step(Step::Back);
+        assert_eq!(workspace.active, second);
+
+        workspace.take_step(Step::Back);
+        assert_eq!(workspace.active, 1);
+        assert!(workspace.step_target(Step::Back).is_none());
+
+        workspace.take_step(Step::Forward);
+        workspace.take_step(Step::Forward);
+        assert_eq!(workspace.active, third);
+        assert!(workspace.step_target(Step::Forward).is_none());
+    }
+
+    #[test]
+    fn opening_a_session_after_stepping_back_forgets_what_was_ahead() {
+        let (_runtime, mut workspace) = workspace();
+
+        let second = workspace.add();
+        workspace.activate(second);
+        workspace.take_step(Step::Back);
+
+        let third = workspace.add();
+        workspace.activate(third);
+
+        assert!(workspace.step_target(Step::Forward).is_none());
+
+        workspace.take_step(Step::Back);
+        assert_eq!(workspace.active, 1);
+    }
+
+    #[test]
+    fn a_step_passes_over_a_session_that_was_closed() {
+        let (_runtime, mut workspace) = workspace();
+
+        let second = workspace.add();
+        workspace.activate(second);
+        let third = workspace.add();
+        workspace.activate(third);
+
+        workspace.close(second);
+        workspace.take_step(Step::Back);
+
+        assert_eq!(workspace.active, 1);
+    }
 
     #[test]
     fn splits_switch_and_close_without_losing_other_chats() {

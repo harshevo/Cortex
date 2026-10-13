@@ -12,7 +12,7 @@ use crate::changes::{self, Originals};
 use crate::context::{self, MaskConfig, PruneConfig};
 use crate::error::{AgentError, ProviderError};
 use crate::inbox::{self, Inbox};
-use crate::message::{Block, Message, Role, ToolCall, ToolResult};
+use crate::message::{Block, Image, Message, Role, ToolCall, ToolResult};
 use crate::provider::{ModelProvider, ModelRequest, ModelResponse, StopReason, StreamObserver};
 use crate::reflect;
 use crate::repeat;
@@ -216,11 +216,27 @@ impl Agent {
         conversation: &mut Vec<Message>,
         instruction: &str,
     ) -> Result<RunReport, AgentError> {
+        self.run_with_images(conversation, instruction, &[]).await
+    }
+
+    /// As [`Self::run`], with pictures for the model to look at.
+    pub async fn run_with_images(
+        &self,
+        conversation: &mut Vec<Message>,
+        instruction: &str,
+        images: &[Image],
+    ) -> Result<RunReport, AgentError> {
         self.emit(Event::RunStarted {
             instruction: instruction.to_string(),
             provider: self.provider.name().to_string(),
             model: self.provider.model().to_string(),
         });
+
+        if !images.is_empty() {
+            self.emit(Event::ImagesAttached {
+                images: images.to_vec(),
+            });
+        }
 
         let briefings = self.gather_context(instruction).await;
         for adviser in &self.advisers {
@@ -236,14 +252,14 @@ impl Agent {
 
         if let Some(rollouts) = rollouts {
             return self
-                .run_rollouts(rollouts, conversation, instruction, briefings)
+                .run_rollouts(rollouts, conversation, instruction, images, briefings)
                 .await;
         }
 
-        conversation.push(Message::user_text(briefing::compose(
-            &briefings,
-            instruction,
-        )));
+        conversation.push(Message::user_with_images(
+            briefing::compose(&briefings, instruction),
+            images,
+        ));
 
         self.work(conversation, Progress::starting(instruction))
             .await
@@ -834,6 +850,7 @@ fn crashed(call: &ToolCall) -> ToolResult {
         call_id: call.id.clone(),
         output: format!("the `{}` tool stopped unexpectedly", call.name),
         is_error: true,
+        images: Vec::new(),
     }
 }
 
@@ -887,6 +904,7 @@ pub fn close_unanswered_calls(conversation: &mut Vec<Message>) {
             call_id: call.id,
             output: "This call was not run because the run stopped first.".to_string(),
             is_error: true,
+            images: Vec::new(),
         })
         .collect();
 

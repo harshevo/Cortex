@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::agent::Outcome;
-use crate::message::{Message, ToolCall, ToolResult};
+use crate::message::{Image, Message, ToolCall, ToolResult};
 use crate::provider::StopReason;
 use crate::reflect::Lesson;
 use crate::review::Requirement;
@@ -33,6 +33,12 @@ pub enum Event {
         instruction: String,
         provider: String,
         model: String,
+    },
+
+    /// Pictures sent with the instruction of the run that has just
+    /// started.
+    ImagesAttached {
+        images: Vec<Image>,
     },
 
     /// A run that stopped on a provider failure is being carried on from

@@ -12,10 +12,24 @@ pub const CARD_RADIUS: u8 = 10;
 /// tiring to read.
 pub const COLUMN_WIDTH: f32 = 760.0;
 
+/// Sets the app up to draw: its fonts, and the colours of the theme in
+/// use.
 pub fn apply(context: &egui::Context) {
     fonts::install(context);
 
-    context.set_theme(egui::Theme::Dark);
+    restyle(context);
+}
+
+/// Takes over the colours of the theme in use. Called again whenever
+/// another theme is chosen.
+pub fn restyle(context: &egui::Context) {
+    let dark = palette::current().dark;
+
+    context.set_theme(if dark {
+        egui::Theme::Dark
+    } else {
+        egui::Theme::Light
+    });
 
     context.all_styles_mut(|style| {
         style.text_styles = [
@@ -35,49 +49,49 @@ pub fn apply(context: &egui::Context) {
 
         let visuals = &mut style.visuals;
 
-        visuals.dark_mode = true;
-        visuals.panel_fill = palette::BACKGROUND;
-        visuals.window_fill = palette::SURFACE;
-        visuals.extreme_bg_color = palette::SUNKEN;
-        visuals.faint_bg_color = palette::SURFACE;
-        visuals.override_text_color = Some(palette::TEXT);
-        visuals.hyperlink_color = palette::ACCENT;
-        visuals.selection.bg_fill = palette::ACCENT.gamma_multiply(0.35);
-        visuals.selection.stroke = Stroke::new(1.0, palette::ACCENT);
-        visuals.window_stroke = Stroke::new(1.0, palette::BORDER);
+        visuals.dark_mode = dark;
+        visuals.panel_fill = palette::background();
+        visuals.window_fill = palette::surface();
+        visuals.extreme_bg_color = palette::sunken();
+        visuals.faint_bg_color = palette::surface();
+        visuals.override_text_color = Some(palette::text());
+        visuals.hyperlink_color = palette::accent();
+        visuals.selection.bg_fill = palette::accent().gamma_multiply(0.35);
+        visuals.selection.stroke = Stroke::new(1.0, palette::accent());
+        visuals.window_stroke = Stroke::new(1.0, palette::border());
 
         let radius = CornerRadius::same(7);
 
         for (widget, fill) in [
             (&mut visuals.widgets.noninteractive, Color32::TRANSPARENT),
-            (&mut visuals.widgets.inactive, palette::SURFACE),
-            (&mut visuals.widgets.hovered, palette::RAISED),
-            (&mut visuals.widgets.active, palette::RAISED),
-            (&mut visuals.widgets.open, palette::RAISED),
+            (&mut visuals.widgets.inactive, palette::surface()),
+            (&mut visuals.widgets.hovered, palette::raised()),
+            (&mut visuals.widgets.active, palette::raised()),
+            (&mut visuals.widgets.open, palette::raised()),
         ] {
             widget.bg_fill = fill;
             widget.weak_bg_fill = fill;
             widget.bg_stroke = Stroke::NONE;
-            widget.fg_stroke = Stroke::new(1.0, palette::TEXT);
+            widget.fg_stroke = Stroke::new(1.0, palette::text());
             widget.corner_radius = radius;
             widget.expansion = 0.0;
         }
 
         // Buttons and fields get a quiet outline, so they read as things
         // to press and type in against the dark surface.
-        visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, palette::BORDER);
-        visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, palette::TEXT_MUTED);
+        visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, palette::border());
+        visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, palette::text_muted());
 
-        visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, palette::BORDER);
-        visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, palette::TEXT_SECONDARY);
+        visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, palette::border());
+        visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, palette::text_secondary());
     });
 }
 
 /// The frame of a card: a quiet bordered surface.
 pub fn card() -> egui::Frame {
     egui::Frame::new()
-        .fill(palette::SURFACE)
-        .stroke(Stroke::new(1.0, palette::BORDER))
+        .fill(palette::surface())
+        .stroke(Stroke::new(1.0, palette::border()))
         .corner_radius(CornerRadius::same(CARD_RADIUS))
         .inner_margin(Margin::symmetric(12, 9))
 }

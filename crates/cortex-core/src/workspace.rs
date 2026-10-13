@@ -3,24 +3,49 @@
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
+use tokio::process::Command;
+
 use crate::error::ToolError;
+use crate::sandbox::Sandbox;
 
 /// A project root. File tools resolve every path through it so they cannot
-/// read or write outside the project.
+/// read or write outside the project, and the commands tools start are
+/// held to it by the [`Sandbox`].
 #[derive(Debug, Clone)]
 pub struct Workspace {
     root: PathBuf,
+    sandbox: Sandbox,
 }
 
 impl Workspace {
     pub fn new(root: impl AsRef<Path>) -> io::Result<Self> {
         let root = root.as_ref().canonicalize()?;
 
-        Ok(Self { root })
+        Ok(Self {
+            root,
+            sandbox: Sandbox::default(),
+        })
+    }
+
+    /// The sandbox is on unless this switches it off.
+    pub fn with_sandbox(mut self, sandbox: Sandbox) -> Self {
+        self.sandbox = sandbox;
+
+        self
     }
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    pub fn sandbox(&self) -> Sandbox {
+        self.sandbox
+    }
+
+    /// A command that runs `program` for a tool: confined to the project
+    /// when the sandbox is on. The caller still chooses its directory.
+    pub fn command(&self, program: &str) -> Command {
+        self.sandbox.command(program, &self.root)
     }
 
     /// Turns a model-supplied path into an absolute path inside the root.

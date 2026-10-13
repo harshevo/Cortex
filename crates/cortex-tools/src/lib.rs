@@ -5,11 +5,13 @@
 
 mod affected_tests;
 mod brain_state;
+mod browser;
 mod calculate;
 mod checks;
 mod edit_file;
 mod file_dependencies;
 pub mod find_references;
+mod github;
 mod input;
 mod list_files;
 mod outline;
@@ -31,9 +33,11 @@ use cortex_retrieval::{EmbeddingClient, SemanticIndex};
 
 pub use affected_tests::AffectedTests;
 pub use brain_state::BrainState;
+pub use browser::{Browser, BrowserOptions, BrowserView};
 pub use edit_file::EditFile;
 pub use file_dependencies::FileDependencies;
 pub use find_references::FindReferences;
+pub use github::{Github, GithubWrite};
 pub use list_files::ListFiles;
 pub use outline::Outline;
 pub use read_file::ReadFile;
@@ -87,6 +91,24 @@ pub fn add_code_graph_tools(registry: &mut ToolRegistry, graph: Arc<CodeGraph>) 
     registry.register(FindReferences::new(graph.clone()));
     registry.register(AffectedTests::new(graph.clone()));
     registry.register(FileDependencies::new(graph));
+}
+
+/// Adds `github`, which reads pull requests, issues and workflow runs, and
+/// `github_write`, which posts and so asks for approval each time. Both
+/// need the `gh` command, signed in.
+pub fn add_github_tools(registry: &mut ToolRegistry) {
+    registry.register(Github::default());
+    registry.register(GithubWrite::default());
+}
+
+/// Adds `browser`, which drives a real browser and so asks for approval
+/// each time, and `browser_view`, which only looks at the page it has
+/// open. Both need a browser built on Chromium to be installed.
+pub fn add_browser_tools(registry: &mut ToolRegistry, options: BrowserOptions) {
+    let (browser, view) = browser::tools(options);
+
+    registry.register(browser);
+    registry.register(view);
 }
 
 /// Adds `remember` and `recall`, the agent's own access to memory.

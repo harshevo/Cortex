@@ -358,6 +358,7 @@ fn conversation_tokens(messages: &[Message]) -> u64 {
             Block::Text { text } => estimate_tokens(text),
             Block::ToolCall(call) => estimate_tokens(&call.input.to_string()) + 12,
             Block::ToolResult(result) => estimate_tokens(&result.output) + 8,
+            Block::Image(_) => 1_500,
             Block::Opaque { .. } => 0,
         })
         .sum()
@@ -382,6 +383,7 @@ mod tests {
             call_id: "call".to_string(),
             output: "ok".to_string(),
             is_error: false,
+            images: Vec::new(),
         }]);
 
         let first_run = vec![Message::user_text("one"), answer.clone()];

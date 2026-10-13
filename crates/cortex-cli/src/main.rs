@@ -17,7 +17,9 @@ async fn main() -> ExitCode {
         Command::Context(args) => commands::context::execute(args).await,
         Command::Prepare(args) => commands::prepare::execute(args).await,
         Command::Eval(command) => commands::eval::execute(command).await,
+        Command::Skills(args) => commands::skills::execute(args),
         Command::Login => commands::login::execute().await,
+        Command::Mind(args) => commands::mind::execute(args),
     };
 
     match result {

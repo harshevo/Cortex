@@ -82,9 +82,9 @@ impl Tool for Shell {
             .unwrap_or(DEFAULT_TIMEOUT_SECONDS)
             .clamp(1, MAX_TIMEOUT_SECONDS);
 
-        let output = process::run_shell(
+        let output = process::run_shell_in(
+            &context.workspace,
             &input.command,
-            context.workspace.root(),
             Duration::from_secs(seconds),
         )
         .await
@@ -98,7 +98,19 @@ impl Tool for Shell {
 
         let shorten = self.quiet_checks && checks::is_check_command(&input.command);
 
-        Ok(render(&output, shorten))
+        let mut rendered = render(&output, shorten);
+
+        let note = context
+            .workspace
+            .sandbox()
+            .denial_note(output.succeeded(), &output.stderr);
+
+        if let Some(note) = note {
+            rendered.push_str("\n\n");
+            rendered.push_str(note);
+        }
+
+        Ok(rendered)
     }
 }
 
@@ -128,4 +140,52 @@ fn render(output: &CommandOutput, shorten: bool) -> String {
     }
 
     rendered
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use cortex_core::{AutoApprove, Sandbox, Workspace};
+
+    use super::*;
+
+    async fn run(sandbox: Sandbox, command: &str) -> String {
+        let project = tempfile::tempdir().unwrap();
+
+        let context = ToolContext {
+            workspace: Workspace::new(project.path())
+                .unwrap()
+                .with_sandbox(sandbox),
+            approver: Arc::new(AutoApprove),
+        };
+
+        Shell::default()
+            .run(json!({ "command": command }), &context)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_command_works_in_the_project_inside_the_sandbox() {
+        let output = run(Sandbox::On, "echo hi > note.txt && cat note.txt").await;
+
+        assert!(output.starts_with("exit code: 0"), "{output}");
+        assert!(!output.contains("sandbox"));
+    }
+
+    #[tokio::test]
+    async fn a_refused_command_tells_the_model_about_the_sandbox() {
+        if !Sandbox::available() {
+            return;
+        }
+
+        // The home folder itself is outside what a command may write.
+        let command = "echo hi > ~/.cortex-sandbox-probe-$$";
+
+        let output = run(Sandbox::On, command).await;
+
+        assert!(output.starts_with("exit code: 1"), "{output}");
+        assert!(output.contains("ran in a sandbox"), "{output}");
+    }
 }
