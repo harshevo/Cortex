@@ -21,7 +21,7 @@ pub fn show(ui: &mut Ui, form: &mut Form, filter: &Filter) -> Option<Action> {
         ui,
         filter,
         "Model provider",
-        "Each provider keeps its own models, address and key.",
+        "",
         |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(space::XS, space::XS);

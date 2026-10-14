@@ -25,6 +25,12 @@ use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
 pub use settings::{PROVIDERS, Settings};
 
+/// The model this phone's agent is set up with, for other screens to ask:
+/// the trading screen's language-model forecast.
+pub(crate) fn phone_provider(folder: &Path) -> anyhow::Result<Arc<dyn ModelProvider>> {
+    engine::build_provider(&Settings::load(folder))
+}
+
 use crate::lock;
 
 /// The name the list of hosts knows this phone by.

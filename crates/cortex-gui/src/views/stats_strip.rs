@@ -184,7 +184,10 @@ fn summary(ui: &mut Ui, reading: &Reading<'_>, can_change: bool) -> Option<Chang
         parts.push(format!("{} cached", format::percent(ratio)));
     }
 
-    parts.push(format!("step {}/{}", stats.step, reading.max_steps));
+    // Only while there are steps to count.
+    if stats.step > 0 {
+        parts.push(format!("step {}/{}", stats.step, reading.max_steps));
+    }
 
     if let Some(context) = &stats.context {
         parts.push(match context.share {
@@ -307,7 +310,7 @@ fn parts_of(ui: &mut Ui, context: &cortex_core::window::ContextUse) {
         ("other", parts.other),
     ];
 
-    named.sort_by(|left, right| right.1.cmp(&left.1));
+    named.sort_by_key(|(_, tokens)| std::cmp::Reverse(*tokens));
 
     let shown: Vec<String> = named
         .iter()
@@ -484,7 +487,9 @@ fn agent_loop(ui: &mut Ui, reading: &Reading<'_>) {
         explanation.push_str(&format!("\n\nSpared so far: {savings}."));
     }
 
-    value(ui, &format!("step {}/{}", stats.step, reading.max_steps)).on_hover_text(explanation);
+    if stats.step > 0 {
+        value(ui, &format!("step {}/{}", stats.step, reading.max_steps)).on_hover_text(explanation);
+    }
 }
 
 fn cell_color(cell: Cell, pulse: f32) -> Color32 {

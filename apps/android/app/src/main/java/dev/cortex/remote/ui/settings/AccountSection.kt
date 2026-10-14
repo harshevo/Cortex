@@ -54,13 +54,9 @@ private fun AccountRows(model: AppModel, chat: String?) {
     var address by remember(account.provider, account.address) { mutableStateOf(account.address) }
 
     Column(Modifier.padding(vertical = Space.s), verticalArrangement = Arrangement.spacedBy(Space.s)) {
-        Note(
-            if (model.state.onPhone) {
-                "For the agent on this phone. Only the model is elsewhere."
-            } else {
-                "For the agent on this phone. A paired computer uses its own account."
-            },
-        )
+        if (!model.state.onPhone) {
+            Note("For the agent on this phone. A paired computer uses its own account.")
+        }
 
         if (!model.state.onPhone) {
             SmallButton("Work on this phone", Modifier.padding(horizontal = 14.dp).fillMaxWidth(), strong = true) {
@@ -85,7 +81,27 @@ private fun AccountRows(model: AppModel, chat: String?) {
         when (account.provider) {
             "codex" -> {
                 when {
-                    account.signingIn -> Note("Waiting for the sign-in page…", color = colors.textSecondary)
+                    account.signingIn -> Column(Modifier.padding(horizontal = 14.dp), verticalArrangement = Arrangement.spacedBy(Space.s)) {
+                        var pasted by remember { mutableStateOf("") }
+
+                        androidx.compose.material3.Text(
+                            "Finish signing in in the browser. If it does not come back here, copy the address it ends on (localhost:1455/…) and paste it.",
+                            style = dev.cortex.remote.ui.Type.footnote,
+                            color = colors.textSecondary,
+                        )
+                        Field(pasted, "http://localhost:1455/auth/callback?code=…") { pasted = it }
+
+                        Row(horizontalArrangement = Arrangement.spacedBy(Space.s)) {
+                            SmallButton("Finish", strong = true, enabled = "code=" in pasted) {
+                                model.core.finishSignIn(pasted)
+                                pasted = ""
+                            }
+
+                            model.lastSignInAddress?.let { page ->
+                                SmallButton("Open the page again") { model.signInAddress = page }
+                            }
+                        }
+                    }
 
                     account.signedIn -> Row(Modifier.padding(horizontal = 14.dp), horizontalArrangement = Arrangement.spacedBy(Space.s)) {
                         Note("Signed in to ChatGPT.", Modifier.weight(1f), color = colors.good)
@@ -97,7 +113,7 @@ private fun AccountRows(model: AppModel, chat: String?) {
                     }
                 }
 
-                account.signInProblem?.let { Note(it, color = colors.bad) }
+                account.signInProblem?.takeIf { !account.signingIn }?.let { Note(it, color = colors.bad) }
             }
 
             else -> Column(Modifier.padding(horizontal = 14.dp), verticalArrangement = Arrangement.spacedBy(Space.s)) {
@@ -119,7 +135,10 @@ private fun AccountRows(model: AppModel, chat: String?) {
         }
 
         if (model.state.onPhone) {
-            model.state.chats.firstOrNull()?.problem?.let { Note(it, color = colors.bad) }
+            // Not being signed in is said by the sign-in button itself.
+            model.state.chats.firstOrNull()?.problem
+                ?.takeIf { !(account.provider == "codex" && !account.signedIn) }
+                ?.let { Note(it, color = colors.bad) }
         }
     }
 }

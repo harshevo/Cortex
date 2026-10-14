@@ -26,9 +26,14 @@ pub enum TradingStatus {
     /// There are bars and no analysis of them yet.
     Loaded,
 
-    Working { stage: String, fraction: f32 },
+    Working {
+        stage: String,
+        fraction: f32,
+    },
     Done,
-    Failed { reason: String },
+    Failed {
+        reason: String,
+    },
 }
 
 /// The bars that are loaded.
@@ -323,8 +328,16 @@ impl Trading {
             synapses: analysis.growth.synapses as u32,
             expected_right: analysis.growth.expected_right,
             baseline_right: analysis.growth.baseline_right,
-            loss_fitted: analysis.combined_losses.iter().map(|loss| loss.fit).collect(),
-            loss_checked: analysis.combined_losses.iter().map(|loss| loss.check).collect(),
+            loss_fitted: analysis
+                .combined_losses
+                .iter()
+                .map(|loss| loss.fit)
+                .collect(),
+            loss_checked: analysis
+                .combined_losses
+                .iter()
+                .map(|loss| loss.check)
+                .collect(),
             notes: analysis.notes.clone(),
             total_ms: analysis.timings.total_ms,
         })
@@ -344,8 +357,8 @@ fn stage_name(stage: Stage) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc::{Sender, channel};
     use std::sync::Mutex;
+    use std::sync::mpsc::{Sender, channel};
     use std::time::Duration;
 
     use super::*;

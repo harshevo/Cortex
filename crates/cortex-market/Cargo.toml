@@ -1,0 +1,24 @@
+[package]
+name = "cortex-market"
+description = "Market data for the trading screens: a Dhan broker connection (history, quotes, live feed), indicators, ten-candle forecasts from the liquid, dendritic, spiking networks and a language model, a plan for each scenario, and a record of how every forecast came out. Nothing here places an order."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cortex-core.workspace = true
+cortex-liquid.workspace = true
+
+base64 = "0.22"
+
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["net"] }
+tokio-tungstenite = { version = "0.26", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+
+[dev-dependencies]
+tempfile.workspace = true

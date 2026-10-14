@@ -9,7 +9,9 @@
 use std::sync::mpsc::{Receiver, channel};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use cortex_core::effect::{EffectLedger, EffectReport, Filter, MetricEffect, SourceEffect, Verdict};
+use cortex_core::effect::{
+    EffectLedger, EffectReport, Filter, MetricEffect, SourceEffect, Verdict,
+};
 use cortex_core::ledger::{
     self, CostEstimate, DayUse, Ledger, MonthReport, PriceTable, SessionUse,
 };
@@ -248,9 +250,13 @@ fn usage(ui: &mut Ui, view: &mut InsightsView, report: &MonthReport, streak: u32
         }
 
         ui.label(
-            RichText::new(format!("{} {}", MONTHS[(view.month - 1) as usize], view.year))
-                .font(theme::strong(16.0))
-                .color(palette::text()),
+            RichText::new(format!(
+                "{} {}",
+                MONTHS[(view.month - 1) as usize],
+                view.year
+            ))
+            .font(theme::strong(16.0))
+            .color(palette::text()),
         );
 
         if ui.button("›").clicked() {
@@ -260,7 +266,11 @@ fn usage(ui: &mut Ui, view: &mut InsightsView, report: &MonthReport, streak: u32
         ui.add_space(12.0);
 
         if view.reading.is_some() {
-            ui.label(RichText::new("reading…").font(theme::small()).color(palette::text_muted()));
+            ui.label(
+                RichText::new("reading…")
+                    .font(theme::small())
+                    .color(palette::text_muted()),
+            );
         }
     });
 
@@ -268,13 +278,23 @@ fn usage(ui: &mut Ui, view: &mut InsightsView, report: &MonthReport, streak: u32
 
     // The figures that answer "how much".
     ui.horizontal_wrapped(|ui| {
-        tile(ui, "Tokens", &count(summary.totals.tokens()), &format!(
-            "{} in · {} out",
-            count(summary.totals.all_input()),
-            count(summary.totals.output_tokens)
-        ));
+        tile(
+            ui,
+            "Tokens",
+            &count(summary.totals.tokens()),
+            &format!(
+                "{} in · {} out",
+                count(summary.totals.all_input()),
+                count(summary.totals.output_tokens)
+            ),
+        );
 
-        tile(ui, "Cost", &cost_text(&summary.cost), &cost_note(&summary.cost));
+        tile(
+            ui,
+            "Cost",
+            &cost_text(&summary.cost),
+            &cost_note(&summary.cost),
+        );
 
         tile(
             ui,
@@ -304,10 +324,9 @@ fn usage(ui: &mut Ui, view: &mut InsightsView, report: &MonthReport, streak: u32
                 .peak_day
                 .as_ref()
                 .map_or("—".to_string(), |peak| peak.date.clone()),
-            &summary
-                .peak_day
-                .as_ref()
-                .map_or(String::new(), |peak| format!("{} tokens", count(peak.tokens))),
+            &summary.peak_day.as_ref().map_or(String::new(), |peak| {
+                format!("{} tokens", count(peak.tokens))
+            }),
         );
 
         tile(
@@ -344,7 +363,14 @@ fn usage(ui: &mut Ui, view: &mut InsightsView, report: &MonthReport, streak: u32
     }
 
     section(ui, "By hour of the day");
-    hours(ui, &summary.hours.iter().map(|hour| hour.tokens).collect::<Vec<_>>());
+    hours(
+        ui,
+        &summary
+            .hours
+            .iter()
+            .map(|hour| hour.tokens)
+            .collect::<Vec<_>>(),
+    );
 
     section(ui, "By model");
 
@@ -357,7 +383,11 @@ fn usage(ui: &mut Ui, view: &mut InsightsView, report: &MonthReport, streak: u32
             ui,
             &format!("{} · {}", model.model, model.provider),
             model.share,
-            &format!("{} tokens · {}", count(model.totals.tokens()), cost_text(&model.cost)),
+            &format!(
+                "{} tokens · {}",
+                count(model.totals.tokens()),
+                cost_text(&model.cost)
+            ),
         );
     }
 
@@ -587,17 +617,18 @@ fn hours(ui: &mut Ui, tokens: &[u64]) {
 
 fn session_row(ui: &mut Ui, session: &SessionUse) {
     ui.horizontal(|ui| {
-        let title = session
-            .title
-            .clone()
-            .unwrap_or_else(|| session.id.clone());
+        let title = session.title.clone().unwrap_or_else(|| session.id.clone());
 
         ui.add_sized(
             vec2(ui.available_width() * 0.5, 18.0),
             egui::Label::new(RichText::new(title).color(palette::text())).truncate(),
         );
 
-        ui.label(RichText::new(&session.model).font(theme::small()).color(palette::text_muted()));
+        ui.label(
+            RichText::new(&session.model)
+                .font(theme::small())
+                .color(palette::text_muted()),
+        );
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(
@@ -812,7 +843,10 @@ fn weeks(ui: &mut Ui, of: &SourceEffect) {
         .collect();
 
     if points.len() < 2 {
-        muted(ui, "Fewer than two weeks with checked runs: nothing to draw yet.");
+        muted(
+            ui,
+            "Fewer than two weeks with checked runs: nothing to draw yet.",
+        );
 
         return;
     }
@@ -822,7 +856,9 @@ fn weeks(ui: &mut Ui, of: &SourceEffect) {
 
     painter.rect_filled(rect, 6.0, palette::sunken());
 
-    let x = |at: usize| rect.left() + 10.0 + at as f32 / (points.len() - 1) as f32 * (rect.width() - 20.0);
+    let x = |at: usize| {
+        rect.left() + 10.0 + at as f32 / (points.len() - 1) as f32 * (rect.width() - 20.0)
+    };
     let y = |share: f64| rect.bottom() - 18.0 - share as f32 * (rect.height() - 30.0);
 
     let line = |pick: &dyn Fn(usize) -> Option<f64>, colour: Color32| {
@@ -879,12 +915,24 @@ fn tile(ui: &mut Ui, name: &str, value: &str, note: &str) {
     theme::card().show(ui, |ui| {
         ui.set_width(200.0);
 
-        ui.label(RichText::new(name.to_uppercase()).font(theme::small()).color(palette::text_muted()));
-        ui.add(
-            egui::Label::new(RichText::new(value).font(theme::strong(18.0)).color(palette::text()))
-                .truncate(),
+        ui.label(
+            RichText::new(name.to_uppercase())
+                .font(theme::small())
+                .color(palette::text_muted()),
         );
-        ui.label(RichText::new(note).font(theme::small()).color(palette::text_secondary()));
+        ui.add(
+            egui::Label::new(
+                RichText::new(value)
+                    .font(theme::strong(18.0))
+                    .color(palette::text()),
+            )
+            .truncate(),
+        );
+        ui.label(
+            RichText::new(note)
+                .font(theme::small())
+                .color(palette::text_secondary()),
+        );
     });
 }
 
@@ -909,7 +957,11 @@ fn share_row(ui: &mut Ui, name: &str, share: f64, note: &str) {
             palette::accent(),
         );
 
-        ui.label(RichText::new(note).font(theme::small()).color(palette::text_secondary()));
+        ui.label(
+            RichText::new(note)
+                .font(theme::small())
+                .color(palette::text_secondary()),
+        );
     });
 }
 
@@ -927,7 +979,10 @@ fn cost_note(cost: &CostEstimate) -> String {
     let mut parts = Vec::new();
 
     if cost.subscription_tokens > 0 {
-        parts.push(format!("{} on a subscription", count(cost.subscription_tokens)));
+        parts.push(format!(
+            "{} on a subscription",
+            count(cost.subscription_tokens)
+        ));
     }
 
     if cost.unpriced_tokens > 0 {
@@ -993,7 +1048,7 @@ mod tests {
 
         let partly = CostEstimate {
             unpriced_tokens: 5,
-            ..priced.clone()
+            ..priced
         };
 
         assert_eq!(cost_text(&partly), "$1.23+");

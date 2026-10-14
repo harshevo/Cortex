@@ -21,7 +21,10 @@ pub enum Status {
     /// There are bars and no analysis of them yet.
     Loaded,
 
-    Working { stage: Stage, fraction: f32 },
+    Working {
+        stage: Stage,
+        fraction: f32,
+    },
 
     /// The analysis is there to fetch.
     Done,
@@ -73,7 +76,10 @@ impl Desk {
                     "{} rows could not be read and were left out. The first: {problem}",
                     parsed.skipped
                 ),
-                None => format!("{} rows could not be read and were left out.", parsed.skipped),
+                None => format!(
+                    "{} rows could not be read and were left out.",
+                    parsed.skipped
+                ),
             });
         }
 
@@ -215,7 +221,9 @@ impl Desk {
     }
 
     fn held(&self) -> MutexGuard<'_, Held> {
-        self.held.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.held
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 
@@ -291,9 +299,10 @@ fn called_right(analysis: &Analysis, first: usize, count: usize) -> Option<f32> 
             continue;
         };
 
-        let (Some(predicted), Some(Some(actual))) =
-            (series.predicted_return.get(at), series.actual_return.get(at))
-        else {
+        let (Some(predicted), Some(Some(actual))) = (
+            series.predicted_return.get(at),
+            series.actual_return.get(at),
+        ) else {
             continue;
         };
 
@@ -504,6 +513,10 @@ mod tests {
         let text = "date,close\n2024-01-01,10\nnot a date,11\n2024-01-03,12\n";
 
         assert_eq!(desk.load_csv("few.csv", text).unwrap(), 2);
-        assert!(desk.notes().iter().any(|note| note.contains("1 rows could not be read")));
+        assert!(
+            desk.notes()
+                .iter()
+                .any(|note| note.contains("1 rows could not be read"))
+        );
     }
 }

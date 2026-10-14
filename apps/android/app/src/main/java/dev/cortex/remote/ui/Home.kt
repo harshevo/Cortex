@@ -33,7 +33,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ChatBubble
+import androidx.compose.material.icons.automirrored.rounded.ShowChart
 import androidx.compose.material.icons.rounded.Computer
+import androidx.compose.material.icons.rounded.Insights
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Forum
@@ -66,11 +68,13 @@ import uniffi.cortex_mobile.ProjectView
 import java.text.DateFormat
 import java.util.Date
 
-/** Which screen is in front: the lists, a chat, or the settings over either. */
-private fun depth(chat: String?, settings: String?) = when {
-    settings != null -> 2
-    chat != null -> 1
-    else -> 0
+/** What is in front: the lists, a chat or a tool, or the settings over either. */
+private data class Screen(val chat: String?, val settings: String?, val tool: String?) {
+    val depth = when {
+        settings != null -> 2
+        chat != null || tool != null -> 1
+        else -> 0
+    }
 }
 
 /** The chats open on the computer, its projects, the chat in front, and the settings. */
@@ -80,6 +84,9 @@ fun HomeScreen(model: AppModel) {
 
     // The card to unfold, "" for none; null while the settings are closed.
     var settings by rememberSaveable { mutableStateOf<String?>(null) }
+
+    // "trading" or "insights" while one of them is open.
+    var tool by rememberSaveable { mutableStateOf<String?>(null) }
 
     // A chat that is closed on the computer cannot stay open here.
     LaunchedEffect(model.state.chats, model.connected) {
@@ -97,6 +104,7 @@ fun HomeScreen(model: AppModel) {
             "settings" -> settings = ""
             "themes" -> settings = "appearance"
             "desktops" -> settings = "desktops"
+            "trading", "insights" -> tool = model.stage
 
             "capabilities" -> {
                 open = first
@@ -108,9 +116,9 @@ fun HomeScreen(model: AppModel) {
     }
 
     AnimatedContent(
-        targetState = Triple(open, settings, depth(open, settings)),
+        targetState = Screen(open, settings, tool),
         transitionSpec = {
-            if (targetState.third >= initialState.third) {
+            if (targetState.depth >= initialState.depth) {
                 (slideInHorizontally(settle()) { it / 3 } + fadeIn()) togetherWith
                     (slideOutHorizontally(settle()) { -it / 6 } + fadeOut())
             } else {
@@ -118,9 +126,11 @@ fun HomeScreen(model: AppModel) {
                     (slideOutHorizontally(settle()) { it / 3 } + fadeOut())
             }
         },
-        contentKey = { it.third },
+        contentKey = { it.depth },
         label = "screen",
-    ) { (chat, focus, _) ->
+    ) { (chat, focus, shown) ->
+        val close = { tool = null; model.stage = null }
+
         when {
             focus != null -> BackSwipe(back = { settings = null; model.stage = null }) { swipe ->
                 Box(swipe) {
@@ -137,13 +147,21 @@ fun HomeScreen(model: AppModel) {
                 }
             }
 
-            else -> Lists(model, open = { open = it }) { card -> settings = card ?: "" }
+            shown == "trading" -> BackSwipe(back = close) { swipe ->
+                Box(swipe) { TradingScreen(model, back = close) }
+            }
+
+            shown == "insights" -> BackSwipe(back = close) { swipe ->
+                Box(swipe) { InsightsScreen(model, back = close) }
+            }
+
+            else -> Lists(model, open = { open = it }, openTool = { tool = it }) { card -> settings = card ?: "" }
         }
     }
 }
 
 @Composable
-private fun Lists(model: AppModel, open: (String) -> Unit, openSettings: (String?) -> Unit) {
+private fun Lists(model: AppModel, open: (String) -> Unit, openTool: (String) -> Unit, openSettings: (String?) -> Unit) {
     var naming by remember { mutableStateOf(false) }
 
     Column(
@@ -161,16 +179,18 @@ private fun Lists(model: AppModel, open: (String) -> Unit, openSettings: (String
         Row(
             Modifier.padding(top = Space.m),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            LogoBadge(size = 44.dp)
+            LogoBadge(size = 40.dp)
 
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text("Cortex", style = Type.title(26), color = colors.text)
+                Text("Cortex", style = Type.title(24), color = colors.text, maxLines = 1, softWrap = false)
 
                 ConnectionPill(model.state.connection)
             }
 
+            RoundButton(Icons.Rounded.Insights, "Insights") { openTool("insights") }
+            RoundButton(Icons.AutoMirrored.Rounded.ShowChart, "Trading") { openTool("trading") }
             RoundButton(Icons.Rounded.Computer, "Where the agent runs") { openSettings("desktops") }
             RoundButton(Icons.Rounded.Settings, "Settings") { openSettings(null) }
         }
@@ -222,7 +242,7 @@ private fun Lists(model: AppModel, open: (String) -> Unit, openSettings: (String
 private fun RoundButton(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
     Box(
         Modifier
-            .size(44.dp)
+            .size(40.dp)
             .pressable(onClick = onClick)
             .clip(CircleShape)
             .background(colors.surface)

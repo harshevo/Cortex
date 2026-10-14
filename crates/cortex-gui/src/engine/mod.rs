@@ -9,7 +9,7 @@
 //! the agent is built again from it.
 
 mod approver;
-mod blueprint;
+pub(crate) mod blueprint;
 mod demo;
 mod embeddings;
 mod log;

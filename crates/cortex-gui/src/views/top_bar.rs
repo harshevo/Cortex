@@ -157,7 +157,7 @@ pub fn show(
 fn views(ui: &mut Ui, view: &mut View) {
     const TABS: [(View, &str, &str); 5] = [
         (View::Insights, "Insights", "Tokens used, and whether the advisers help"),
-        (View::Trading, "Trading", "Price bars read with the liquid and dendritic networks"),
+        (View::Trading, "Trading", "Live Dhan data and ten-candle forecasts"),
         (View::Living, "Network", "The dendritic network, growing as it watches"),
         (View::MemorySpace, "Memory", "What Cortex remembers, drawn as a brain"),
         (View::Conversation, "Chat", "The conversation"),

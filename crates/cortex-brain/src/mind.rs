@@ -872,9 +872,12 @@ mod tests {
         }
     }
 
+    /// The path and body of every request the stand-in service was sent.
+    type Seen = Arc<Mutex<Vec<(String, Value)>>>;
+
     /// A stand-in for the service: answers every request with `{"step": 7}`
     /// and keeps what it was sent.
-    fn fake_service() -> (String, Arc<Mutex<Vec<(String, Value)>>>) {
+    fn fake_service() -> (String, Seen) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         let seen = Arc::new(Mutex::new(Vec::new()));

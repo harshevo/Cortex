@@ -5,6 +5,8 @@ import SwiftUI
 /// whether its learning parts help: runs in which each adviser spoke
 /// against runs it was held out of.
 struct InsightsScreen: View {
+    @Environment(\.dismiss) private var dismiss
+
     enum Tab: Hashable {
         case tokens, effect
     }
@@ -18,10 +20,6 @@ struct InsightsScreen: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                Text("Insights")
-                    .font(Theme.title(28))
-                    .foregroundStyle(Theme.text)
-
                 Picker("Show", selection: $tab) {
                     Text("Tokens").tag(Tab.tokens)
                     Text("Does it help?").tag(Tab.effect)
@@ -51,6 +49,14 @@ struct InsightsScreen: View {
         }
         .background(Theme.background.ignoresSafeArea())
         .navigationTitle("Insights")
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Done") { dismiss() }
+            }
+        }
         .task(id: month) { await read() }
         .refreshable { await read() }
     }
@@ -136,7 +142,9 @@ private struct TokensView: View {
             }
             .frame(height: 120)
 
-            Text("By model").sectionHeading()
+            if !usage.models.isEmpty {
+                Text("By model").sectionHeading()
+            }
 
             ForEach(Array(usage.models.enumerated()), id: \.offset) { _, model in
                 VStack(alignment: .leading, spacing: 4) {
@@ -150,7 +158,9 @@ private struct TokensView: View {
                 }
             }
 
-            Text(picked.map { "Sessions on \($0)" } ?? "Sessions").sectionHeading()
+            if !sessions.isEmpty {
+                Text(picked.map { "Sessions on \($0)" } ?? "Sessions").sectionHeading()
+            }
 
             ForEach(Array(sessions.enumerated()), id: \.offset) { _, session in
                 HStack {
@@ -183,17 +193,19 @@ private struct CalendarGrid: View {
         let columns = Array(repeating: GridItem(.flexible(), spacing: 5), count: 7)
 
         LazyVGrid(columns: columns, spacing: 5) {
-            ForEach(["M", "T", "W", "T", "F", "S", "S"].indices, id: \.self) { index in
-                Text(["M", "T", "W", "T", "F", "S", "S"][index])
+            // Every cell of the one grid needs an identity of its own:
+            // the same number for a heading and a day hides the day.
+            ForEach(["M 0", "T 1", "W 2", "T 3", "F 4", "S 5", "S 6"], id: \.self) { heading in
+                Text(heading.prefix(1))
                     .font(.caption2)
                     .foregroundStyle(Theme.textMuted)
             }
 
-            ForEach(0..<Int(usage.firstWeekday), id: \.self) { _ in
+            ForEach((0..<Int(usage.firstWeekday)).map { "blank \($0)" }, id: \.self) { _ in
                 Color.clear.frame(height: 34)
             }
 
-            ForEach(Array(usage.days.enumerated()), id: \.offset) { index, day in
+            ForEach(Array(usage.days.enumerated()), id: \.element.date) { index, day in
                 let tokens = day.inputTokens + day.cachedTokens + day.outputTokens
                 let strength = (Double(tokens) / Double(most)).squareRoot()
 

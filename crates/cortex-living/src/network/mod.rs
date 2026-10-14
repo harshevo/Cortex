@@ -1404,8 +1404,7 @@ impl Network {
         average(&mut self.meters.expected_right, right);
         average(&mut self.meters.baseline_right, baseline);
 
-        self.meters.settled_surprise +=
-            AVERAGING * 0.1 * (surprise - self.meters.settled_surprise);
+        self.meters.settled_surprise += AVERAGING * 0.1 * (surprise - self.meters.settled_surprise);
 
         if !expected.is_empty() {
             average(&mut self.meters.precision, met / expected.len() as f32);
@@ -1436,10 +1435,7 @@ impl Network {
         let advised = self.advised.take()?;
         let right = sensed.contains(&advised);
 
-        average(
-            &mut self.meters.advice_right,
-            if right { 1.0 } else { 0.0 },
-        );
+        average(&mut self.meters.advice_right, if right { 1.0 } else { 0.0 });
 
         let caution = &mut self.meters.caution;
 
@@ -1599,10 +1595,8 @@ impl Network {
     fn context(&self) -> Vec<(Id, Lag)> {
         let world = self.fired_world.min(self.fired.len());
 
-        let mut context: Vec<(Id, Lag)> = self.fired[..world]
-            .iter()
-            .map(|id| (*id, LATEST))
-            .collect();
+        let mut context: Vec<(Id, Lag)> =
+            self.fired[..world].iter().map(|id| (*id, LATEST)).collect();
 
         context.extend(self.prior.iter().map(|id| (*id, EARLIER)));
 
@@ -2172,12 +2166,16 @@ impl Network {
             for segment in &mut neuron.segments {
                 let before = segment.synapses.len();
 
-                segment.synapses.retain(|synapse| !gone.contains(&synapse.from));
+                segment
+                    .synapses
+                    .retain(|synapse| !gone.contains(&synapse.from));
 
                 cut += before - segment.synapses.len();
             }
 
-            neuron.segments.retain(|segment| !segment.synapses.is_empty());
+            neuron
+                .segments
+                .retain(|segment| !segment.synapses.is_empty());
         }
 
         self.meters.removed += gone.len() as u64;
@@ -2185,7 +2183,10 @@ impl Network {
 
         self.workspace.retain(|(id, _)| !gone.contains(id));
         let world = self.fired_world.min(self.fired.len());
-        let lost = self.fired[..world].iter().filter(|id| gone.contains(id)).count();
+        let lost = self.fired[..world]
+            .iter()
+            .filter(|id| gone.contains(id))
+            .count();
 
         self.fired.retain(|id| !gone.contains(id));
         self.fired_world = world - lost;
@@ -2306,7 +2307,11 @@ impl Network {
     fn count(&mut self) {
         self.meters.neurons = self.neurons.len();
 
-        self.meters.segments = self.neurons.iter().map(|neuron| neuron.segments.len()).sum();
+        self.meters.segments = self
+            .neurons
+            .iter()
+            .map(|neuron| neuron.segments.len())
+            .sum();
 
         self.meters.synapses = self
             .neurons
@@ -2372,7 +2377,11 @@ impl Network {
         let mut meters = self.meters.clone();
 
         meters.neurons = self.neurons.len();
-        meters.segments = self.neurons.iter().map(|neuron| neuron.segments.len()).sum();
+        meters.segments = self
+            .neurons
+            .iter()
+            .map(|neuron| neuron.segments.len())
+            .sum();
         meters.synapses = self
             .neurons
             .iter()

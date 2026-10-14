@@ -324,11 +324,17 @@ fn cost_note(cost: &CostEstimate) -> String {
     let mut parts = Vec::new();
 
     if cost.subscription_tokens > 0 {
-        parts.push(format!("{} tokens on a subscription", cost.subscription_tokens));
+        parts.push(format!(
+            "{} tokens on a subscription",
+            cost.subscription_tokens
+        ));
     }
 
     if cost.unpriced_tokens > 0 {
-        parts.push(format!("{} tokens without a known price", cost.unpriced_tokens));
+        parts.push(format!(
+            "{} tokens without a known price",
+            cost.unpriced_tokens
+        ));
     }
 
     if parts.is_empty() {

@@ -80,6 +80,9 @@ struct Running {
     inbox: Arc<Inbox>,
     log: Arc<SessionLog>,
 
+    /// Records how each run went, and hears when the person stops one.
+    effect: Option<Arc<cortex_core::effect::EffectSink>>,
+
     /// The provider's name, to tell whose conversation a log holds.
     provider: String,
 
@@ -396,6 +399,23 @@ impl Engine {
             tokio::spawn(let_rest(Arc::downgrade(living)));
         }
 
+        let effect = setup.effect.clone();
+
+        {
+            let usage = setup.usage.clone();
+            let effect = effect.clone();
+
+            log.name_with(Box::new(move |session| {
+                if let Some(usage) = &usage {
+                    usage.set_session(session);
+                }
+
+                if let Some(effect) = &effect {
+                    effect.set_session(session);
+                }
+            }));
+        }
+
         let inbox = Arc::new(Inbox::new());
         let name = provider.name().to_string();
 
@@ -426,6 +446,7 @@ impl Engine {
             agent,
             inbox,
             log,
+            effect,
             provider: name,
             memory: location(),
         })
@@ -530,7 +551,15 @@ impl Engine {
 
                     ask = asks.recv() => match ask {
                         // A closed app stops the run as well.
-                        Some(Ask::Chat(ChatUp::Stop)) | None => break true,
+                        Some(Ask::Chat(ChatUp::Stop)) => {
+                            if let Some(effect) = &running.effect {
+                                effect.stopped_by_person();
+                            }
+
+                            break true;
+                        }
+
+                        None => break true,
 
                         Some(Ask::Chat(ChatUp::Steer { text } | ChatUp::Submit { text, .. })) => {
                             running.inbox.push(text)
@@ -704,17 +733,17 @@ enum Start {
     CarryOn(Progress),
 }
 
-fn build_provider(settings: &Settings) -> Result<Arc<dyn ModelProvider>> {
+pub(super) fn build_provider(settings: &Settings) -> Result<Arc<dyn ModelProvider>> {
     let model = settings.model();
 
     if model.trim().is_empty() {
-        bail!("No model is chosen. Pick one under This phone.");
+        bail!("No model is chosen. Pick one in Settings → Model.");
     }
 
     let provider: Arc<dyn ModelProvider> = match settings.provider.as_str() {
         "anthropic" => {
             let Some(key) = settings.key() else {
-                bail!("No API key for Anthropic. Add one under This phone.");
+                bail!("No API key for Anthropic. Add one in Settings → Account.");
             };
 
             Arc::new(AnthropicProvider::new(AnthropicConfig::with_key(
@@ -726,7 +755,7 @@ fn build_provider(settings: &Settings) -> Result<Arc<dyn ModelProvider>> {
 
         "hosted" => {
             if settings.address.is_empty() {
-                bail!("The hosted provider needs the address of its API. Add it under This phone.");
+                bail!("The hosted provider needs the address of its API. Add it in Settings → Account.");
             }
 
             Arc::new(OpenAiCompatProvider::new(
@@ -740,7 +769,7 @@ fn build_provider(settings: &Settings) -> Result<Arc<dyn ModelProvider>> {
 
         _ => {
             if cortex_providers::codex::sign_in_status().is_none() {
-                bail!("Not signed in to ChatGPT. Sign in under This phone.");
+                bail!("Not signed in to ChatGPT yet.");
             }
 
             Arc::new(CodexProvider::new(CodexConfig::new(
@@ -865,13 +894,35 @@ impl Approver for PhoneApprover {
 struct SessionLog {
     directory: PathBuf,
     current: Mutex<Option<(PathBuf, JsonlSink)>>,
+
+    /// Told the name of each session as it is begun or taken up.
+    namer: Mutex<Option<Namer>>,
 }
+
+type Namer = Box<dyn Fn(&str) + Send + Sync>;
 
 impl SessionLog {
     fn new(project: &Path) -> Self {
         Self {
             directory: project.join(TRAJECTORIES),
             current: Mutex::new(None),
+            namer: Mutex::new(None),
+        }
+    }
+
+    /// Who is told which session is being written. Told at once if one
+    /// already is: the agent is rebuilt in the middle of sessions.
+    fn name_with(&self, namer: Namer) {
+        if let Some(path) = self.path() {
+            namer(&stem(&path));
+        }
+
+        *lock(&self.namer) = Some(namer);
+    }
+
+    fn began(&self, path: &Path) {
+        if let Some(namer) = &*lock(&self.namer) {
+            namer(&stem(path));
         }
     }
 
@@ -884,6 +935,10 @@ impl SessionLog {
         *lock(&self.current) = JsonlSink::append(path)
             .ok()
             .map(|sink| (path.to_path_buf(), sink));
+
+        if self.path().is_some() {
+            self.began(path);
+        }
     }
 
     /// Ends the current file; the next event starts a new one.
@@ -905,7 +960,11 @@ impl TrajectorySink for SessionLog {
                 std::fs::create_dir_all(&self.directory).and_then(|_| JsonlSink::create(&path));
 
             match created {
-                Ok(sink) => *current = Some((path, sink)),
+                Ok(sink) => {
+                    self.began(&path);
+
+                    *current = Some((path, sink));
+                }
                 Err(_) => return,
             }
         }
@@ -914,6 +973,12 @@ impl TrajectorySink for SessionLog {
             sink.record(event);
         }
     }
+}
+
+fn stem(path: &Path) -> String {
+    path.file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 /// Lets the growing network go over recent moments whenever nothing is

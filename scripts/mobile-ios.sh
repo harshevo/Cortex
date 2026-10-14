@@ -16,6 +16,12 @@ if [ -z "${DEVELOPER_DIR:-}" ] && [ -d /Applications/Xcode.app ]; then
     export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 fi
 
+# The C in the core (SQLite, the code parsers) is built for the oldest
+# systems the app supports, as in apps/ios/project.yml: otherwise it is
+# built for the SDK's own and the app cannot start on older ones.
+export IPHONEOS_DEPLOYMENT_TARGET=17.0
+export MACOSX_DEPLOYMENT_TARGET=14.0
+
 targets="aarch64-apple-darwin aarch64-apple-ios-sim"
 
 if [ "${1:-}" != "--quick" ]; then

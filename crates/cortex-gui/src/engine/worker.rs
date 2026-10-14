@@ -264,9 +264,7 @@ pub async fn run(
                     continue;
                 };
 
-                outbox.send(Update::Compacted(
-                    compact(running, &mut conversation).await,
-                ));
+                outbox.send(Update::Compacted(compact(running, &mut conversation).await));
             }
 
             Command::Prepare => {

@@ -129,10 +129,6 @@ fn chats(
         .map(Vec::as_slice)
         .unwrap_or_default();
 
-    if sessions.is_empty() {
-        hint(ui, "For questions and tasks that belong to no project.");
-    }
-
     let matches: Vec<_> = sessions
         .iter()
         .filter(|session| matches_query(&session.title, query))
@@ -158,10 +154,6 @@ fn projects(
 
     if heading(ui, "Projects", Icon::FolderPlus, "Add a project folder") {
         action = Some(Action::AddProject);
-    }
-
-    if shelf.projects.is_empty() {
-        hint(ui, "Add a folder to work on its code.");
     }
 
     let mut found = false;

@@ -5,6 +5,8 @@ import UniformTypeIdentifiers
 /// the verdict, and how the forecasts did on bars they were not trained
 /// on. Nothing here is advice.
 struct TradingScreen: View {
+    @Environment(\.dismiss) private var dismiss
+
     @State private var desk = TradingDesk()
     @State private var importing = false
     @State private var horizon: UInt32 = 1
@@ -38,6 +40,14 @@ struct TradingScreen: View {
         }
         .background(Theme.background.ignoresSafeArea())
         .navigationTitle("Trading")
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Done") { dismiss() }
+            }
+        }
         .fileImporter(
             isPresented: $importing,
             allowedContentTypes: [.commaSeparatedText, .tabSeparatedText, .plainText]
@@ -50,10 +60,6 @@ struct TradingScreen: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Trading")
-                .font(Theme.title(28))
-                .foregroundStyle(Theme.text)
-
             Text("A liquid network and the dendritic network read the bars together. They are trained on the first three quarters and scored on the last, which they never saw.")
                 .font(.footnote)
                 .foregroundStyle(Theme.textMuted)

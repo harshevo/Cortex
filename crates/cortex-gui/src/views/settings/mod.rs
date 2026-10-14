@@ -540,10 +540,7 @@ fn apply_row(ui: &mut Ui, form: &mut Form) -> bool {
                 ui.label(RichText::new(text).font(theme::small()).color(color));
             }
 
-            None => caption(
-                ui,
-                "Themes and remote control take effect at once; the rest when applied.",
-            ),
+            None => {}
         }
 
         pressed

@@ -24,7 +24,7 @@ use reqwest::header::HeaderMap;
 use serde_json::Value;
 
 pub use self::auth::status as sign_in_status;
-pub use self::login::login;
+pub use self::login::{finish_with_address, is_waiting as sign_in_waiting, login};
 
 use self::auth::{Session, Tokens};
 use crate::openai_compat::stream::Lines;

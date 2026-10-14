@@ -84,7 +84,7 @@ class MainActivity : ComponentActivity() {
      *     adb shell am start -n dev.cortex.remote/.MainActivity \
      *         --es pair <code> --es submit <text> --ez allow true --es stage chat
      *
-     * `--es stage` is one of chat, memory, capabilities, phone, settings,
+     * `--es stage` is one of chat, memory, capabilities, phone, settings, trading, insights,
  * themes or desktops; `--es theme <name>` puts a theme in use.
  * `--ez phone true` works with the agent on the phone instead of pairing,
      * and `--es address <url> --es model <name> --es key <key>` points it at
@@ -98,6 +98,11 @@ class MainActivity : ComponentActivity() {
 
         if (intent.getBooleanExtra("phone", false)) {
             model.core.usePhone()
+        }
+
+        // `--ez signin true` starts the ChatGPT sign-in.
+        if (intent.getBooleanExtra("signin", false)) {
+            model.core.signIn()
         }
 
         val code = intent.getStringExtra("pair")

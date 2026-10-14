@@ -52,6 +52,11 @@ impl Rehearsal {
         self.args.open_living
     }
 
+    /// The trading tab to start on, if any.
+    pub fn opens_trading(&self) -> Option<&str> {
+        self.args.open_trading.as_deref()
+    }
+
     pub fn opens_settings(&self) -> bool {
         self.args.open_settings
     }

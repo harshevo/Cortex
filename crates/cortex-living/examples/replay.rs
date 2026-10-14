@@ -33,7 +33,10 @@ struct Score {
 
 impl Score {
     fn add(&mut self, expected: &[String], came: &[String]) {
-        let met = came.iter().filter(|percept| expected.contains(percept)).count() as f64;
+        let met = came
+            .iter()
+            .filter(|percept| expected.contains(percept))
+            .count() as f64;
 
         self.moments += 1;
         self.recall += met / came.len() as f64;
@@ -146,7 +149,10 @@ fn collect(folder: &Path, logs: &mut Vec<PathBuf>) {
 
         if path.is_dir() {
             collect(&path, logs);
-        } else if path.extension().is_some_and(|extension| extension == "jsonl") {
+        } else if path
+            .extension()
+            .is_some_and(|extension| extension == "jsonl")
+        {
             logs.push(path);
         }
     }

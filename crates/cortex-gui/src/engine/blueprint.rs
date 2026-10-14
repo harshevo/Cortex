@@ -143,7 +143,7 @@ async fn provider_key(launch: &Launch) -> Option<String> {
         .flatten()
 }
 
-fn build_provider(settings: &Settings, api_key: Option<&str>) -> Result<Arc<dyn ModelProvider>> {
+pub(crate) fn build_provider(settings: &Settings, api_key: Option<&str>) -> Result<Arc<dyn ModelProvider>> {
     let current = settings.current();
 
     if current.model.trim().is_empty() {

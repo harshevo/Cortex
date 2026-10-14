@@ -338,16 +338,14 @@ private fun EmptyChat(onPhone: Boolean) {
 
         Text("What should Cortex do?", style = Type.title(22), color = colors.text)
 
-        Text(
-            if (onPhone) {
-                "It runs on this phone, in this chat's project, and asks before it changes anything. Keep the app open while it works."
-            } else {
-                "It runs on your computer, in this chat's project. You can leave: it carries on, and asks here before it changes anything."
-            },
-            style = Type.callout,
-            color = colors.textSecondary,
-            textAlign = TextAlign.Center,
-        )
+        if (!onPhone) {
+            Text(
+                "It runs on your computer and carries on if you leave.",
+                style = Type.callout,
+                color = colors.textSecondary,
+                textAlign = TextAlign.Center,
+            )
+        }
     }
 }
 

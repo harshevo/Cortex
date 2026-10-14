@@ -33,9 +33,11 @@ const ACCOUNT_CLAIM: &str = "https://api.openai.com/auth";
 /// A token this close to running out is replaced before it is used.
 const EXPIRY_MARGIN_SECONDS: u64 = 120;
 
-const NOT_SIGNED_IN: &str = "not signed in to ChatGPT: run `cortex login`";
+const NOT_SIGNED_IN: &str =
+    "not signed in to ChatGPT: sign in from the app's settings, or run `cortex login`";
 
-const SIGN_IN_EXPIRED: &str = "the ChatGPT sign-in has run out: run `cortex login`";
+const SIGN_IN_EXPIRED: &str =
+    "the ChatGPT sign-in has run out: sign in again from the app's settings, or run `cortex login`";
 
 #[derive(Clone)]
 pub struct Tokens {

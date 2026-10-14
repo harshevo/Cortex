@@ -165,7 +165,9 @@ impl CortexApp {
             .or_else(|| settings.projects.first().cloned())
             .unwrap_or_else(|| scratch.clone());
 
-        let view = if rehearsal.opens_living() {
+        let view = if rehearsal.opens_trading().is_some() {
+            View::Trading
+        } else if rehearsal.opens_living() {
             View::Living
         } else if rehearsal.opens_memory() {
             View::MemorySpace
@@ -219,6 +221,10 @@ impl CortexApp {
             requested_delete: None,
             pending_settings: None,
         };
+
+        if let Some(tab) = app.rehearsal.opens_trading() {
+            app.trading.open_tab(tab);
+        }
 
         app.refresh_sessions();
         app.launch(true);
@@ -1200,7 +1206,7 @@ impl CortexApp {
                 View::Conversation => self.conversation(ui),
                 View::MemorySpace => self.memory_space(ui),
                 View::Living => self.living_space(ui),
-                View::Trading => crate::views::trading::show(ui, &mut self.trading),
+                View::Trading => crate::views::trading::show(ui, &mut self.trading, &self.settings),
                 View::Insights => crate::views::insights::show(ui, &mut self.insights),
                 View::Settings => self.settings_page(ui),
             });
@@ -1499,7 +1505,9 @@ impl CortexApp {
     }
 
     pub(crate) fn render_pane(&mut self, ui: &mut egui::Ui) {
-        if self.view != View::Settings {
+        // The composer belongs to the chat; trading and insights have
+        // their own controls.
+        if !matches!(self.view, View::Settings | View::Trading | View::Insights) {
             self.footer(ui);
         }
         self.centre(ui);

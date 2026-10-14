@@ -14,6 +14,9 @@
 //!   them and three baselines on the held-out last part, and gives a
 //!   verdict that is "no edge" unless the evidence is strong.
 //!
+//! - [`path`]: the next ten candles from the liquid, the dendritic and
+//!   the spiking network ([`spiking`]), each measured on held-out bars.
+//!
 //! - [`desk`]: one series being looked at by an app, analysed on a
 //!   thread of its own.
 //!
@@ -31,8 +34,11 @@ pub mod cfc;
 pub mod desk;
 mod error;
 pub mod features;
+pub mod path;
 pub mod regime;
+pub mod ridge;
 pub mod rng;
+pub mod spiking;
 pub mod stats;
 pub mod synthetic;
 
@@ -47,4 +53,7 @@ pub use bars::{Bar, Parsed, parse_csv, parse_time};
 pub use cfc::EpochLoss;
 pub use desk::{Candle, Desk, Status};
 pub use error::Error;
+pub use path::{
+    Forecaster, Net, NetMetrics, Path, PathReport, PathSettings, PredictedCandle, STEPS, StepScore,
+};
 pub use regime::{Account, Expectation, Growth, ImaginedStep};

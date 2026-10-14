@@ -12,6 +12,7 @@ members = [
     "crates/cortex-brain",
     "crates/cortex-living",
     "crates/cortex-liquid",
+    "crates/cortex-market",
     "crates/cortex-tools",
     "crates/cortex-skills",
     "crates/cortex-eval",
@@ -37,6 +38,7 @@ default-members = [
     "crates/cortex-brain",
     "crates/cortex-living",
     "crates/cortex-liquid",
+    "crates/cortex-market",
     "crates/cortex-tools",
     "crates/cortex-skills",
     "crates/cortex-eval",
@@ -60,6 +62,7 @@ cortex-router = { path = "crates/cortex-router" }
 cortex-brain = { path = "crates/cortex-brain" }
 cortex-living = { path = "crates/cortex-living" }
 cortex-liquid = { path = "crates/cortex-liquid" }
+cortex-market = { path = "crates/cortex-market" }
 cortex-cli = { path = "crates/cortex-cli" }
 cortex-tools = { path = "crates/cortex-tools" }
 cortex-skills = { path = "crates/cortex-skills" }
@@ -88,4 +91,8 @@ toml = "0.8"
 opt-level = 2
 
 [profile.dev.package.cortex-brain]
+opt-level = 2
+
+# Training the trading networks unoptimised takes many times longer.
+[profile.dev.package.cortex-liquid]
 opt-level = 2

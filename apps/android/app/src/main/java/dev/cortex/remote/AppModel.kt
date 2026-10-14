@@ -83,18 +83,29 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
         // The ChatGPT sign-in page, for the activity to show.
         override fun openAddress(address: String) {
-            main.post { signInAddress = address }
+            main.post {
+                signInAddress = address
+                lastSignInAddress = address
+            }
         }
     }
 
+    /** The folder the core keeps everything in, records of use among it. */
+    val folder: String = RestWorker.folder(application)
+
     val core: Cortex = Cortex(
-        RestWorker.folder(application),
+        folder,
         Build.MODEL ?: "Android phone",
         ears,
     )
 
     /** The theme and the size of the text. */
     val look = Look(application)
+
+    private val tradingDesk = lazy { TradingDesk(folder) }
+
+    /** The market on the Trading screen. Made when that screen first opens. */
+    val trading: TradingDesk by tradingDesk
 
     /** The pictures sent with instructions, made small and kept for a while. */
     val pictures = Pictures(core)
@@ -108,6 +119,9 @@ class AppModel(application: Application) : AndroidViewModel(application) {
 
     /** A page waiting to be shown, taken by the activity. */
     var signInAddress: String? by mutableStateOf(null)
+
+    /** The sign-in page last shown, to show again. */
+    var lastSignInAddress: String? by mutableStateOf(null)
 
     val settings = mutableStateMapOf<String, SettingsView>()
     val memory = mutableStateMapOf<String, MemoryView>()
@@ -225,6 +239,8 @@ class AppModel(application: Application) : AndroidViewModel(application) {
         closed = true
 
         main.removeCallbacksAndMessages(null)
+
+        if (tradingDesk.isInitialized()) trading.close()
 
         // Stopping the core waits for its threads: not on the main one.
         fetcher.execute { core.close() }

@@ -139,7 +139,8 @@ fn a_branch_that_stops_being_right_is_weakened_and_removed() {
 
     assert!(
         network.weight("runs: cargo test", "result: worked") < learned * 0.2,
-        "{learned} {:#?}", network.explain("result: worked")
+        "{learned} {:#?}",
+        network.explain("result: worked")
     );
     assert!(network.weight("runs: cargo test", "result: failed") > 0.5);
     assert!(network.meters().disconnected > 0);
@@ -216,8 +217,16 @@ fn news_reaches_what_came_before_it() {
         moment(&mut network, &["checks: failed"]);
     }
 
-    assert!(network.value("file: fees.rs") > 0.2, "{}", network.value("file: fees.rs"));
-    assert!(network.value("file: tax.rs") < -0.2, "{}", network.value("file: tax.rs"));
+    assert!(
+        network.value("file: fees.rs") > 0.2,
+        "{}",
+        network.value("file: fees.rs")
+    );
+    assert!(
+        network.value("file: tax.rs") < -0.2,
+        "{}",
+        network.value("file: tax.rs")
+    );
 }
 
 #[test]
@@ -259,8 +268,9 @@ fn it_finds_the_way_back_from_a_goal() {
 
     assert!(last.contains(&"runs: cargo test".to_string()), "{plan:?}");
     assert!(
-        plan[plan.len() - 2].iter().any(|label| label.contains("fees.rs")
-            || label == "does: edit_file"),
+        plan[plan.len() - 2]
+            .iter()
+            .any(|label| label.contains("fees.rs") || label == "does: edit_file"),
         "{plan:?}"
     );
 

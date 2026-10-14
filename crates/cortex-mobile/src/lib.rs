@@ -14,8 +14,11 @@
 //! told through [`Listener`] when there is something new to fetch.
 
 mod driver;
+mod insights;
 mod local;
 mod model;
+mod market;
+mod trading;
 mod view;
 
 use std::path::{Path, PathBuf};
@@ -29,7 +32,10 @@ use cortex_remote::wire::{ChatUp, Up};
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
+pub use insights::*;
 pub use model::Change;
+pub use market::*;
+pub use trading::*;
 pub use view::*;
 
 use driver::Intent;
@@ -375,6 +381,13 @@ impl Cortex {
 
             shared.tell(vec![Change::State]);
         });
+    }
+
+    /// Finishes the ChatGPT sign-in with the address the browser ended
+    /// on, for when it could not come back to the app by itself. Returns
+    /// false when no sign-in is waiting.
+    pub fn finish_sign_in(&self, address: String) -> bool {
+        cortex_providers::codex::finish_with_address(&address)
     }
 
     /// Forgets the ChatGPT sign-in kept on this phone.

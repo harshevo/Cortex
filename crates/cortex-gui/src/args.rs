@@ -61,6 +61,11 @@ pub struct RehearsalArgs {
     #[arg(long, hide = true)]
     pub select_newest: bool,
 
+    /// Start on the trading view, on this tab: chart, forecast, outcomes
+    /// or metrics.
+    #[arg(long, hide = true)]
+    pub open_trading: Option<String>,
+
     /// Start on the settings page.
     #[arg(long, hide = true)]
     pub open_settings: bool,
