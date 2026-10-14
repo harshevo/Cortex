@@ -1,4 +1,5 @@
-//! Asking the person at the window before the agent changes anything.
+//! Asking the person before the agent changes anything: at the window,
+//! or on a paired phone, whichever answers first.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -6,29 +7,30 @@ use async_trait::async_trait;
 use cortex_core::{ApprovalRequest, Approver};
 use tokio::sync::oneshot;
 
+pub use cortex_remote::wire::Decision;
+
 use super::{Outbox, Update};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Decision {
-    Allow,
-
-    /// Allow this and everything after it, for the rest of the session.
-    AlwaysAllow,
-
-    Deny,
-}
+use crate::remote::{self, Reply};
 
 /// A question shown in the conversation until it is answered.
 pub struct PendingApproval {
     pub request: ApprovalRequest,
 
-    reply: oneshot::Sender<Decision>,
+    /// The number a phone knows the question by. Zero when no phone can
+    /// be asked.
+    pub id: u64,
+
+    reply: Reply,
 }
 
 impl PendingApproval {
     pub fn answer(self, decision: Decision) {
-        // The tool is gone only if its run was dropped.
-        let _ = self.reply.send(decision);
+        self.reply.answer(decision);
+    }
+
+    /// Answered elsewhere, or its run is over.
+    pub fn answered(&self) -> bool {
+        self.reply.answered()
     }
 }
 
@@ -46,6 +48,18 @@ impl WindowApprover {
     }
 }
 
+/// Takes the question back from the phones when it is answered, and
+/// also when its run is abandoned while it waits.
+struct Asked(u64);
+
+impl Drop for Asked {
+    fn drop(&mut self) {
+        if let Some(bridge) = remote::bridge() {
+            bridge.settle(self.0);
+        }
+    }
+}
+
 #[async_trait]
 impl Approver for WindowApprover {
     async fn approve(&self, request: &ApprovalRequest) -> bool {
@@ -53,10 +67,18 @@ impl Approver for WindowApprover {
             return true;
         }
 
-        let (reply, answer) = oneshot::channel();
+        let (sender, answer) = oneshot::channel();
+        let reply = Reply::new(sender);
+
+        let id = remote::bridge()
+            .map(|bridge| bridge.ask(self.outbox.chat(), &reply))
+            .unwrap_or(0);
+
+        let _asked = Asked(id);
 
         self.outbox.send(Update::ApprovalNeeded(PendingApproval {
             request: request.clone(),
+            id,
             reply,
         }));
 

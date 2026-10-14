@@ -91,8 +91,63 @@ fn encode(picture: DynamicImage) -> Result<(&'static str, Vec<u8>)> {
     Ok(("image/jpeg", bytes.into_inner()))
 }
 
-/// `image` as something to draw. It is decoded once and kept; `None` if
-/// it cannot be decoded.
+/// Most pictures kept decoded for drawing. Each is up to
+/// [`THUMBNAIL_EDGE`] square, about 1.6 MB of texture.
+const MAX_TEXTURES: usize = 48;
+
+/// The pictures decoded for drawing, and when each was last drawn. Past
+/// [`MAX_TEXTURES`] the one drawn longest ago is let go, which frees its
+/// texture; it is decoded again if it is scrolled back to.
+#[derive(Default)]
+struct Textures {
+    kept: std::collections::HashMap<egui::Id, (Option<egui::TextureHandle>, u64)>,
+    clock: u64,
+}
+
+impl Textures {
+    fn get(&mut self, id: egui::Id) -> Option<Option<egui::TextureHandle>> {
+        self.clock += 1;
+
+        let clock = self.clock;
+
+        self.kept.get_mut(&id).map(|(texture, used)| {
+            *used = clock;
+
+            texture.clone()
+        })
+    }
+
+    fn keep(&mut self, id: egui::Id, texture: Option<egui::TextureHandle>) {
+        self.clock += 1;
+
+        self.kept.insert(id, (texture, self.clock));
+
+        while self.kept.len() > MAX_TEXTURES {
+            let oldest = self
+                .kept
+                .iter()
+                .min_by_key(|(_, (_, used))| *used)
+                .map(|(id, _)| *id);
+
+            match oldest {
+                Some(oldest) => self.kept.remove(&oldest),
+                None => break,
+            };
+        }
+    }
+}
+
+fn textures(context: &egui::Context) -> std::sync::Arc<std::sync::Mutex<Textures>> {
+    context.data_mut(|data| {
+        data.get_temp_mut_or_default::<std::sync::Arc<std::sync::Mutex<Textures>>>(egui::Id::new(
+            "attachment textures",
+        ))
+        .clone()
+    })
+}
+
+/// `image` as something to draw. It is decoded once and kept while it is
+/// among the pictures drawn most recently; `None` if it cannot be decoded.
 pub fn texture(context: &egui::Context, image: &Image) -> Option<egui::TextureHandle> {
     // Hashing megabytes every frame would be slow; the length and both
     // ends tell pictures apart well enough.
@@ -105,14 +160,19 @@ pub fn texture(context: &egui::Context, image: &Image) -> Option<egui::TextureHa
         &data[data.len() - edge..],
     ));
 
-    if let Some(kept) = context.data(|data| data.get_temp::<Option<egui::TextureHandle>>(id)) {
+    let store = textures(context);
+    let mut store = store
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    if let Some(kept) = store.get(id) {
         return kept;
     }
 
     let texture = decode(image)
         .map(|pixels| context.load_texture("attachment", pixels, egui::TextureOptions::LINEAR));
 
-    context.data_mut(|data| data.insert_temp(id, texture.clone()));
+    store.keep(id, texture.clone());
 
     texture
 }
@@ -192,6 +252,45 @@ mod tests {
             STANDARD.decode(&attachment.image.data).unwrap(),
             std::fs::read(&path).unwrap()
         );
+    }
+
+    #[test]
+    fn only_the_pictures_drawn_most_recently_stay_decoded() {
+        let context = egui::Context::default();
+
+        let picture = |shade: u8| {
+            let mut bytes = Cursor::new(Vec::new());
+
+            image::RgbImage::from_pixel(8, 8, image::Rgb([shade, 0, 0]))
+                .write_to(&mut bytes, ImageFormat::Png)
+                .unwrap();
+
+            Image {
+                media_type: "image/png".to_string(),
+                data: STANDARD.encode(bytes.into_inner()),
+            }
+        };
+
+        let first = picture(0);
+        let kept = texture(&context, &first).unwrap();
+
+        for shade in 1..=MAX_TEXTURES as u8 + 10 {
+            texture(&context, &picture(shade));
+
+            // The first is drawn now and then, so it is never the oldest.
+            if shade % 8 == 0 {
+                assert_eq!(texture(&context, &first).unwrap().id(), kept.id());
+            }
+        }
+
+        let store = textures(&context);
+        let store = store.lock().unwrap();
+
+        assert_eq!(store.kept.len(), MAX_TEXTURES);
+
+        drop(store);
+
+        assert_eq!(texture(&context, &first).unwrap().id(), kept.id());
     }
 
     #[test]

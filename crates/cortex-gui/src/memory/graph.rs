@@ -51,7 +51,7 @@ impl Region {
             Self::Episodic => "Episodic",
             Self::LongTerm => "Long-term",
             Self::Intuition => "Intuition",
-            Self::Neural => "Fly network",
+            Self::Neural => "Dendritic network",
         }
     }
 }
@@ -296,6 +296,11 @@ pub struct Graph {
     pub links: Vec<Link>,
 }
 
+/// Neurons and synapses of the dendritic network drawn at most. All of
+/// it learns whichever are drawn.
+const MAX_NEURONS_SHOWN: usize = 320;
+const MAX_SYNAPSES_SHOWN: usize = 1_200;
+
 impl Graph {
     pub fn add_activity(&mut self, activity: &crate::brain::activity::ActivityView) {
         if activity.intuition.total_neurons > 0 {
@@ -372,38 +377,66 @@ impl Graph {
                 });
             }
         }
-        let trace = &activity.trace;
-        let Some(frame) = trace.frames.get(activity.frame()) else {
+        let Some(network) = &activity.network else {
             return;
         };
+
+        // The most lately fired, so that what is drawn is what is in use.
+        let mut shown: Vec<&cortex_living::NeuronView> = network.neurons.iter().collect();
+
+        shown.sort_by_key(|neuron| std::cmp::Reverse((neuron.last_fired, neuron.fired)));
+        shown.truncate(MAX_NEURONS_SHOWN);
+
         let first = self.nodes.len();
-        for (index, id) in trace.neuron_ids.iter().enumerate() {
+
+        let place: std::collections::HashMap<cortex_living::Id, usize> = shown
+            .iter()
+            .enumerate()
+            .map(|(index, neuron)| (neuron.id, first + index))
+            .collect();
+
+        for neuron in &shown {
+            let kind = match neuron.kind {
+                cortex_living::Kind::Sense => "met in the world",
+                cortex_living::Kind::Assembly => "grown for things that fire together",
+                cortex_living::Kind::Own => "one of the network's own states",
+            };
+
             self.nodes.push(Node {
-                key: NodeKey::Neuron(*id),
+                key: NodeKey::Neuron(neuron.id as u32),
                 region: Region::Neural,
-                title: format!("Neuron {id} ({})", trace.populations[index]),
+                title: neuron.label.clone(),
                 facts: vec![
-                    format!("Voltage after reset: {:.4}", frame.voltage[index]),
+                    format!("A neuron {kind}, with {} branches.", neuron.segments),
                     format!(
-                        "Spike: {} · simulation tick {}",
-                        frame.spikes[index],
-                        activity.frame()
+                        "Fired {} times, last in moment {} of {}.",
+                        neuron.fired, neuron.last_fired, network.moment
                     ),
-                    "Position is a display layout, not measured anatomy.".into(),
+                    format!(
+                        "What followed it has turned out {:+.2} (from -1 to 1).",
+                        neuron.value
+                    ),
+                    "Position is a display layout, not anatomy.".into(),
                 ],
-                weight: if frame.spikes[index] {
-                    1.0
-                } else {
-                    0.15 + frame.voltage[index].clamp(0.0, 1.0) * 0.5
-                },
-                troubled: false,
+                weight: (0.15 + neuron.glow * 0.85).clamp(0.0, 1.0),
+                troubled: neuron.value < -0.3,
             });
         }
+
+        let mut strongest: Vec<&(cortex_living::Id, cortex_living::Id, f32)> = network
+            .synapses
+            .iter()
+            .filter(|(from, to, _)| place.contains_key(from) && place.contains_key(to))
+            .collect();
+
+        strongest.sort_by(|left, right| right.2.total_cmp(&left.2));
+        strongest.truncate(MAX_SYNAPSES_SHOWN);
+
         self.links
-            .extend(trace.synapses.iter().map(|(a, b, weight)| Link {
-                a: first + a,
-                b: first + b,
-                tie: Tie::Synapse(*weight),
+            .extend(strongest.into_iter().map(|(from, to, weight)| Link {
+                a: place[from],
+                b: place[to],
+                tie: Tie::Synapse((weight * 4.0).round() as i16),
             }));
     }
 

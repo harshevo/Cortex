@@ -24,5 +24,9 @@ tokio.workspace = true
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# On Windows the two pipes are handles the browser inherits.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation"] }
+
 [dev-dependencies]
 tempfile.workspace = true

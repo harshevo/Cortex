@@ -2,7 +2,6 @@
 //! see what they would have learned and said without calling a model.
 //!
 //!     cargo run --release -p cortex-brain --example replay -- eval/results
-//!     cargo run --release -p cortex-brain --example replay -- eval/results eval/sources/fly-brain/fly.csv
 //!
 //! A run's reward is whether the eval scored it solved, taken from the
 //! `report.json` beside its trajectory, because most saved runs had no
@@ -24,7 +23,7 @@ use std::time::Instant;
 use cortex_brain::learner::{self, Learner};
 use cortex_brain::situation::FEATURES;
 use cortex_brain::{
-    Action, Brain, BrainConfig, Controller, DirectEncoder, Encoder, FlyBrainEncoder, Situation,
+    Action, Controller, DirectEncoder, Encoder, Situation,
 };
 use cortex_core::{Adviser, Event, StopReason, TrajectorySink};
 use serde_json::Value;
@@ -42,7 +41,6 @@ fn main() {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
 
     let results = PathBuf::from(arguments.first().map_or("eval/results", String::as_str));
-    let connectome = arguments.get(1).map(PathBuf::from);
 
     let runs = load_runs(&results);
 
@@ -56,18 +54,9 @@ fn main() {
         results.display()
     );
 
-    let mut encoders: Vec<Box<dyn Encoder>> = vec![
-        Box::new(DirectEncoder),
-        Box::new(FlyBrainEncoder::new(Brain::generate(BrainConfig::fly()))),
-    ];
+    let encoders: Vec<Box<dyn Encoder>> = vec![Box::new(DirectEncoder)];
 
-    if let Some(path) = &connectome {
-        let brain = Brain::from_file(BrainConfig::measured(), path).expect("cannot read the file");
-
-        encoders.push(Box::new(FlyBrainEncoder::new(brain)));
-    }
-
-    let names = ["17 features", "fly brain, generated", "fly brain, measured"];
+    let names = ["17 features"];
 
     for (encoder, name) in encoders.into_iter().zip(names) {
         println!("\n== {name}");

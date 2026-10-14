@@ -372,7 +372,8 @@ fn row(
             palette::surface()
         };
 
-        ui.painter().rect_filled(rect, CornerRadius::same(5), fill);
+        ui.painter()
+            .rect_filled(rect, CornerRadius::same(crate::theme::radius::M), fill);
     }
 
     let left = rect.left() + 8.0 + depth as f32 * INDENT;
@@ -513,8 +514,11 @@ fn close_button(ui: &mut Ui) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
 
     if response.hovered() {
-        ui.painter()
-            .rect_filled(rect, CornerRadius::same(6), palette::raised());
+        ui.painter().rect_filled(
+            rect,
+            CornerRadius::same(crate::theme::radius::M),
+            palette::raised(),
+        );
     }
 
     let color = if response.hovered() {

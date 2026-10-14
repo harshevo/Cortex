@@ -203,7 +203,7 @@ pub fn prune(conversation: &mut [Message], config: &PruneConfig) -> PruneStats {
 
 /// A picture is billed by its size on screen, not its bytes; this is about
 /// what a full-size one costs.
-const IMAGE_CHARS: usize = 6_000;
+pub(crate) const IMAGE_CHARS: usize = 6_000;
 
 /// Where one tool result sits in the conversation.
 #[derive(Clone, Copy)]

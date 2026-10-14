@@ -84,6 +84,31 @@ impl TrajectorySink for ConsoleSink {
                 );
             }
 
+            Event::ContextCompacted {
+                messages_replaced,
+                chars_before,
+                chars_after,
+                ..
+            } => {
+                println!(
+                    "{DIM}  replaced the {messages_replaced} oldest messages with a summary ({} characters shorter){RESET}",
+                    chars_before.saturating_sub(*chars_after)
+                );
+            }
+
+            Event::ContextMeasured { .. } => {}
+
+            Event::ExperimentAssigned { held_out, .. } => {
+                if !held_out.is_empty() {
+                    println!(
+                        "{DIM}  held out of this run, to measure what they add: {}{RESET}",
+                        held_out.join(", ")
+                    );
+                }
+            }
+
+            Event::ContextWithheld { .. } => {}
+
             Event::ReviewRan {
                 requirements,
                 feedback,

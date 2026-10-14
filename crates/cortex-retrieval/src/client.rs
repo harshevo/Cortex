@@ -2,6 +2,7 @@
 
 use std::time::Duration;
 
+use cortex_core::services::Service;
 use serde::Deserialize;
 use serde_json::json;
 use thiserror::Error;
@@ -15,6 +16,9 @@ pub const DEFAULT_URL: &str = "http://127.0.0.1:8765";
 const BATCH_SIZE: usize = 48;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// How long a service that was just started is given to load its model.
+const START_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Error)]
 pub enum EmbeddingError {
@@ -75,6 +79,54 @@ impl EmbeddingClient {
             .json()
             .await
             .map_err(|error| EmbeddingError::Service(error.to_string()))
+    }
+
+    /// Starts the service on this machine when it is not answering, and
+    /// waits until its model is loaded. The service outlives this
+    /// process, so only the first use waits.
+    pub async fn wake(&self) -> Result<Health, EmbeddingError> {
+        let down = match self.health().await {
+            Ok(health) => return Ok(health),
+            Err(down) => down,
+        };
+
+        let address = self.url.strip_prefix("http://").unwrap_or(&self.url);
+
+        let port = match address.rsplit_once(':') {
+            Some(("127.0.0.1" | "localhost", port)) => port.parse::<u16>().ok(),
+            _ => None,
+        };
+
+        // A service somewhere else is not ours to start.
+        let Some(port) = port else {
+            return Err(down);
+        };
+
+        let unreachable = |reason: String| EmbeddingError::Unreachable {
+            url: self.url.clone(),
+            reason,
+        };
+
+        tokio::task::spawn_blocking(move || Service::Embedding.start_detached(port))
+            .await
+            .map_err(|error| unreachable(error.to_string()))?
+            .map_err(unreachable)?;
+
+        let started = tokio::time::Instant::now();
+
+        while started.elapsed() < START_TIMEOUT {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+
+            if let Ok(health) = self.health().await {
+                return Ok(health);
+            }
+        }
+
+        Err(unreachable(format!(
+            "it was started and did not answer within {} seconds; see \
+             ~/.cortex/logs/embedding-service.log",
+            START_TIMEOUT.as_secs()
+        )))
     }
 
     pub async fn embed_query(&self, query: &str) -> Result<Vec<f32>, EmbeddingError> {

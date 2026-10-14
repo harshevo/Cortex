@@ -40,8 +40,13 @@ pub struct Launch {
 
     pub settings: Settings,
 
-    /// The provider's key, already looked up.
+    /// The provider's key, when it is already known.
     pub api_key: Option<String>,
+
+    /// With no key given, look one up: in the keychain, then in the
+    /// provider's environment variable. This is done where the agent is
+    /// built, not on the window's thread.
+    pub look_up_key: bool,
 
     /// Use the scripted stand-in model in a throwaway project instead.
     pub demo: bool,
@@ -85,6 +90,10 @@ pub enum Command {
     /// Get the project ready ahead of any task: parse it, embed it, and
     /// have the model write the description every later task is shown.
     Prepare,
+
+    /// Replace the older part of the conversation with a summary the
+    /// model writes. Only between runs.
+    Compact,
 }
 
 /// What the agent tells the window.
@@ -161,6 +170,9 @@ pub enum Update {
 
     /// The engine's memory could not be read.
     MemoryFailed(String),
+
+    /// A compaction ended: what came of it, and whether it failed.
+    Compacted((String, bool)),
 }
 
 /// Facts about the agent in use.
@@ -181,6 +193,9 @@ pub struct Info {
 pub struct Outbox {
     updates: Sender<Update>,
     window: egui::Context,
+
+    /// The name paired phones know this chat by.
+    chat: Arc<str>,
 }
 
 impl Outbox {
@@ -190,7 +205,13 @@ impl Outbox {
         self.window.request_repaint();
     }
 
+    pub fn chat(&self) -> &str {
+        &self.chat
+    }
+
     pub fn send(&self, update: Update) {
+        crate::remote::mirror(&self.chat, &update);
+
         // The receiver is gone only when the window has closed.
         let _ = self.updates.send(update);
 
@@ -250,7 +271,12 @@ impl Engine {
         let outbox = Outbox {
             updates: update_sender,
             window: window.clone(),
+            chat: member.id.as_str().into(),
         };
+
+        if let Some(bridge) = crate::remote::bridge() {
+            bridge.join(&member.id, commands.clone());
+        }
 
         runtime.spawn(worker::run(
             command_receiver,
@@ -317,6 +343,11 @@ impl Engine {
         let _ = self.commands.send(Command::Prepare);
     }
 
+    /// Replaces the older part of the conversation with a summary.
+    pub fn compact(&self) {
+        let _ = self.commands.send(Command::Compact);
+    }
+
     /// Everything the agent has reported since the last call.
     pub fn updates(&self) -> impl Iterator<Item = Update> + '_ {
         self.updates.try_iter()
@@ -325,6 +356,10 @@ impl Engine {
 
 impl Drop for Engine {
     fn drop(&mut self) {
+        if let Some(bridge) = crate::remote::bridge() {
+            bridge.leave(&self.member.id);
+        }
+
         self.member.close();
         let _ = self.commands.send(Command::Stop);
     }

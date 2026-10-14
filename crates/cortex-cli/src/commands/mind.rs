@@ -11,12 +11,14 @@ use crate::args::MindArgs;
 pub fn execute(args: MindArgs) -> Result<ExitCode> {
     let mind = Mind::new(&args.mind_url, "");
 
-    let Some(report) = mind.health() else {
-        bail!(
-            "the mind's service at {} is not running. It is started by `cortex run` and `cortex \
-             chat`, or from the brain project with `python3 -m cortex.brain.server`",
+    // Started here when it is not running.
+    let report = match mind.wake() {
+        Ok(report) => report,
+
+        Err(reason) => bail!(
+            "the mind's service at {} is not running: {reason}",
             args.mind_url
-        );
+        ),
     };
 
     if args.json {

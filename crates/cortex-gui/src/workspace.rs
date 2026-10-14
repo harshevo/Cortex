@@ -46,6 +46,9 @@ pub struct Workspace {
     /// them is on screen now: what the bar's arrows step through.
     visited: Vec<u64>,
     position: usize,
+
+    /// When paired phones were last told the state, in the window's time.
+    told_phones: f64,
 }
 
 impl Workspace {
@@ -61,11 +64,38 @@ impl Workspace {
             minimized: Vec::new(),
             visited: vec![1],
             position: 0,
+            told_phones: f64::NEG_INFINITY,
         };
         if split {
             workspace.choose_split(Split::Columns);
         }
         workspace
+    }
+
+    /// Keeps paired phones up to date on the chats, projects and
+    /// settings. Looked at a few times a second: building the list every
+    /// frame would be wasted work.
+    fn tell_phones(&mut self, now: f64) {
+        const EVERY: f64 = 0.4;
+
+        let Some(bridge) = crate::remote::bridge() else {
+            return;
+        };
+
+        if !matches!(bridge.hosting(), crate::remote::Hosting::On(_))
+            || now - self.told_phones < EVERY
+        {
+            return;
+        }
+
+        self.told_phones = now;
+
+        let active = self.index(self.active);
+
+        bridge.state(cortex_remote::wire::HostState {
+            chats: self.chats.iter().map(|(_, app)| app.chat_info()).collect(),
+            projects: self.chats[active].1.remote_projects(),
+        });
     }
 
     fn index(&self, id: u64) -> usize {
@@ -305,7 +335,7 @@ impl Workspace {
             egui::Frame::new()
                 .fill(palette::surface())
                 .stroke(Stroke::new(1.0, palette::border()))
-                .corner_radius(CornerRadius::same(8))
+                .corner_radius(CornerRadius::same(crate::theme::radius::L))
                 .inner_margin(egui::Margin::symmetric(8, 1))
                 .show(&mut row, |ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
@@ -314,14 +344,19 @@ impl Workspace {
                     if running {
                         icons::activity_dot(ui, dot.center());
                     } else {
-                        ui.painter().circle_filled(dot.center(), 3.0, palette::good());
+                        ui.painter()
+                            .circle_filled(dot.center(), 3.0, palette::good());
                     }
 
                     let text = egui::RichText::new(label)
                         .size(12.0)
                         .color(palette::text_secondary());
                     let name = ui
-                        .add(egui::Label::new(text).selectable(false).sense(Sense::click()))
+                        .add(
+                            egui::Label::new(text)
+                                .selectable(false)
+                                .sense(Sense::click()),
+                        )
                         .on_hover_cursor(egui::CursorIcon::PointingHand)
                         .on_hover_text(if running {
                             "Working. Click to bring it back"
@@ -330,8 +365,13 @@ impl Workspace {
                         });
 
                     if name.clicked()
-                        || icons::button(ui, Icon::Maximize, "Bring it back beside this chat", false)
-                            .clicked()
+                        || icons::button(
+                            ui,
+                            Icon::Maximize,
+                            "Bring it back beside this chat",
+                            false,
+                        )
+                        .clicked()
                     {
                         restored = Some(id);
                     }
@@ -367,6 +407,7 @@ impl eframe::App for Workspace {
         if history_changed {
             self.chats[active].1.refresh_history();
         }
+        self.tell_phones(ui.input(|input| input.time));
         if ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::B)) {
             self.chats[active].1.toggle_sidebar();
         }

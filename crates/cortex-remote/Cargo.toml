@@ -1,0 +1,25 @@
+[package]
+name = "cortex-remote"
+description = "Remote control: the conversation model, the messages a phone and the desktop app exchange, and the encrypted link between them."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cortex-core.workspace = true
+
+anyhow.workspace = true
+iroh = "1.3"
+
+# Not used directly. 0.2.190 stopped declaring, for iOS, the routing
+# definitions iroh's network watcher needs, so the phone core does not
+# build with it. Drop the pin once a later release builds for iOS.
+libc = "=0.2.189"
+base64 = "0.22"
+rand = "0.9"
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

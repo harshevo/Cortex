@@ -9,6 +9,7 @@
 //! is back in full, since the log keeps what the tools returned.
 
 use crate::briefing::{self, Briefing};
+use crate::compact;
 use crate::inbox;
 use crate::message::{Block, Image, Message, Role, ToolResult};
 use crate::provider::StopReason;
@@ -83,12 +84,7 @@ impl Replay {
                 stop_reason,
                 ..
             } => {
-                self.open_task();
-                self.send_answer();
-
-                if let Some(feedback) = self.feedback.take() {
-                    self.conversation.push(Message::user_text(feedback));
-                }
+                self.catch_up();
 
                 self.conversation.push(message.clone());
 
@@ -135,6 +131,14 @@ impl Replay {
                 }
             }
 
+            // It replaced the conversation as it stood, with everything
+            // that was about to be sent already in it.
+            Event::ContextCompacted { kept, text, .. } => {
+                self.catch_up();
+
+                compact::apply(&mut self.conversation, *kept, text);
+            }
+
             Event::RunFinished { .. } => self.settle(),
 
             Event::RunResumed { .. }
@@ -142,10 +146,26 @@ impl Replay {
             | Event::ToolStarted { .. }
             | Event::ContextPruned { .. }
             | Event::ContextMasked { .. }
+            | Event::ContextMeasured { .. }
+            | Event::ExperimentAssigned { .. }
+            // Held out: the model never saw it.
+            | Event::ContextWithheld { .. }
             | Event::LessonsLearned { .. }
             | Event::AttemptStarted { .. }
             | Event::AttemptFinished { .. }
             | Event::AttemptChosen { .. } => {}
+        }
+    }
+
+    /// Brings the conversation up to what the next request holds: the
+    /// instruction, the results of the last calls, and what the gate
+    /// sent back.
+    fn catch_up(&mut self) {
+        self.open_task();
+        self.send_answer();
+
+        if let Some(feedback) = self.feedback.take() {
+            self.conversation.push(Message::user_text(feedback));
         }
     }
 

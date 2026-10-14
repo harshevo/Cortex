@@ -52,7 +52,7 @@ impl Tool for Shell {
                 "properties": {
                     "command": {
                         "type": "string",
-                        "description": "The command line to run with `sh -c`.",
+                        "description": process::shell_note(),
                     },
                     "timeout_seconds": {
                         "type": "integer",

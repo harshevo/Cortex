@@ -26,7 +26,15 @@ const MAC_APPLICATIONS: [&str; 5] = [
     "Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
 ];
 
-const PROGRAM_NAMES: [&str; 7] = [
+const WINDOWS_PROGRAMS: [&str; 4] = [
+    "Google/Chrome/Application/chrome.exe",
+    "Chromium/Application/chrome.exe",
+    "Microsoft/Edge/Application/msedge.exe",
+    "BraveSoftware/Brave-Browser/Application/brave.exe",
+];
+
+const PROGRAM_NAMES: [&str; 8] = [
+    "msedge",
     "google-chrome",
     "google-chrome-stable",
     "chromium",
@@ -90,7 +98,7 @@ pub fn find_program() -> Result<PathBuf, ToolError> {
         )));
     }
 
-    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let home = std::env::home_dir();
 
     let folders = [
         Some(PathBuf::from("/Applications")),
@@ -102,11 +110,23 @@ pub fn find_program() -> Result<PathBuf, ToolError> {
         .flatten()
         .flat_map(|folder| MAC_APPLICATIONS.map(|application| folder.join(application)));
 
+    // Where Windows keeps programs. Edge is part of Windows itself, so
+    // one of these is there on any machine.
+    let installed = ["ProgramFiles", "ProgramFiles(x86)", "LocalAppData"]
+        .into_iter()
+        .filter(|_| cfg!(windows))
+        .filter_map(std::env::var_os)
+        .flat_map(|folder| WINDOWS_PROGRAMS.map(|program| PathBuf::from(&folder).join(program)));
+
     let on_path = std::env::var_os("PATH")
         .map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
         .unwrap_or_default()
         .into_iter()
-        .flat_map(|folder| PROGRAM_NAMES.map(|name| folder.join(name)));
+        .flat_map(|folder| {
+            PROGRAM_NAMES.map(|name| folder.join(format!("{name}{}", std::env::consts::EXE_SUFFIX)))
+        });
+
+    let applications = applications.chain(installed);
 
     applications
         .chain(on_path)
@@ -119,32 +139,9 @@ pub fn find_program() -> Result<PathBuf, ToolError> {
         })
 }
 
-/// Starts the browser at `program`. With `show_window` it opens a window
-/// the person can watch; otherwise it runs out of sight.
-#[cfg(unix)]
-pub fn launch(program: &Path, show_window: bool, on_event: OnEvent) -> Result<Chrome, ToolError> {
-    use std::os::fd::{AsRawFd, OwnedFd};
+/// The browser's command line, apart from how it is handed its pipes.
+fn command(program: &Path, profile: &Path, show_window: bool) -> tokio::process::Command {
     use std::process::Stdio;
-
-    let failed =
-        |what: &str, error: std::io::Error| ToolError::Failed(format!("could not {what}: {error}"));
-
-    let profile = new_profile().map_err(|error| failed("make a folder for the browser", error))?;
-
-    let (browser_reads, we_write) =
-        std::io::pipe().map_err(|error| failed("open a pipe to the browser", error))?;
-    let (we_read, browser_writes) =
-        std::io::pipe().map_err(|error| failed("open a pipe to the browser", error))?;
-
-    // The browser expects its ends at descriptors 3 and 4. Moving ours well
-    // clear of those first means putting one in place cannot overwrite the
-    // other.
-    let browser_reads = lift(OwnedFd::from(browser_reads))
-        .map_err(|error| failed("prepare a pipe for the browser", error))?;
-    let browser_writes = lift(OwnedFd::from(browser_writes))
-        .map_err(|error| failed("prepare a pipe for the browser", error))?;
-
-    let (reads, writes) = (browser_reads.as_raw_fd(), browser_writes.as_raw_fd());
 
     let mut command = tokio::process::Command::new(program);
 
@@ -174,6 +171,38 @@ pub fn launch(program: &Path, show_window: bool, on_event: OnEvent) -> Result<Ch
     if !show_window {
         command.arg("--headless=new");
     }
+
+    command
+}
+
+fn failed(what: &str, error: std::io::Error) -> ToolError {
+    ToolError::Failed(format!("could not {what}: {error}"))
+}
+
+/// Starts the browser at `program`. With `show_window` it opens a window
+/// the person can watch; otherwise it runs out of sight.
+#[cfg(unix)]
+pub fn launch(program: &Path, show_window: bool, on_event: OnEvent) -> Result<Chrome, ToolError> {
+    use std::os::fd::{AsRawFd, OwnedFd};
+
+    let profile = new_profile().map_err(|error| failed("make a folder for the browser", error))?;
+
+    let (browser_reads, we_write) =
+        std::io::pipe().map_err(|error| failed("open a pipe to the browser", error))?;
+    let (we_read, browser_writes) =
+        std::io::pipe().map_err(|error| failed("open a pipe to the browser", error))?;
+
+    // The browser expects its ends at descriptors 3 and 4. Moving ours well
+    // clear of those first means putting one in place cannot overwrite the
+    // other.
+    let browser_reads = lift(OwnedFd::from(browser_reads))
+        .map_err(|error| failed("prepare a pipe for the browser", error))?;
+    let browser_writes = lift(OwnedFd::from(browser_writes))
+        .map_err(|error| failed("prepare a pipe for the browser", error))?;
+
+    let (reads, writes) = (browser_reads.as_raw_fd(), browser_writes.as_raw_fd());
+
+    let mut command = command(program, &profile, show_window);
 
     command.arg("about:blank");
 
@@ -211,7 +240,70 @@ pub fn launch(program: &Path, show_window: bool, on_event: OnEvent) -> Result<Ch
     })
 }
 
-#[cfg(not(unix))]
+/// Starts the browser at `program`. With `show_window` it opens a window
+/// the person can watch; otherwise it runs out of sight.
+///
+/// Windows has no numbered descriptors to put the pipes at. The browser
+/// is told the two handles by value instead, and inherits them.
+#[cfg(windows)]
+pub fn launch(program: &Path, show_window: bool, on_event: OnEvent) -> Result<Chrome, ToolError> {
+    use std::os::windows::io::AsRawHandle;
+
+    use windows_sys::Win32::Foundation::{HANDLE_FLAG_INHERIT, SetHandleInformation};
+
+    let profile = new_profile().map_err(|error| failed("make a folder for the browser", error))?;
+
+    let (browser_reads, we_write) =
+        std::io::pipe().map_err(|error| failed("open a pipe to the browser", error))?;
+    let (we_read, browser_writes) =
+        std::io::pipe().map_err(|error| failed("open a pipe to the browser", error))?;
+
+    let (reads, writes) = (browser_reads.as_raw_handle(), browser_writes.as_raw_handle());
+
+    for handle in [reads, writes] {
+        // SAFETY: both handles are open, and owned here until the
+        // browser has started.
+        let marked = unsafe { SetHandleInformation(handle as _, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) };
+
+        if marked == 0 {
+            return Err(failed(
+                "prepare a pipe for the browser",
+                std::io::Error::last_os_error(),
+            ));
+        }
+    }
+
+    let mut command = command(program, &profile, show_window);
+
+    command
+        .arg(format!(
+            "--remote-debugging-io-pipes={},{}",
+            reads as usize, writes as usize
+        ))
+        .arg("about:blank");
+
+    let child = command.spawn().map_err(|error| {
+        let _ = std::fs::remove_dir_all(&profile);
+
+        failed(
+            &format!("start the browser at {}", program.display()),
+            error,
+        )
+    })?;
+
+    // Ours to close: while a copy is open here, the browser going away
+    // would not show as the end of the pipe.
+    drop(browser_reads);
+    drop(browser_writes);
+
+    Ok(Chrome {
+        connection: Connection::open(we_write, we_read, on_event),
+        child,
+        profile,
+    })
+}
+
+#[cfg(not(any(unix, windows)))]
 pub fn launch(_: &Path, _: bool, _: OnEvent) -> Result<Chrome, ToolError> {
     Err(ToolError::Failed(
         "the browser tools do not work on this operating system yet".to_string(),

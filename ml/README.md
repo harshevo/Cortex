@@ -86,13 +86,7 @@ Status: on the 41 edits in tradelyzer's git history it does not beat the baselin
 
 ## Fruit fly connectome
 
-`cortex --with brain` generates its wiring by default. To use the measured wiring of the adult fly instead, convert the connectivity table published with the whole-brain model of Shiu et al. (FlyWire, materialisation 783):
-
-```bash
-uv run python -m cortex_ml.connectome.convert path/to/2025_Connectivity_783.parquet fly.csv
-```
-
-Then pass `--connectome fly.csv`. The table is `data/2025_Connectivity_783.parquet` (101 MB) in `github.com/eonsystemspbc/fly-brain`; this project keeps it in `eval/sources/fly-brain/`, which is not committed. It converts to 138,639 neurons, 15,091,983 connected pairs and 54,492,922 synapses.
+The agent no longer has a fly-scale spiking network to load this into: it was removed after it predicted no better than a 17-number controller on saved runs. `cortex_ml.connectome.convert` is still here for anyone who wants the measured wiring as a `source,target,strength` table.
 
 ## Tests
 

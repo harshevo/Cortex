@@ -123,6 +123,7 @@ fn launch(place: &std::path::Path, server: &ScriptedServer) -> Launch {
         place: place.into(),
         settings,
         api_key: None,
+        look_up_key: false,
         demo: false,
         fresh: true,
         open: None,

@@ -11,17 +11,21 @@ members = [
     "crates/cortex-router",
     "crates/cortex-brain",
     "crates/cortex-living",
+    "crates/cortex-liquid",
     "crates/cortex-tools",
     "crates/cortex-skills",
     "crates/cortex-eval",
     "crates/cortex-cli",
+    "crates/cortex-remote",
+    "crates/cortex-mobile",
     "crates/cortex-gui",
 ]
 
 # What plain `cargo build`, `cargo test` and `cargo run` act on. The desktop
 # app is left out so that `cargo run` still means the `cortex` command and
 # the agent can be built without the graphics libraries. Build the app with
-# `-p cortex-gui`. A new crate has to be added here as well as to `members`.
+# `-p cortex-gui`. The phone apps' core is left out too: it is built for
+# phones by `scripts/mobile-ios.sh` and `scripts/mobile-android.sh`. A new crate has to be added here as well as to `members`.
 default-members = [
     "crates/cortex-core",
     "crates/cortex-providers",
@@ -32,10 +36,12 @@ default-members = [
     "crates/cortex-router",
     "crates/cortex-brain",
     "crates/cortex-living",
+    "crates/cortex-liquid",
     "crates/cortex-tools",
     "crates/cortex-skills",
     "crates/cortex-eval",
     "crates/cortex-cli",
+    "crates/cortex-remote",
 ]
 
 [workspace.package]
@@ -53,10 +59,12 @@ cortex-verify = { path = "crates/cortex-verify" }
 cortex-router = { path = "crates/cortex-router" }
 cortex-brain = { path = "crates/cortex-brain" }
 cortex-living = { path = "crates/cortex-living" }
+cortex-liquid = { path = "crates/cortex-liquid" }
 cortex-cli = { path = "crates/cortex-cli" }
 cortex-tools = { path = "crates/cortex-tools" }
 cortex-skills = { path = "crates/cortex-skills" }
 cortex-eval = { path = "crates/cortex-eval" }
+cortex-remote = { path = "crates/cortex-remote" }
 
 anyhow = "1"
 async-trait = "0.1"

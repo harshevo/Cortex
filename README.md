@@ -69,7 +69,7 @@ cargo run --release -p cortex-gui
 
 The desktop app starts the local embedding service automatically and waits for its model to be ready. All chat agents share the same service, and a healthy service already running on port 8765 is reused. It uses `ml/.venv/bin/python` when available; otherwise `uv` sets up the Python environment. The first launch may download the model weights. Startup errors are recorded in `~/.cortex/logs/embedding-service.log`. If the source directory was moved, set `CORTEX_ML_DIR` to its `ml` directory. Demo mode remains offline and does not start the model.
 
-**Living network** (experimental, `--with living`, crate `cortex-living`): a network that grows and rewires itself as it watches runs. It creates a neuron for each new thing it meets and for things that keep happening together, wires what follows what, weakens and removes what stops being true, holds the new and unexpected in a small workspace, keeps neurons for its own states, predicts its own surprise, and replays recent moments when idle. It only watches: nothing it learns reaches the model. One network for all projects in `~/.cortex/living/network.json`; **Settings → Workspace → Open living network** draws it live, with its meters. The meters measure the mechanisms named and are not evidence of experience.
+**Dendritic network** (`--with brain` to let it advise, `--with living` to only watch; crate `cortex-living`): a network that grows and rewires itself as it watches runs. It creates a neuron for each new thing it meets and for things that keep happening together. Each neuron grows up to eight dendritic branches; a branch holds synapses from a few neurons that fired together one or two moments before this one did, and is active only when most of *its own* synapses are driven, so "an edit to this file, then the tests" and "the tests alone" are two branches with two records. From that it expects what comes next (each expectation as sure as its branch has been right before), imagines a few steps on by running on its own expectations, compares the actions it expects by what their imagined paths are worth, and can follow branches backward from an outcome to the steps that led to it. It keeps neurons for its own states ("I was surprised", "my advice was wrong"), predicts its own surprise, stays silent where it has learned its advice fails, replays recent moments when idle, and sets its own plasticity: each branch stiffens as it proves itself and loosens when it starts failing, and the whole network learns faster while more surprised than usual. With `--with brain` one line of this reaches the model between steps, only when the branch behind it has been tried at least four times and is as sure as the network currently requires of itself; the model can also ask it through the `brain_state` tool (`imagine`, `goal`). One network for all projects in `~/.cortex/living/network.json`; **Settings → Workspace → Open living network** draws it live, with its meters. Measured without a model on 83 saved runs (`cargo run --release -p cortex-living --example replay -- eval/results`, second half scored): it expects 46% of each moment and 56% of what it expects comes, against 24% and 30% for guessing the commonest percepts; the point-neuron network it replaced scored 59% and 39%. Whether its line helps a model is not measured. This is chaining over learned sequences, not reasoning in language, and the meters measure the mechanisms named: none of it is evidence of experience or awareness. 
 
 **Settings → Workspace → Share memory between projects** makes the agent also recall the closest tasks and general lessons from your other projects (`--memory-from <FOLDER>` on the command line, with `--with memory`), and draws all of them in the memory space. A project's facts about its own files are never shared.
 
@@ -87,13 +87,72 @@ A saved session can be continued by clicking it in the sidebar. If its chat is a
 
 **Memory space** draws the agent's memory as a brain: working memory for the current run at the front, episodes in the middle, long-term facts over the cortex, and the best-connected neurons of the intuition (`--with intuition`) in the cerebellum with their synapses. Memory is always on in the app, in the same `.cortex/memory.db` the command line uses. New desktop sessions also enable Brain, Intuition, and Gate by default; Capabilities can switch them off or choose the baseline controller. Earlier memory-only desktop settings migrate once to these defaults.
 
-The fly network is now connected to session chat events. A separate **Fly network** region shows up to 96 real sampled neurons and their signed synapses. The **Brain inspector** plays back the 24 recorded simulation ticks, with actual post-reset voltage, spike indicators, input features, action values, training counts, and simulation time. Playback is slowed for inspection, not a continuously firing biological brain. Any neuron ID in the full network can be inspected, with its outgoing connections paginated in groups of 64. Positions are display layouts, not measured anatomical coordinates. The model's internal neurons are not exposed.
+The dendritic network is drawn in the memory space as its own region: up to 320 of its most lately fired neurons and the strongest synapses between them, glowing as they fire. The **Brain inspector** shows what it expects next and why (the branch, and how often that branch has been right), what it imagines from here, how the best outcome it knows has been reached before, the last thing it said, and the rates it has set for itself. Positions are display layouts, not anatomy. The model's internal neurons are not exposed. 
 
 Intuition activity and learned connections update from the running chat. Opening an old chat restores its recorded brain activity and working memory. Persistent memory includes chat-only answers and the last five successful calculation results per task. `calculate` evaluates numeric arithmetic locally using bounded double-precision parsing; it does not execute code. `brain_state` exposes bounded diagnostics when a brain adviser is enabled. Raw simulation frames are logged as `brain_observed` events, never inserted automatically into the model prompt.
 
-Parallel chats merge learned state under file locks and replace JSON atomically. SQLite consolidates episodes and derived facts in one transaction. Default generated fly wiring is shared between desktop chats; voltages and working state remain independent. The inspector reports observed verification outcomes and median task steps. These observations are not a controlled accuracy comparison; use the evaluation harness to compare enabled capabilities against the baseline.
+Parallel chats merge learned state under file locks and replace JSON atomically. SQLite consolidates episodes and derived facts in one transaction.  The dendritic network is one per machine and shared between chats. The inspector reports observed verification outcomes and median task steps. These observations are not a controlled accuracy comparison; use the evaluation harness to compare enabled capabilities against the baseline.
 
 `--demo` runs a scripted stand-in model on a throwaway project, with no network and no key, and saves nothing. Its tools, memory and checks are real.
+
+### Phone apps and remote control
+
+The phone apps work in two ways, with the same screens.
+
+**On the phone alone** ("Work on this phone"): the agent runs in the app.
+The loop, the file tools, the memory (`.cortex/memory.db` in each project),
+the intuition, the decision controllers and the living network are the
+same Rust code the desktop runs, built for the phone; only the model is
+elsewhere. Under **This phone** choose ChatGPT (signed in to in a page the
+app opens, as `cortex login` does), Anthropic or a hosted service with a
+key, and make projects, which live in the app's own folder. While the
+phone is idle the system wakes the app now and then (WorkManager on
+Android, a background refresh task on iOS) and the living network goes
+over what it met. What a phone cannot do is left out of its list of
+capabilities: the project's own checks (`gate`), `github`, `browser` and
+`rollouts` need programs a phone does not have, and `mind`, `semantic` and
+`hope` need the Python services, so memory compares tasks by shared words
+there. There are no compilers, package managers or git on a phone, and iOS
+lets an app start no other program at all, so the agent writes and edits
+code there but cannot build or test it; connect to a computer for that. A
+run stops if the system suspends the app, and API keys are kept in a file
+in the app's private folder, not yet in the system's keychain.
+
+**Connected to a computer**: the desktop app can be followed and driven
+from a phone. The agent, its tools, its services and your API keys stay on
+the computer; the phone is a second window onto the chats that are open
+there. It can send instructions,
+steer or stop a run, answer the agent's questions, switch models and every
+capability, open past sessions and look at the memory.
+
+Switch it on in the desktop app under Settings → Remote control, show a
+pairing code and scan it with the phone app. The connection (`iroh`) is
+dialed by public key and encrypted end to end. It goes directly when both
+are on one network and through a public relay when they are not, so no
+port is opened. A code lets one phone in, once, for ten minutes; after that
+the phone is known by its key and can be forgotten from the same page.
+
+    crates/cortex-remote    the messages, pairing, and the link; also the
+                            conversation model both sides build from events
+    crates/cortex-mobile    the phone apps' core, exposed to Swift and Kotlin:
+                            the agent on the phone (`src/local`) and the
+                            connection to a desktop
+    apps/ios                the SwiftUI app
+    apps/android            the Jetpack Compose app
+
+iOS, with full Xcode and `brew install xcodegen`:
+
+    rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+    scripts/mobile-ios.sh
+    cd apps/ios && xcodegen && open Cortex.xcodeproj
+
+Android, with a JDK, the Android SDK and NDK, and `cargo install cargo-ndk`:
+
+    rustup target add aarch64-linux-android
+    scripts/mobile-android.sh
+    cd apps/android && ./gradlew :app:assembleDebug
+
+Pictures of both are in `apps/screenshots`.
 
 ### Other model providers
 
@@ -118,7 +177,7 @@ CLI capabilities are off by default and turned on with `--with`, so their effect
 | `--with gate` | The harness runs the project's own checks when the model says it is done, and sends failures back instead of accepting the claim. `--check "<command>"` overrides the detected checks |
 | `--with router` | Before the model starts, gather the context this kind of task needs from whichever of the above are on: memory, call sites of names the task mentions, code found by meaning, or the output of failing checks |
 | `--with controller` | A decision controller. From runs whose checks passed or failed it learns which next action (inspect, edit, run, revert, finish) pays off in which situation, and says so in one line between steps once it is confident. Learns only together with `--with gate`. This is the plain baseline |
-| `--with brain` | The same controller, with the situation first passed through a spiking network the size of the fruit fly brain: 139,255 neurons, about 50 million synapses, 300 MB. The wiring is generated unless `--connectome <file>` supplies the measured one: the FlyWire connectome, 138,639 neurons and 54.5 million synapses, 91 MB (see [`ml/`](ml/README.md) for how to get it) |
+| `--with brain` | The dendritic network, allowed to speak: when its own record says it is sure enough, one line between steps says what has usually come next here and gone well, or that the usual next step has usually gone badly. See *Dendritic network* above. It replaced a spiking network the size of the fruit fly brain (139,255 neurons, 300 MB), which predicted no better than the 17-number controller on saved runs and was removed | 
 | `--with intuition` | A second brain beside the controller: an associative network with a neuron for each task word, file, command and error it has met, and synapses strengthened by passing runs, strengthened at half rate by completed unchecked runs, and weakened by failures. Before a task it names the files that tasks worded like it went on to change; between steps, what passing runs went on to from the file just read or the error just met; on a long run, a check left failing or edits nothing has checked. Silent until it has learned from four runs. Works with or without `--with brain` |
 | `--with hope` | Let the HOPE-style memory model re-score recalled memories. Needs `--with memory` and the service in [`ml/`](ml/README.md). Untrained, it ranks exactly like plain similarity |
 | `--with mind` | The learning brain from the [`brain`](../brain/README.md) project. **On in `run`, `chat` and the app** unless turned off with `--without mind` or the switch in Settings → Capabilities; off in `eval` unless asked for. It watches every step and hears what you say: it learns which actions work here, keeps your corrections, and treats your next message after an unchecked run as the verdict on it. It shows what earlier work found before a task, and between steps says a line when it has one: a habit it is sure of, something you said before, an action that failed here before, a choice worth asking you about, something untried. The model can have it imagine how actions would turn out through `brain_state`. Its service is started when not running (`CORTEX_BRAIN_DIR` if the brain project is not beside this one, `--mind-url` for another port). It stays silent in a share of runs (`--mind-control`, default 0.2) so `cortex mind` can compare checks passed, steps, tokens and time with and without it. Without `--with gate` it learns from commands and from you, not from checks |
@@ -140,6 +199,34 @@ See what the agent would be shown for a task, without calling a model:
 
 ```bash
 cargo run --release -- context "fix the calendar's last week" --with memory --with graph --with router --with semantic
+```
+
+## Package for another machine
+
+One command builds both programs in release mode and packs them with
+everything they need: a Python interpreter of their own, every library,
+the embedding model's weights, the HOPE weights and the mind. The machine
+that receives the package installs nothing and downloads nothing.
+
+```sh
+scripts/package.sh --zip       # macOS: dist/Cortex-<version>-macos-<arch>.zip
+scripts/package.sh --zip       # Linux: dist/cortex-<version>-linux-<arch>.tar.gz
+scripts\package.ps1 -Zip       # Windows: dist\Cortex-<version>-windows-x64.zip
+```
+
+Without `--zip` the package is left in `target/package`. `--install` on
+macOS also copies the app to `/Applications`. A package runs on the system
+and processor it was built on, so build on each kind of machine. The
+building machine needs `cargo`, `uv` and the `brain` project beside this
+checkout (or `CORTEX_BRAIN_DIR`).
+
+On another Mac a downloaded copy is held back because it is not signed by
+a registered developer. Once, in Terminal: `xattr -cr /Applications/Cortex.app`.
+
+To only compile, without packaging:
+
+```sh
+cargo build --release -p cortex-gui -p cortex-cli
 ```
 
 ## Evaluate
@@ -175,7 +262,7 @@ crates/
   cortex-memory/      working, episodic and long-term memory; consolidation; recall
   cortex-verify/      the verification gate: finds and runs a project's checks
   cortex-router/      picks and gathers context for a task before the model starts
-  cortex-brain/       decision controllers (a fly-scale spiking network and a plain baseline), the intuition network, and the client of the mind service
+  cortex-brain/       the decision controller, the intuition network, and the client of the mind service 
   cortex-tools/       the tools the agent can call
   cortex-skills/      skills: the built-in ones (`skills/`), loading a project's own, `/name`, and the `skill` tool
   cortex-eval/        task suites, scoring, reports, comparison
@@ -219,8 +306,8 @@ Then run `eval validate`. A task must fail untouched and pass with its solution.
 - Memory is consolidated by counting, not by a model. It records which files a task touched, not why.
 - The verification gate is only as strong as the project's own checks. A task whose bug no existing test covers passes the gate unverified in effect.
 - The router decides with hand-written rules; nothing is learned yet.
-- The fly-scale brain has the fly's size and sparsity and a mushroom-body-style learning circuit, but generated wiring. With a measured connectome it uses the fly's real wiring, which evolved for flying and feeding; whether either helps a coding agent is untested. `--with controller` is the baseline it has to beat.
-- The controllers stay silent until they have learned from five checked runs, and learn nothing without `--with gate`. Replayed over 40 saved runs (`cargo run --release -p cortex-brain --example replay`), the fly-scale brain predicted no better than the 17-number baseline, and neither much better than a constant.
+- The dendritic network's advice is gated by its own record, but that record is of whether the advised step came next, not of whether the task went better for it. No run against a model has measured its effect. `--with living` runs it silently for comparison. 
+- The controller stays silent until it has learned from five checked runs, and learns nothing without `--with gate`. Replayed over 40 saved runs (`cargo run --release -p cortex-brain --example replay`), it predicted little better than a constant. 
 - The intuition recalls what earlier runs found; it finds nothing new. Replayed over 24 saved tradelyzer runs (`--example intuition_replay`), it named a file before the task in 6 runs, all 6 correctly, and stayed silent on tasks it had never met. Those runs opened that file after 1.3 steps anyway, so on short tasks it saves about a step. Its effect on a model, and on long tasks, is unmeasured.
 - The mind's effect is measured, not yet known. Every run is recorded under the arm it was in, speaking or silent, and `cortex mind` prints checks passed, steps, tokens and seconds for each; until both arms hold enough real runs the difference is noise. In an earlier replay over 38 saved tradelyzer runs (`--example mind_replay`), made before failing commands stopped counting against the action that ran them, its guess of the model's next action was right at 15% of 237 steps and it never spoke. What it adds for certain is a paragraph in the system prompt, its lines, and a few milliseconds per step, which `cortex mind` reports as `mind ms`.
 - Responses are not streamed, so text appears a message at a time.

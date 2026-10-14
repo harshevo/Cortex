@@ -3,6 +3,7 @@
 //! Kept in `~/.cortex/app.json`. API keys are not in that file; they are
 //! in the system keychain (see [`secrets`]).
 
+pub mod capabilities;
 pub mod secrets;
 
 use std::fs;
@@ -53,7 +54,7 @@ impl Provider {
     }
 
     /// The name the `cortex` command knows the provider by.
-    fn argument(self) -> &'static str {
+    pub fn argument(self) -> &'static str {
         match self {
             Self::Anthropic => "anthropic",
             Self::Hosted => "hosted",
@@ -113,7 +114,7 @@ impl Effort {
         }
     }
 
-    fn argument(self) -> &'static str {
+    pub fn argument(self) -> &'static str {
         match self {
             Self::Low => "low",
             Self::Medium => "medium",
@@ -210,6 +211,13 @@ pub struct Settings {
 
     /// The colour theme, by its name in `theme::palette::THEMES`.
     pub theme: String,
+
+    /// Let paired phones follow and drive the chats.
+    pub remote_control: bool,
+
+    /// The share of runs each adviser is held out of, in percent, so
+    /// that runs with and without it can be compared. 0 for none.
+    pub holdout_percent: u8,
 }
 
 impl Default for Settings {
@@ -267,6 +275,8 @@ impl Default for Settings {
             browser_window: false,
             projects: Vec::new(),
             theme: crate::theme::palette::DEFAULT.to_string(),
+            remote_control: false,
+            holdout_percent: (cortex_core::effect::DEFAULT_SHARE * 100.0).round() as u8,
         }
     }
 }
@@ -477,6 +487,11 @@ impl Settings {
         if !self.sandbox {
             arguments.push("--no-sandbox".to_string());
         }
+
+        arguments.extend([
+            "--holdout".to_string(),
+            (f64::from(self.holdout_percent.min(90)) / 100.0).to_string(),
+        ]);
 
         if self.combine_memory {
             let folders = self.projects.iter().cloned().chain(scratch_folder().ok());

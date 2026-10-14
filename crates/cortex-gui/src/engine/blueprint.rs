@@ -69,7 +69,12 @@ impl Blueprint {
 
         let provider: Arc<dyn ModelProvider> = match demo_project {
             Some(_) => Arc::new(DemoProvider::new(workspace.root())),
-            None => build_provider(&launch.settings, launch.api_key.as_deref())?,
+
+            None => {
+                let key = provider_key(launch).await;
+
+                build_provider(&launch.settings, key.as_deref())?
+            }
         };
 
         let location = memory_location(&model, &workspace);
@@ -120,6 +125,22 @@ impl Blueprint {
             approve_everything: launch.settings.approve_everything,
         })
     }
+}
+
+/// The key the provider is built with: the one the launch brought, or
+/// the one looked up now. Asking the keychain can block, and can put a
+/// question to the person, so it is done on a thread that may wait.
+async fn provider_key(launch: &Launch) -> Option<String> {
+    if launch.api_key.is_some() || !launch.look_up_key {
+        return launch.api_key.clone();
+    }
+
+    let provider = launch.settings.provider;
+
+    tokio::task::spawn_blocking(move || crate::settings::secrets::resolve(provider))
+        .await
+        .ok()
+        .flatten()
 }
 
 fn build_provider(settings: &Settings, api_key: Option<&str>) -> Result<Arc<dyn ModelProvider>> {

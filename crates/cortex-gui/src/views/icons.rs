@@ -42,8 +42,10 @@ pub fn activity_dot_sized(ui: &Ui, centre: Pos2, radius: f32) {
     let alpha = 0.35 + 0.65 * (phase.sin() + 1.0) / 2.0;
     ui.painter()
         .circle_filled(centre, radius, palette::accent().gamma_multiply(alpha));
+    // The pulse is slow; twenty steps a second draw it smoothly enough,
+    // and every one of them redraws the whole window.
     ui.ctx()
-        .request_repaint_after(std::time::Duration::from_millis(33));
+        .request_repaint_after(std::time::Duration::from_millis(50));
 }
 
 /// A small square button with an icon. `danger` tints it red on hover,
@@ -92,8 +94,20 @@ fn paint_button(ui: &Ui, rect: Rect, icon: Icon, response: &egui::Response, dang
     };
 
     if response.hovered() {
-        ui.painter()
-            .rect_filled(rect, CornerRadius::same(6), palette::raised());
+        ui.painter().rect_filled(
+            rect,
+            CornerRadius::same(crate::theme::radius::M),
+            palette::raised(),
+        );
+    }
+
+    if response.has_focus() {
+        ui.painter().rect_stroke(
+            rect,
+            CornerRadius::same(crate::theme::radius::M),
+            crate::theme::focus_ring(),
+            egui::StrokeKind::Inside,
+        );
     }
 
     paint(ui, rect.center(), icon, color);
@@ -124,7 +138,7 @@ pub fn paint(ui: &Ui, centre: Pos2, icon: Icon, color: Color32) {
         Icon::Copy => {
             painter.rect_stroke(
                 Rect::from_min_max(at(-0.35, -0.35), at(0.8, 0.85)),
-                CornerRadius::same(1),
+                CornerRadius::same(crate::theme::radius::XS),
                 stroke,
                 egui::StrokeKind::Middle,
             );
@@ -191,7 +205,7 @@ pub fn paint(ui: &Ui, centre: Pos2, icon: Icon, color: Color32) {
         Icon::Sidebar => {
             painter.rect_stroke(
                 Rect::from_min_max(at(-0.95, -0.75), at(0.95, 0.75)),
-                CornerRadius::same(2),
+                CornerRadius::same(crate::theme::radius::XS),
                 stroke,
                 egui::StrokeKind::Middle,
             );

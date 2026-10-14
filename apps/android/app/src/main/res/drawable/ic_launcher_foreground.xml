@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Cortex mark: an open ring with a signal leaving it. The same
+     numbers as the iOS mark, set in the middle of the 108dp canvas. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:pathData="M68.42,66.98 A19.4,19.4 0 1 1 68.42,41.02"
+        android:strokeColor="#FFF6EC"
+        android:strokeWidth="6.1"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M54,54 L73.4,54"
+        android:strokeColor="#FFF6EC"
+        android:strokeAlpha="0.55"
+        android:strokeWidth="2.45"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M54,54 m-4.9,0 a4.9,4.9 0 1 1 9.8,0 a4.9,4.9 0 1 1 -9.8,0"
+        android:fillColor="#FFF6EC" />
+    <path
+        android:pathData="M73.4,54 m-3.6,0 a3.6,3.6 0 1 1 7.2,0 a3.6,3.6 0 1 1 -7.2,0"
+        android:fillColor="#FFF6EC" />
+</vector>

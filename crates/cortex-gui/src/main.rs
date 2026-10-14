@@ -1,5 +1,9 @@
 //! The Cortex desktop app.
 
+// A release build on Windows is a window app: without this a console
+// window opens beside it.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod app;
 mod args;
 mod attachment;
@@ -9,6 +13,7 @@ mod environment;
 mod format;
 mod memory;
 mod rehearsal;
+mod remote;
 mod session;
 mod settings;
 mod theme;
@@ -76,6 +81,8 @@ fn run() -> Result<()> {
         .build()
         .context("cannot start the async runtime")?;
 
+    let remote_control = settings.remote_control || args.rehearsal.remote;
+    let pairing_code = args.rehearsal.pairing_code.clone();
     let tried_theme = args.rehearsal.theme.clone();
     let rehearsal = Rehearsal::new(args.rehearsal);
     let demo = args.demo;
@@ -118,6 +125,19 @@ fn run() -> Result<()> {
 
             theme::apply(&creation.egui_ctx);
             brain::install(render_state);
+
+            // Before the first chat, so that its agent can be reached.
+            remote::install(&handle, creation.egui_ctx.clone());
+
+            if let Some(bridge) = remote::bridge() {
+                if remote_control {
+                    bridge.switch(true);
+                }
+
+                if let Some(file) = pairing_code.clone() {
+                    bridge.write_code(file);
+                }
+            }
 
             let engine = Engine::start(&handle, creation.egui_ctx.clone());
 

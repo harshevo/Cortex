@@ -20,6 +20,7 @@ use crate::reflect::Lesson;
 use crate::review::Requirement;
 use crate::usage::Usage;
 use crate::verify::CheckOutcome;
+use crate::window::{ContextUse, PlanQuota};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -104,6 +105,82 @@ pub enum Event {
         step: u32,
         results_masked: usize,
         chars_removed: usize,
+    },
+
+    /// The older part of the conversation was replaced by a summary the
+    /// model wrote. Everything but the last `kept` messages went, and
+    /// `text` is the message now in its place, so the log replays to the
+    /// same conversation.
+    ContextCompacted {
+        /// The step about to be asked, or 0 for one made between runs.
+        step: u32,
+
+        kept: usize,
+        text: String,
+        messages_replaced: usize,
+
+        /// Characters of the conversation before and after.
+        chars_before: usize,
+        chars_after: usize,
+
+        /// What the summary call used. In a run it is part of the run's
+        /// total; between runs it is in no run's total.
+        usage: Usage,
+
+        duration_ms: u64,
+
+        /// It was done because the window was filling up, not because
+        /// the person asked.
+        automatic: bool,
+    },
+
+    /// How full the context window was at the model call of `step`, and,
+    /// from a provider that says so, how much of a subscription's
+    /// allowance is used.
+    ContextMeasured {
+        step: u32,
+
+        /// Boxed so that the largest event stays small.
+        context: Box<ContextUse>,
+
+        #[serde(default)]
+        quota: Option<PlanQuota>,
+    },
+
+    /// Which advisers stay silent in the run that has just started, so
+    /// that runs with and without each can be compared. Whether a source
+    /// is held out follows from `seed` alone
+    /// ([`crate::effect::held_out`]); the lists name those known when the
+    /// run began.
+    ExperimentAssigned {
+        seed: u64,
+
+        /// The share of runs an adviser is held out of.
+        share: f64,
+
+        /// The same for briefings; 0 when none are held out.
+        briefing_share: f64,
+
+        /// Advisers held out of this run.
+        held_out: Vec<String>,
+
+        /// Advisers free to speak in it.
+        speaking: Vec<String>,
+
+        /// The briefings shown. One that was held out has its own
+        /// `ContextWithheld` event before this.
+        briefed: Vec<String>,
+    },
+
+    /// What an adviser would have said after `step`, or a briefing would
+    /// have put before the task (`step` 0), in a run it is held out of.
+    /// The model was not shown it.
+    ContextWithheld {
+        step: u32,
+        source: String,
+        text: String,
+        detail: Value,
+        duration_ms: u64,
     },
 
     /// The finished work was held against the request. `feedback` is what

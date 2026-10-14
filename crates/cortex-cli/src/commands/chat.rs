@@ -14,7 +14,10 @@ pub async fn execute(args: ChatArgs) -> Result<ExitCode> {
 
     let mut conversation = Vec::new();
 
-    println!("Cortex. Type an instruction, `/skills` to list skills, or `exit` to leave.");
+    println!(
+        "Cortex. Type an instruction, `/skills` to list skills, `/compact` to shorten a long \
+         conversation, or `exit` to leave."
+    );
 
     loop {
         let Some(line) = read_instruction().await else {
@@ -37,6 +40,12 @@ pub async fn execute(args: ChatArgs) -> Result<ExitCode> {
             continue;
         }
 
+        if instruction == "/compact" {
+            compact(&agent, &mut conversation).await;
+
+            continue;
+        }
+
         // A failed request should not end the session; show it and let the
         // user try again.
         if let Err(error) = agent.run(&mut conversation, instruction).await {
@@ -45,6 +54,22 @@ pub async fn execute(args: ChatArgs) -> Result<ExitCode> {
     }
 
     Ok(ExitCode::SUCCESS)
+}
+
+/// Replaces the older part of the conversation with a summary. The
+/// agent's console sink says what was done.
+async fn compact(agent: &cortex_core::Agent, conversation: &mut Vec<cortex_core::Message>) {
+    match agent.compact(conversation).await {
+        Ok(Some(compaction)) => println!(
+            "The conversation is {} characters shorter; the summary took {} tokens to write.",
+            compaction.chars_removed(),
+            compaction.usage.total()
+        ),
+
+        Ok(None) => println!("The conversation is too short to be worth a summary."),
+
+        Err(error) => eprintln!("error: the conversation was left as it was: {error}"),
+    }
 }
 
 /// Reads one line from the terminal. `None` means end of input.

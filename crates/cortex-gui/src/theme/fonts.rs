@@ -6,8 +6,11 @@
 //! size that suit it: a serif drawn for headlines is thin and spiky at
 //! reading size, and the same font's text cut is not.
 //!
-//! Where a typeface is missing (any machine that is not a Mac), egui's
-//! built-in fonts are used instead.
+//! Windows and Linux have other typefaces. There each family takes the
+//! nearest one the system has: Segoe UI, Georgia and Cascadia or Consolas
+//! on Windows; Noto or DejaVu on Linux. Those are mostly not variable, so
+//! the heavier families name a bold file of their own. Where none of a
+//! family's files is found, egui's built-in fonts are used instead.
 
 use std::fs;
 use std::sync::Arc;
@@ -24,14 +27,71 @@ pub const VOICE_STRONG: &str = "voice-strong";
 /// The interface font, heavier, for titles and labels that need weight.
 pub const STRONG: &str = "strong";
 
-const SANS: &str = "/System/Library/Fonts/SFNS.ttf";
-const SERIF: &str = "/System/Library/Fonts/NewYork.ttf";
-const MONO: &str = "/System/Library/Fonts/SFNSMono.ttf";
+/// Each list is tried in order. The first file is the Mac's.
+const SANS: &[&str] = &[
+    "/System/Library/Fonts/SFNS.ttf",
+    "C:/Windows/Fonts/SegUIVar.ttf",
+    "C:/Windows/Fonts/segoeui.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+    "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+    "/usr/share/fonts/google-noto/NotoSans-Regular.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans.ttf",
+    "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
+];
+
+const SANS_STRONG: &[&str] = &[
+    "/System/Library/Fonts/SFNS.ttf",
+    "C:/Windows/Fonts/SegUIVar.ttf",
+    "C:/Windows/Fonts/seguisb.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+    "/usr/share/fonts/noto/NotoSans-Bold.ttf",
+    "/usr/share/fonts/google-noto/NotoSans-Bold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Bold.ttf",
+];
+
+const SERIF: &[&str] = &[
+    "/System/Library/Fonts/NewYork.ttf",
+    "C:/Windows/Fonts/georgia.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSerif-Regular.ttf",
+    "/usr/share/fonts/noto/NotoSerif-Regular.ttf",
+    "/usr/share/fonts/google-noto/NotoSerif-Regular.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
+    "/usr/share/fonts/TTF/DejaVuSerif.ttf",
+    "/usr/share/fonts/dejavu-serif-fonts/DejaVuSerif.ttf",
+];
+
+const SERIF_STRONG: &[&str] = &[
+    "/System/Library/Fonts/NewYork.ttf",
+    "C:/Windows/Fonts/georgiab.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSerif-Bold.ttf",
+    "/usr/share/fonts/noto/NotoSerif-Bold.ttf",
+    "/usr/share/fonts/google-noto/NotoSerif-Bold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf",
+    "/usr/share/fonts/TTF/DejaVuSerif-Bold.ttf",
+    "/usr/share/fonts/dejavu-serif-fonts/DejaVuSerif-Bold.ttf",
+];
+
+const MONO: &[&str] = &[
+    "/System/Library/Fonts/SFNSMono.ttf",
+    "C:/Windows/Fonts/CascadiaMono.ttf",
+    "C:/Windows/Fonts/consola.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansMono-Regular.ttf",
+    "/usr/share/fonts/noto/NotoSansMono-Regular.ttf",
+    "/usr/share/fonts/google-noto/NotoSansMono-Regular.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+    "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+    "/usr/share/fonts/dejavu-sans-mono-fonts/DejaVuSansMono.ttf",
+];
 
 /// One cut of a typeface: which file, and where on its axes.
 struct Face {
     family: Family,
-    file: &'static str,
+
+    /// The files that will do, best first.
+    files: &'static [&'static str],
 
     /// 400 is regular, 600 semibold.
     weight: f32,
@@ -73,31 +133,31 @@ impl Family {
 const FACES: [Face; 5] = [
     Face {
         family: Family::Interface,
-        file: SANS,
+        files: SANS,
         weight: 400.0,
         optical_size: 17.0,
     },
     Face {
         family: Family::Strong,
-        file: SANS,
+        files: SANS_STRONG,
         weight: 600.0,
         optical_size: 17.0,
     },
     Face {
         family: Family::Mono,
-        file: MONO,
+        files: MONO,
         weight: 400.0,
         optical_size: 13.0,
     },
     Face {
         family: Family::Voice,
-        file: SERIF,
+        files: SERIF,
         weight: 400.0,
         optical_size: 14.0,
     },
     Face {
         family: Family::VoiceStrong,
-        file: SERIF,
+        files: SERIF_STRONG,
         weight: 600.0,
         optical_size: 18.0,
     },
@@ -131,7 +191,9 @@ pub fn install(context: &egui::Context) {
 }
 
 fn load(face: &Face) -> Option<FontData> {
-    let data = FontData::from_owned(fs::read(face.file).ok()?);
+    let bytes = face.files.iter().find_map(|file| fs::read(file).ok())?;
+
+    let data = FontData::from_owned(bytes);
 
     let coords = coordinates(&data, face);
 
@@ -168,18 +230,17 @@ mod tests {
     #[test]
     fn the_system_typefaces_are_variable_in_weight_and_optical_size() {
         for face in &FACES {
-            let Ok(bytes) = fs::read(face.file) else {
+            // Only the Mac's own files are variable on both axes.
+            let file = face.files[0];
+
+            let Ok(bytes) = fs::read(file) else {
                 continue;
             };
 
             let data = FontData::from_owned(bytes);
             let coords = coordinates(&data, face);
 
-            assert!(
-                coords != VariationCoords::default(),
-                "{} has no axes",
-                face.file
-            );
+            assert!(coords != VariationCoords::default(), "{file} has no axes");
         }
     }
 }

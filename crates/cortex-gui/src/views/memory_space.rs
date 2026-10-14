@@ -4,7 +4,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread;
 
 use eframe::egui::{
-    self, Align2, Color32, CornerRadius, Pos2, Rect, RichText, Sense, Stroke, Ui, UiBuilder, vec2,
+    self, Align2, CornerRadius, Pos2, Rect, RichText, Sense, Stroke, Ui, UiBuilder, vec2,
 };
 
 use crate::brain::{self, Scene, anatomy};
@@ -23,9 +23,6 @@ const LONGEST_STEP: f32 = 0.05;
 
 /// Zoom per point of scrolling.
 const SCROLL_ZOOM: f32 = 0.0022;
-
-const LABEL_FILL: Color32 = Color32::from_rgba_premultiplied(8, 8, 14, 205);
-const CARD_FILL: Color32 = Color32::from_rgba_premultiplied(18, 18, 24, 238);
 
 /// The memories and how they are being shown.
 #[derive(Default)]
@@ -65,6 +62,16 @@ pub struct MemoryView {
 
     /// Select the newest episode as soon as it has been placed.
     select_newest: bool,
+
+    /// What is drawn no longer matches what is known: the picture is
+    /// put together again before it is next drawn. Many events can
+    /// arrive between two frames, and opening a session replays all of
+    /// its own, so the work is done once for them all, and not at all
+    /// while the memory space is not on screen.
+    stale: bool,
+
+    /// How many times the picture has been put together.
+    rebuilds: u64,
 }
 
 impl MemoryView {
@@ -128,8 +135,7 @@ impl MemoryView {
     pub fn set_thoughts(&mut self, thoughts: Vec<Thought>) {
         if self.thoughts != thoughts {
             self.thoughts = thoughts;
-
-            self.rebuild_graph();
+            self.stale = true;
         }
     }
 
@@ -159,24 +165,42 @@ impl MemoryView {
         }
     }
 
-    pub fn observe_brain(&mut self, source: &str, step: u32, detail: &serde_json::Value, now: f64) {
-        self.activity.observe(source, step, detail, now);
+    pub fn observe_brain(&mut self, source: &str, detail: &serde_json::Value) {
+        self.activity.observe(source, detail);
         self.intuition = (
             self.activity.intuition.total_neurons,
             self.activity.intuition.total_synapses,
             self.activity.intuition.runs,
         );
-        self.rebuild_graph();
+        self.stale = true;
     }
 
     /// Takes in the engine's answer to a question the inspector asked.
     pub fn inspected(&mut self, states: Vec<serde_json::Value>) {
-        if self.activity.inspected(states) {
-            self.rebuild_graph();
+        self.activity.inspected(states);
+    }
+
+    /// Takes in the dendritic network as it is now, or that there is none.
+    pub fn look_at_network(&mut self, snapshot: Option<cortex_living::Snapshot>) {
+        let changed = match snapshot {
+            Some(snapshot) => self.activity.look(snapshot),
+            None => self.activity.network.take().is_some(),
+        };
+
+        if changed {
+            self.stale = true;
         }
     }
 
+    #[cfg(test)]
+    pub fn is_stale(&self) -> bool {
+        self.stale
+    }
+
     fn rebuild_graph(&mut self) {
+        self.stale = false;
+        self.rebuilds += 1;
+
         let mut graph = Graph::assemble(&self.lasting, &self.thoughts);
         graph.add_activity(&self.activity);
 
@@ -188,7 +212,8 @@ impl MemoryView {
 /// Draws the memory space. `thinking` is whether a run is in progress.
 pub fn show(ui: &mut Ui, view: &mut MemoryView, thinking: bool) {
     view.receive_arrangement();
-    if view.activity.advance(ui.input(|i| i.time)) {
+
+    if view.stale {
         view.rebuild_graph();
     }
 
@@ -214,7 +239,6 @@ pub fn show(ui: &mut Ui, view: &mut MemoryView, thinking: bool) {
         .selected()
         .map(|index| card(ui, view, index, rect));
 
-    let before = view.activity.frame();
     egui::Window::new("Brain inspector")
         .id(egui::Id::new("brain-inspector"))
         .default_width(360.0)
@@ -225,10 +249,6 @@ pub fn show(ui: &mut Ui, view: &mut MemoryView, thinking: bool) {
         .show(ui.ctx(), |ui| {
             view.activity.show(ui);
         });
-
-    if before != view.activity.frame() {
-        view.rebuild_graph();
-    }
 
     // The brain is always moving.
     ui.ctx()
@@ -366,7 +386,7 @@ fn node_names(ui: &Ui, view: &MemoryView, rect: Rect) {
         let anchor = position + vec2(12.0, -galley.size().y / 2.0);
         let background = Rect::from_min_size(anchor, galley.size()).expand2(vec2(6.0, 3.0));
 
-        painter.rect_filled(background, CornerRadius::same(5), LABEL_FILL);
+        painter.rect_filled(background, CornerRadius::same(5), palette::veil());
         painter.galley(anchor, galley, color);
     }
 }
@@ -381,7 +401,7 @@ fn heading(ui: &Ui, view: &MemoryView, rect: Rect) {
         corner,
         Align2::LEFT_TOP,
         format!(
-            "{} memory/concept nodes · {} fly neurons · {} links",
+            "{} memory/concept nodes · {} network neurons · {} links",
             graph.nodes.len() - graph.count(Region::Neural),
             graph.count(Region::Neural),
             graph.links.len()
@@ -466,7 +486,7 @@ fn card(ui: &mut Ui, view: &mut MemoryView, index: usize, rect: Rect) -> Rect {
     let drawn = ui
         .scope_builder(UiBuilder::new().max_rect(area), |ui| {
             egui::Frame::new()
-                .fill(CARD_FILL)
+                .fill(palette::card_veil())
                 .stroke(Stroke::new(1.0, palette::border()))
                 .corner_radius(CornerRadius::same(12))
                 .inner_margin(egui::Margin::same(14))
@@ -592,4 +612,26 @@ fn connection_row(ui: &mut Ui, node: &Node, tie: Tie) -> egui::Response {
     response
         .on_hover_cursor(egui::CursorIcon::PointingHand)
         .on_hover_text(format!("{}\n\n{why} Click to travel there.", node.title))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn events_mark_the_picture_and_leave_the_work_for_the_next_frame() {
+        let mut view = MemoryView::default();
+
+        // Opening a session replays every one of its events at once.
+        for step in 0..500 {
+            view.observe_brain("intuition", &serde_json::json!({ "step": step }));
+        }
+
+        assert!(view.is_stale());
+        assert_eq!(view.rebuilds, 0);
+
+        view.set_thoughts(Vec::new());
+
+        assert_eq!(view.rebuilds, 0);
+    }
 }

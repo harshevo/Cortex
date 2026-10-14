@@ -97,6 +97,11 @@ pub async fn build_agent(args: &SessionArgs) -> Result<Agent> {
 
     let setup = features::setup(&model, memory_location).await?;
 
+    // The records name the session as its log does.
+    if let Some(stem) = trajectory_file.file_stem() {
+        setup.name_session(&stem.to_string_lossy());
+    }
+
     let notes = setup.notes(&workspace);
 
     let config = AgentConfig {

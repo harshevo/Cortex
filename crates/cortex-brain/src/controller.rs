@@ -25,7 +25,6 @@ use serde_json::json;
 use crate::accumulator::{self, Decision};
 use crate::learner::{self, Learner};
 use crate::situation::{Action, FEATURES, Situation};
-use crate::spiking::Brain;
 
 /// Each further step before the end multiplies an action's reward by this.
 const DISCOUNT: f32 = 0.93;
@@ -69,44 +68,6 @@ impl Encoder for DirectEncoder {
 
     fn encode(&mut self, features: &[f32; FEATURES]) -> Vec<f32> {
         features.to_vec()
-    }
-}
-
-/// The fly-scale spiking network: the code is the activity of its
-/// read-out neurons.
-pub struct FlyBrainEncoder {
-    brain: Brain,
-}
-
-impl FlyBrainEncoder {
-    pub fn new(brain: Brain) -> Self {
-        Self { brain }
-    }
-}
-
-impl Encoder for FlyBrainEncoder {
-    fn inspect(&mut self, query: &serde_json::Value) -> Option<serde_json::Value> {
-        if let Some(limit) = query["sample_count"].as_u64() {
-            if let Err(error) = self.brain.set_sample_limit(limit as usize) {
-                return Some(json!({"error":error}));
-            }
-            return Some(json!({"source":"fly-brain", "trace":self.brain.trace()}));
-        }
-        Some(self.brain.inspect(query))
-    }
-    fn telemetry(&self) -> Option<serde_json::Value> {
-        serde_json::to_value(self.brain.trace()).ok()
-    }
-    fn name(&self) -> &'static str {
-        "fly-brain controller"
-    }
-
-    fn dimension(&self) -> usize {
-        self.brain.code_length()
-    }
-
-    fn encode(&mut self, features: &[f32; FEATURES]) -> Vec<f32> {
-        self.brain.respond(features)
     }
 }
 
@@ -328,7 +289,7 @@ impl Adviser for Controller {
             .map(|code| state.decide(code))
             .unwrap_or(([0.0; 5], accumulator::compete([0.0; 5])));
         Some(json!({
-            "source": "fly-brain", "trace": trace, "runs": state.learner.runs(),
+            "source": "controller", "trace": trace, "runs": state.learner.runs(),
             "values": values, "action": decision.action.label(),
             "confident": state.learner.runs() >= MIN_RUNS && decision.decided && decision.steps <= MAX_DECISION_STEPS,
             "race_steps": decision.steps,
@@ -391,7 +352,6 @@ mod tests {
 
     use super::*;
     use crate::situation::tests::{response, tool_events};
-    use crate::spiking::BrainConfig;
 
     #[test]
     fn concurrent_controllers_preserve_every_checked_run() {
@@ -508,29 +468,6 @@ mod tests {
     #[test]
     fn the_baseline_learns_to_check_after_editing() {
         learns_to_check_after_editing(Controller::new(Box::new(DirectEncoder), None));
-    }
-
-    #[test]
-    fn the_spiking_brain_learns_to_check_after_editing() {
-        let brain = Brain::generate(BrainConfig::tiny());
-
-        learns_to_check_after_editing(Controller::new(Box::new(FlyBrainEncoder::new(brain)), None));
-    }
-
-    /// The same lesson through the measured fly connectome. Needs the
-    /// converted file, which is not in the repository:
-    ///
-    ///     CORTEX_CONNECTOME=path/to/fly.csv cargo test --release -p cortex-brain -- --ignored
-    #[test]
-    #[ignore = "needs the measured connectome file"]
-    fn the_measured_fly_brain_learns_to_check_after_editing() {
-        let path = std::env::var("CORTEX_CONNECTOME").expect("set CORTEX_CONNECTOME");
-
-        let brain = Brain::from_file(BrainConfig::measured(), path.as_ref()).unwrap();
-
-        assert!(brain.config().neurons > 100_000);
-
-        learns_to_check_after_editing(Controller::new(Box::new(FlyBrainEncoder::new(brain)), None));
     }
 
     /// Every run here passes, so finishing always earns the most. The

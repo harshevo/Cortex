@@ -20,6 +20,8 @@ async fn main() -> ExitCode {
         Command::Skills(args) => commands::skills::execute(args),
         Command::Login => commands::login::execute().await,
         Command::Mind(args) => commands::mind::execute(args),
+        Command::Usage(args) => commands::usage::execute(args),
+        Command::Effect(args) => commands::effect::execute(args),
     };
 
     match result {

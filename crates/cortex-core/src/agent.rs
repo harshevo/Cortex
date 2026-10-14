@@ -1,6 +1,7 @@
 //! The agent loop: ask the model, run the tools it asks for, repeat.
 
-use std::sync::Arc;
+use std::collections::BTreeSet;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -9,7 +10,9 @@ use tokio::task::JoinSet;
 use crate::advice::Adviser;
 use crate::briefing::{self, Briefing, ContextSource};
 use crate::changes::{self, Originals};
+use crate::compact::CompactConfig;
 use crate::context::{self, MaskConfig, PruneConfig};
+use crate::effect::{self, Experiment, ExperimentConfig};
 use crate::error::{AgentError, ProviderError};
 use crate::inbox::{self, Inbox};
 use crate::message::{Block, Image, Message, Role, ToolCall, ToolResult};
@@ -22,6 +25,7 @@ use crate::tool::{ToolContext, ToolRegistry};
 use crate::trajectory::{Event, TrajectorySink};
 use crate::usage::Usage;
 use crate::verify::Verifier;
+use crate::window::{self, ContextUse};
 
 #[derive(Debug, Clone)]
 pub struct AgentConfig {
@@ -64,6 +68,20 @@ pub struct Extras {
 
     /// Make several attempts in copies of the project and keep the best.
     pub rollouts: Option<RolloutConfig>,
+
+    /// Replace the older part of a long conversation with a summary the
+    /// model writes. See [`crate::compact`].
+    pub compact: Option<CompactConfig>,
+
+    /// The model's context window in tokens, for a model whose window
+    /// [`crate::window::context_window`] does not know, or to compact
+    /// sooner than the real window would ask for.
+    pub context_window: Option<u64>,
+
+    /// Keep each adviser silent in a share of runs, chosen at random, so
+    /// that runs with and without its advice can be compared. See
+    /// [`crate::effect`].
+    pub experiment: Option<ExperimentConfig>,
 }
 
 /// The diff shown to the reviewer is shortened to this.
@@ -136,6 +154,11 @@ pub struct Agent {
     pub(crate) advisers: Vec<Arc<dyn Adviser>>,
     pub(crate) stream_observer: Option<Arc<dyn StreamObserver>>,
     pub(crate) inbox: Option<Arc<Inbox>>,
+
+    /// The advisers that have spoken in this agent's runs, by the name
+    /// they sign their advice with. An adviser has no name until it
+    /// speaks, so this is how a run's hold-outs can be listed up front.
+    pub(crate) heard: Arc<Mutex<BTreeSet<String>>>,
 }
 
 impl Agent {
@@ -162,6 +185,7 @@ impl Agent {
             advisers: Vec::new(),
             stream_observer: None,
             inbox: None,
+            heard: Arc::default(),
         }
     }
 
@@ -238,7 +262,14 @@ impl Agent {
             });
         }
 
-        let briefings = self.gather_context(instruction).await;
+        let experiment = self.draw_experiment();
+
+        let briefings = self.gather_context(instruction, experiment.as_ref()).await;
+
+        if let Some(experiment) = &experiment {
+            self.emit(self.assignment(experiment, &briefings));
+        }
+
         for adviser in &self.advisers {
             adviser.begin_run(self.config.max_steps);
         }
@@ -261,8 +292,11 @@ impl Agent {
             images,
         ));
 
-        self.work(conversation, Progress::starting(instruction))
-            .await
+        let mut progress = Progress::starting(instruction);
+
+        progress.gate.experiment = experiment;
+
+        self.work(conversation, progress).await
     }
 
     /// Carries on a run that stopped on a provider failure.
@@ -310,6 +344,9 @@ impl Agent {
 
             let step = progress.steps + 1;
 
+            self.compact_when_full(step, conversation, &mut progress)
+                .await;
+
             self.prune(step, conversation);
             self.mask(step, conversation);
             for adviser in &self.advisers {
@@ -325,6 +362,8 @@ impl Agent {
             };
 
             self.emit(Event::ModelStarted { step });
+
+            let sent = window::measure(&self.config.system_prompt, &specs, conversation);
 
             let call_started = Instant::now();
 
@@ -351,6 +390,21 @@ impl Agent {
                 duration_ms: call_started.elapsed().as_millis() as u64,
             });
 
+            let input = response.usage.total_input();
+
+            self.emit(Event::ContextMeasured {
+                step,
+                context: Box::new(ContextUse::new(
+                    input,
+                    response.usage.output_tokens,
+                    self.context_window(),
+                    sent,
+                )),
+                quota: self.provider.quota(),
+            });
+
+            progress.gate.heard_back(input, self.compact_threshold());
+
             let calls = response.message.tool_calls();
 
             conversation.push(response.message);
@@ -368,7 +422,9 @@ impl Agent {
 
                     let mut message = Message::tool_results(results);
 
-                    message.blocks.extend(self.advice(step).await);
+                    message
+                        .blocks
+                        .extend(self.advice(step, progress.gate.experiment.as_ref()).await);
                     message.blocks.extend(self.interjections(step));
 
                     conversation.push(message);
@@ -541,7 +597,13 @@ impl Agent {
     }
 
     /// Asks every context source for what it knows about the task.
-    async fn gather_context(&self, instruction: &str) -> Vec<Briefing> {
+    ///
+    /// A briefing that `experiment` holds out is recorded and left out.
+    async fn gather_context(
+        &self,
+        instruction: &str,
+        experiment: Option<&Experiment>,
+    ) -> Vec<Briefing> {
         let mut briefings = Vec::new();
 
         for source in &self.context_sources {
@@ -550,6 +612,19 @@ impl Agent {
             let Some(briefing) = source.brief(instruction, &self.context.workspace).await else {
                 continue;
             };
+
+            if experiment.is_some_and(|experiment| experiment.withholds_briefing(&briefing.source))
+            {
+                self.emit(Event::ContextWithheld {
+                    step: 0,
+                    source: briefing.source,
+                    text: briefing.text,
+                    detail: briefing.detail,
+                    duration_ms: started.elapsed().as_millis() as u64,
+                });
+
+                continue;
+            }
 
             self.emit(Event::ContextPrepared {
                 source: briefing.source.clone(),
@@ -564,8 +639,58 @@ impl Agent {
         briefings
     }
 
+    /// Decides, for a run that is starting, which advisers stay silent.
+    /// `None` when no experiment is set up, or the model is a stand-in
+    /// whose runs would measure nothing.
+    fn draw_experiment(&self) -> Option<Experiment> {
+        let config = self.config.extras.experiment.as_ref()?;
+
+        if !config.stand_ins && effect::is_stand_in(self.provider.name()) {
+            return None;
+        }
+
+        Experiment::draw(config)
+    }
+
+    /// The hold-outs of a run as an event: every adviser heard from so
+    /// far, and the briefings gathered for this run.
+    fn assignment(&self, experiment: &Experiment, briefings: &[Briefing]) -> Event {
+        let mut held_out = Vec::new();
+        let mut speaking = Vec::new();
+
+        let heard = self
+            .heard
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        for source in heard.iter() {
+            if experiment.withholds_advice(source) {
+                held_out.push(source.clone());
+            } else {
+                speaking.push(source.clone());
+            }
+        }
+
+        // Withheld briefings have already been recorded one by one.
+        let briefed = briefings
+            .iter()
+            .map(|briefing| briefing.source.clone())
+            .collect();
+
+        Event::ExperimentAssigned {
+            seed: experiment.seed,
+            share: experiment.share,
+            briefing_share: experiment.briefing_share,
+            held_out,
+            speaking,
+            briefed,
+        }
+    }
+
     /// Notes from the advisers, placed after the step's tool results.
-    async fn advice(&self, step: u32) -> Vec<Block> {
+    /// What an adviser that `experiment` holds out would have said is
+    /// recorded and not shown.
+    async fn advice(&self, step: u32, experiment: Option<&Experiment>) -> Vec<Block> {
         let mut blocks = Vec::new();
 
         for adviser in &self.advisers {
@@ -578,6 +703,25 @@ impl Agent {
             let Some(advice) = advice else {
                 continue;
             };
+
+            self.heard
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .insert(advice.source.clone());
+
+            if experiment.is_some_and(|experiment| experiment.withholds_advice(&advice.source)) {
+                adviser.held_out(step);
+
+                self.emit(Event::ContextWithheld {
+                    step,
+                    source: advice.source,
+                    text: advice.text,
+                    detail: advice.detail,
+                    duration_ms: started.elapsed().as_millis() as u64,
+                });
+
+                continue;
+            }
 
             self.emit(Event::ContextPrepared {
                 source: advice.source,
@@ -753,6 +897,51 @@ impl Agent {
             .collect()
     }
 
+    /// The input size, in tokens, from which the conversation is
+    /// compacted without being asked. `None` when that is switched off
+    /// or the model's window is not known.
+    fn compact_threshold(&self) -> Option<u64> {
+        let share = self.config.extras.compact.as_ref()?.auto_at?;
+        let window = self.context_window()?;
+
+        Some((window as f64 * f64::from(share.clamp(0.0, 1.0))) as u64)
+    }
+
+    /// Compacts the conversation before `step` when the last call showed
+    /// it has filled most of the window.
+    ///
+    /// It cannot go round in circles. It needs a measurement from a model
+    /// call made after the last compaction. If that first call is still
+    /// over the line, summarising again would not help, and it is left
+    /// alone for the rest of the run; the same when the summary call
+    /// fails. The run carries on either way.
+    async fn compact_when_full(
+        &self,
+        step: u32,
+        conversation: &mut Vec<Message>,
+        progress: &mut Progress,
+    ) {
+        let Some(threshold) = self.compact_threshold() else {
+            return;
+        };
+
+        if progress.gate.compacting_is_futile || progress.gate.last_input < threshold {
+            return;
+        }
+
+        // Whatever happens, not again before the model has been asked.
+        progress.gate.last_input = 0;
+
+        match self.compact_at(step, conversation, true).await {
+            Ok(Some(compaction)) => {
+                progress.usage += compaction.usage;
+                progress.gate.just_compacted = true;
+            }
+
+            Ok(None) | Err(_) => progress.gate.compacting_is_futile = true,
+        }
+    }
+
     fn prune(&self, step: u32, conversation: &mut [Message]) {
         let Some(config) = &self.config.prune else {
             return;
@@ -874,6 +1063,34 @@ pub(crate) struct Gate {
 
     /// What the run was asked to do, for the review and the lessons.
     instruction: String,
+
+    /// Tokens the last model call was sent, or 0 when the conversation
+    /// has been compacted since.
+    last_input: u64,
+
+    /// No model call has been made since the conversation was compacted.
+    just_compacted: bool,
+
+    /// Compacting did not bring the conversation under the line, or the
+    /// summary could not be written. It is not tried again in this run.
+    compacting_is_futile: bool,
+
+    /// Which advisers stay silent in this run.
+    pub(crate) experiment: Option<Experiment>,
+}
+
+impl Gate {
+    /// Takes note of how large the input of the call just answered was.
+    /// `threshold` is the size from which the conversation is compacted.
+    fn heard_back(&mut self, input: u64, threshold: Option<u64>) {
+        self.last_input = input;
+
+        if std::mem::take(&mut self.just_compacted)
+            && threshold.is_some_and(|threshold| input >= threshold)
+        {
+            self.compacting_is_futile = true;
+        }
+    }
 }
 
 /// Providers reject a history where a tool call has no result. If a run

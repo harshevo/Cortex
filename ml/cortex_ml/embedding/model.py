@@ -5,6 +5,7 @@ space, so that related ones end up close together. Only its text part is
 loaded (about 270M parameters); the vision and audio encoders are left out.
 """
 
+import os
 from dataclasses import dataclass
 
 import numpy as np
@@ -13,6 +14,10 @@ from sentence_transformers import SentenceTransformer
 from cortex_ml.acceleration import configure_threads, gpu_device, release_gpu_memory
 
 MODEL_NAME = "google/embeddinggemma-2"
+
+# A packaged app carries the weights and names their folder here, so that
+# nothing is downloaded. Otherwise they come from the Hugging Face cache.
+MODEL_SOURCE = os.environ.get("CORTEX_EMBEDDING_MODEL") or MODEL_NAME
 
 # The model is trained with a short instruction in front of every input.
 # These are the two it defines for code search.
@@ -48,7 +53,7 @@ class Embedder:
 
         # float16 makes this model return NaN, so stay on float32.
         self.model = SentenceTransformer(
-            MODEL_NAME,
+            MODEL_SOURCE,
             device=self.device,
             config_kwargs=TEXT_ONLY,
             model_kwargs={"torch_dtype": torch.float32},

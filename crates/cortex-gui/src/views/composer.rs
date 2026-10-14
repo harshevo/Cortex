@@ -51,6 +51,10 @@ pub enum Action {
     /// Tell the run in progress something.
     Steer(String),
 
+    /// Put the last thing that was said back in the box, to send again
+    /// or change.
+    Recall,
+
     /// Carry on the run that stopped on a provider failure.
     Continue,
 
@@ -124,7 +128,7 @@ pub fn show(
     egui::Frame::new()
         .fill(palette::surface())
         .stroke(Stroke::new(1.0, palette::border()))
-        .corner_radius(CornerRadius::same(14))
+        .corner_radius(CornerRadius::same(crate::theme::radius::XL))
         .inner_margin(egui::Margin::symmetric(16, 12))
         .show(ui, |ui| {
             thumbnails(ui, attachments);
@@ -163,12 +167,27 @@ pub fn show(
 
                 let editor_id = ui.id().with("composer editor");
 
+                // Asked before the box is drawn: Escape takes the keyboard
+                // away from it in the drawing.
+                let had_focus = ui.memory(|memory| memory.has_focus(editor_id));
+                let nothing_focused = ui.memory(|memory| memory.focused().is_none());
+
+                // The last message was asked back on the frame before and
+                // is in the box now.
+                let recalled_id = editor_id.with("recalled");
+
+                if ui.data_mut(|data| data.remove_temp::<bool>(recalled_id)).is_some() {
+                    put_cursor_at_end(ui, editor_id, draft);
+                }
+
                 // Tab takes the suggestion, unless another field has the
                 // keyboard and Tab is on its way there.
-                let accepted = suggestion.is_some_and(|_| {
-                    ui.memory(|memory| memory.focused().is_none_or(|focused| focused == editor_id))
-                        && ui.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Tab))
-                });
+                // Without a suggestion Tab does nothing here: it neither
+                // indents the message nor leaves the box.
+                let tab = ui.memory(|memory| memory.focused().is_none_or(|focused| focused == editor_id))
+                    && ui.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Tab));
+
+                let accepted = tab && suggestion.is_some();
 
                 if let (true, Some(suggestion)) = (accepted, suggestion) {
                     *draft = suggestion.to_string();
@@ -183,9 +202,12 @@ pub fn show(
 
                 let editor = egui::TextEdit::multiline(draft)
                     .id(editor_id)
-                    // While a suggestion shows, Tab is the box's own key
-                    // and does not move to the next control.
-                    .lock_focus(suggestion.is_some())
+                    // Tab is the box's own key: it takes the suggestion
+                    // when one shows, and never moves the keyboard to
+                    // the next control. Left to do that, one Tab during
+                    // a run put the keyboard on the stop button, where
+                    // typing went nowhere and Return stopped the run.
+                    .lock_focus(true)
                     .hint_text(hint)
                     .desired_rows(1)
                     .desired_width((ui.available_width() - BUTTON_SIZE - 8.0 - reserved).max(40.0))
@@ -205,6 +227,23 @@ pub fn show(
                     action = Some(Action::Continue);
                 }
 
+                let escaped = (had_focus || nothing_focused)
+                    && !egui::Popup::is_any_open(ui.ctx())
+                    && ui.input(|input| input.key_pressed(Key::Escape));
+
+                // Up in an empty box brings back what was said last.
+                let recall = mode == Mode::Ready
+                    && had_focus
+                    && draft.is_empty()
+                    && attachments.is_empty()
+                    && ui.input(|input| input.key_pressed(Key::ArrowUp) && input.modifiers.is_none());
+
+                if recall && action.is_none() {
+                    action = Some(Action::Recall);
+
+                    ui.data_mut(|data| data.insert_temp(recalled_id, true));
+                }
+
                 if mode == Mode::Working {
                     let can_send = !draft.trim().is_empty();
 
@@ -217,7 +256,7 @@ pub fn show(
                         draft.clear();
                     }
 
-                    if stop_button(ui) {
+                    if stop_button(ui) || escaped {
                         action = Some(Action::Stop);
                     }
                 } else {
@@ -248,22 +287,30 @@ pub fn show(
                     }
                 }
 
-                // Preserve focus in search fields and other chat panes.
-                if matches!(mode, Mode::Ready | Mode::Working)
-                    && !editor.has_focus()
-                    && ui.memory(|memory| memory.focused().is_none())
-                {
+                let takes_keyboard = matches!(mode, Mode::Ready | Mode::Working);
+
+                // What is typed while no field has the keyboard belongs
+                // here. Search fields and the boxes of other panes keep
+                // what is typed into them; a button that happens to hold
+                // the keyboard does not swallow it.
+                if takes_keyboard && !editor.has_focus() && !ui.ctx().text_edit_focused() {
                     let typed = typed_text(ui);
 
-                    if !typed.is_empty() {
+                    // A space on a button presses the button.
+                    let pressing = typed.trim().is_empty()
+                        && ui.memory(|memory| memory.focused().is_some());
+
+                    if !typed.is_empty() && !pressing {
                         draft.push_str(&typed);
+
+                        put_cursor_at_end(ui, editor_id, draft);
 
                         editor.request_focus();
                     }
                 }
 
                 // Focus an idle composer only when no other field owns input.
-                if matches!(mode, Mode::Ready | Mode::Working) && ui.memory(|memory| memory.focused().is_none()) {
+                if takes_keyboard && ui.memory(|memory| memory.focused().is_none()) {
                     editor.request_focus();
                 }
             });
@@ -372,7 +419,8 @@ fn chip(ui: &mut Ui, icon: Option<Icon>, label: &str, clickable: bool) -> egui::
         palette::surface()
     };
 
-    ui.painter().rect_filled(rect, CornerRadius::same(7), fill);
+    ui.painter()
+        .rect_filled(rect, CornerRadius::same(crate::theme::radius::M), fill);
 
     if let Some(icon) = icon {
         icons::paint(
@@ -439,14 +487,17 @@ fn thumbnails(ui: &mut Ui, attachments: &mut Vec<Attachment>) {
                 Some(texture) => attachment::paint_cover(ui, rect, &texture, 8),
 
                 None => {
-                    ui.painter()
-                        .rect_filled(rect, CornerRadius::same(8), palette::raised());
+                    ui.painter().rect_filled(
+                        rect,
+                        CornerRadius::same(crate::theme::radius::L),
+                        palette::raised(),
+                    );
                 }
             }
 
             ui.painter().rect_stroke(
                 rect,
-                CornerRadius::same(8),
+                CornerRadius::same(crate::theme::radius::L),
                 Stroke::new(1.0, palette::border()),
                 egui::StrokeKind::Inside,
             );
@@ -531,7 +582,7 @@ fn continue_button(ui: &mut Ui) -> bool {
     let button = egui::Button::new(label)
         .fill(palette::raised())
         .stroke(Stroke::new(1.0, palette::border()))
-        .corner_radius(CornerRadius::same(12))
+        .corner_radius(CornerRadius::same(crate::theme::radius::XL))
         .min_size(egui::vec2(CONTINUE_WIDTH - 10.0, BUTTON_SIZE - 6.0));
 
     ui.add(button)
@@ -544,8 +595,10 @@ fn continue_button(ui: &mut Ui) -> bool {
 
 /// A round button with a square in it. Returns whether it was clicked.
 fn stop_button(ui: &mut Ui) -> bool {
+    // It answers the pointer and Escape, and never holds the keyboard: a
+    // Return meant for the box must not be able to stop a run.
     let (rect, response) =
-        ui.allocate_exact_size(egui::vec2(BUTTON_SIZE, BUTTON_SIZE), Sense::click());
+        ui.allocate_exact_size(egui::vec2(BUTTON_SIZE, BUTTON_SIZE), Sense::CLICK);
 
     let fill = if response.hovered() {
         palette::text()
@@ -559,17 +612,18 @@ fn stop_button(ui: &mut Ui) -> bool {
 
     painter.rect_filled(
         egui::Rect::from_center_size(rect.center(), egui::vec2(10.0, 10.0)),
-        CornerRadius::same(2),
+        CornerRadius::same(crate::theme::radius::XS),
         palette::sunken(),
     );
 
-    response.on_hover_text("Stop").clicked()
+    response.on_hover_text("Stop  Esc").clicked()
 }
 
 /// A round button with an upward arrow. Returns whether it was clicked.
 fn send_button(ui: &mut Ui, enabled: bool) -> bool {
+    // Return sends, so the button need not hold the keyboard.
     let sense = if enabled {
-        Sense::click()
+        Sense::CLICK
     } else {
         Sense::hover()
     };
@@ -702,6 +756,123 @@ mod tests {
         );
 
         assert_eq!(draft, "run the tests first");
+    }
+
+    fn working(
+        context: &egui::Context,
+        events: Vec<egui::Event>,
+        draft: &mut String,
+    ) -> Option<Action> {
+        let input = egui::RawInput {
+            events,
+            ..Default::default()
+        };
+
+        let mut action = None;
+
+        let mut output = context.run_ui(input, |ui| {
+            action = show(ui, draft, &mut Vec::new(), Mode::Working, false, &[], None);
+        });
+
+        output.textures_delta.clear();
+
+        action
+    }
+
+    #[test]
+    fn tab_during_a_run_leaves_the_box_able_to_be_typed_in() {
+        let context = egui::Context::default();
+        let mut draft = String::new();
+
+        working(&context, Vec::new(), &mut draft);
+        working(&context, Vec::new(), &mut draft);
+
+        // Tab used to move the keyboard to the stop button. From there
+        // nothing typed reached the box, and Return stopped the run.
+        working(&context, vec![key(Key::Tab)], &mut draft);
+        working(&context, Vec::new(), &mut draft);
+
+        working(&context, vec![egui::Event::Text("wait".into())], &mut draft);
+
+        assert_eq!(draft, "wait");
+
+        let action = working(&context, vec![key(Key::Enter)], &mut draft);
+
+        assert!(matches!(action, Some(Action::Steer(message)) if message == "wait"));
+    }
+
+    #[test]
+    fn return_in_an_empty_box_does_not_stop_the_run() {
+        let context = egui::Context::default();
+        let mut draft = String::new();
+
+        working(&context, Vec::new(), &mut draft);
+        working(&context, Vec::new(), &mut draft);
+        working(&context, vec![key(Key::Tab)], &mut draft);
+        working(&context, Vec::new(), &mut draft);
+
+        for pressed in [Key::Enter, Key::Space] {
+            assert!(working(&context, vec![key(pressed)], &mut draft).is_none());
+        }
+    }
+
+    #[test]
+    fn escape_stops_a_run() {
+        let context = egui::Context::default();
+        let mut draft = String::new();
+
+        working(&context, Vec::new(), &mut draft);
+        working(&context, Vec::new(), &mut draft);
+
+        let action = working(&context, vec![key(Key::Escape)], &mut draft);
+
+        assert!(matches!(action, Some(Action::Stop)));
+
+        // And the box takes the keyboard back for what is typed next.
+        working(&context, Vec::new(), &mut draft);
+        working(
+            &context,
+            vec![egui::Event::Text("go on".into())],
+            &mut draft,
+        );
+
+        assert_eq!(draft, "go on");
+    }
+
+    #[test]
+    fn up_in_an_empty_box_asks_for_the_last_message() {
+        let context = egui::Context::default();
+        let mut draft = String::new();
+
+        let ready = |events: Vec<egui::Event>, draft: &mut String| {
+            let input = egui::RawInput {
+                events,
+                ..Default::default()
+            };
+
+            let mut action = None;
+
+            let mut output = context.run_ui(input, |ui| {
+                action = show(ui, draft, &mut Vec::new(), Mode::Ready, false, &[], None);
+            });
+
+            output.textures_delta.clear();
+
+            action
+        };
+
+        ready(Vec::new(), &mut draft);
+        ready(Vec::new(), &mut draft);
+
+        assert!(matches!(
+            ready(vec![key(Key::ArrowUp)], &mut draft),
+            Some(Action::Recall)
+        ));
+
+        // With something typed, Up is the box's own key again.
+        draft.push_str("typed");
+
+        assert!(ready(vec![key(Key::ArrowUp)], &mut draft).is_none());
     }
 
     #[test]

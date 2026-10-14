@@ -349,9 +349,7 @@ fn unquote(value: &str) -> &str {
 }
 
 fn home_directory() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .filter(|home| !home.is_empty())
-        .map(PathBuf::from)
+    std::env::home_dir().filter(|home| !home.as_os_str().is_empty())
 }
 
 #[cfg(test)]

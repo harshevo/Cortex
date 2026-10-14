@@ -33,8 +33,6 @@ const FASTEST: f32 = 14.0;
 /// A pointer this close to a neuron is on it.
 const REACH: f32 = 12.0;
 
-const OWN: Color32 = Color32::from_rgb(176, 136, 246);
-
 struct Place {
     at: Vec2,
     speed: Vec2,
@@ -367,7 +365,7 @@ fn colour_of(kind: Kind) -> Color32 {
     match kind {
         Kind::Sense => palette::accent(),
         Kind::Assembly => palette::warning(),
-        Kind::Own => OWN,
+        Kind::Own => palette::model(),
     }
 }
 

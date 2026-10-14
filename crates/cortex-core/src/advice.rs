@@ -30,6 +30,12 @@ pub trait Adviser: Send + Sync {
         None
     }
 
+    /// The advice just given for `step` was not shown to the model: the
+    /// run is one in which this adviser is held out, so that runs with
+    /// and without it can be compared. An adviser that keeps count of
+    /// whether its advice was followed should leave this one out.
+    fn held_out(&self, _step: u32) {}
+
     /// Called after the tools of `step` have run. `None` means there is
     /// nothing worth saying, which should be the usual answer.
     fn advise(&self, step: u32, max_steps: u32) -> Option<Advice>;

@@ -207,14 +207,22 @@ async fn exchange(code: &str, verifier: &str, redirect: &str) -> Result<Tokens, 
 }
 
 fn open_browser(address: &str) {
-    let program = if cfg!(target_os = "macos") {
-        "open"
+    let mut command = if cfg!(target_os = "macos") {
+        std::process::Command::new("open")
+    } else if cfg!(windows) {
+        // Hands the address to whatever opens web addresses, without a
+        // shell in between to misread the `&` in it.
+        let mut command = std::process::Command::new("rundll32");
+
+        command.arg("url.dll,FileProtocolHandler");
+
+        command
     } else {
-        "xdg-open"
+        std::process::Command::new("xdg-open")
     };
 
     // Failing to open it is fine: the address has been shown as well.
-    let _ = std::process::Command::new(program)
+    let _ = command
         .arg(address)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())

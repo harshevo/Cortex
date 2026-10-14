@@ -53,7 +53,12 @@ async fn run(args: EvalRunArgs) -> Result<ExitCode> {
         skip_identical: true,
     };
 
-    let setup = features::setup(&args.model, memory_location).await?;
+    let mut setup = features::setup(&args.model, memory_location).await?;
+
+    // An evaluation compares a capability switched on with it switched
+    // off. Holding an adviser out of some runs would water down the side
+    // that has it.
+    setup.extras.experiment = None;
 
     let options = RunOptions {
         label: args.label,

@@ -19,24 +19,56 @@ pub struct SessionLog {
     directory: PathBuf,
     current: Mutex<Option<JsonlSink>>,
 
+    /// The file being written to, and who is told its name: the records
+    /// of tokens and runs, which file what they hold under it.
+    path: Mutex<Option<PathBuf>>,
+    namer: Mutex<Option<Namer>>,
+
     /// Told which file a new session is written to, so the window knows
     /// that file is the session it is showing.
     outbox: Outbox,
 }
+
+/// Told the name of each session's log as it begins.
+pub type Namer = Box<dyn Fn(&str) + Send + Sync>;
 
 impl SessionLog {
     pub fn new(project: &Path, outbox: Outbox) -> Self {
         Self {
             directory: project.join(TRAJECTORY_DIRECTORY),
             current: Mutex::new(None),
+            path: Mutex::new(None),
+            namer: Mutex::new(None),
             outbox,
+        }
+    }
+
+    /// Who is told which session is being written. Told at once if one
+    /// already is: the agent is rebuilt in the middle of sessions.
+    pub fn name_with(&self, namer: Namer) {
+        if let Some(path) = &*lock(&self.path) {
+            namer(&stem(path));
+        }
+
+        *lock(&self.namer) = Some(namer);
+    }
+
+    fn began(&self, path: &Path) {
+        *lock(&self.path) = Some(path.to_path_buf());
+
+        if let Some(namer) = &*lock(&self.namer) {
+            namer(&stem(path));
         }
     }
 
     /// Goes on writing to the log of an earlier session.
     pub fn resume(&self, path: &Path) {
         match JsonlSink::append(path) {
-            Ok(sink) => *self.lock() = Some(sink),
+            Ok(sink) => {
+                *self.lock() = Some(sink);
+
+                self.began(path);
+            }
 
             // The session carries on in a log of its own.
             Err(error) => {
@@ -50,6 +82,7 @@ impl SessionLog {
     /// Ends the current file; the next event starts a new one.
     pub fn start_new_session(&self) {
         *self.lock() = None;
+        *lock(&self.path) = None;
     }
 
     fn create_log(&self) -> std::io::Result<(PathBuf, JsonlSink)> {
@@ -80,6 +113,16 @@ impl SessionLog {
     }
 }
 
+fn stem(path: &Path) -> String {
+    path.file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 impl TrajectorySink for SessionLog {
     fn record(&self, event: &Event) {
         let mut current = self.lock();
@@ -89,6 +132,7 @@ impl TrajectorySink for SessionLog {
                 Ok((path, sink)) => {
                     *current = Some(sink);
 
+                    self.began(&path);
                     self.outbox.send(Update::Logging(path));
                 }
 
@@ -121,6 +165,7 @@ mod tests {
         let outbox = Outbox {
             updates,
             window: eframe::egui::Context::default(),
+            chat: "agent-1".into(),
         };
         let barrier = Arc::new(Barrier::new(32));
         std::thread::scope(|scope| {

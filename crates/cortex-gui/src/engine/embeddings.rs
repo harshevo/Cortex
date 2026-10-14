@@ -1,8 +1,9 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
+use cortex_core::services::Service;
 use cortex_retrieval::client::Health;
 use reqwest::Url;
 use tokio::process::{Child, Command};
@@ -81,8 +82,7 @@ impl EmbeddingService {
                 )
             })?);
             outbox.send(Update::ServiceStarting(
-                "Starting the embedding service… The first launch may download model weights."
-                    .into(),
+                "Starting the embedding service…".into(),
             ));
         }
         let deadline = Instant::now() + timeout;
@@ -148,68 +148,16 @@ fn local_port(address: &str) -> Result<u16> {
 }
 
 fn log_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(std::env::temp_dir)
-        .join(".cortex/logs/embedding-service.log")
-}
-
-fn ml_directory() -> Result<PathBuf> {
-    let mut candidates = Vec::new();
-    if let Some(directory) = std::env::var_os("CORTEX_ML_DIR") {
-        candidates.push(PathBuf::from(directory));
-    }
-    if let Ok(executable) = std::env::current_exe() {
-        candidates.extend(
-            executable
-                .ancestors()
-                .skip(1)
-                .take(5)
-                .map(|parent| parent.join("ml")),
-        );
-    }
-    candidates.push(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ml"));
-    candidates.into_iter().find(|directory| directory.join("cortex_ml/embedding/server.py").is_file())
-        .context("Cannot locate Cortex's ml directory. Set CORTEX_ML_DIR to the directory containing pyproject.toml and cortex_ml.")
+    Service::Embedding
+        .log()
+        .unwrap_or_else(|| std::env::temp_dir().join("cortex-embedding-service.log"))
 }
 
 fn service_command(port: u16) -> Result<Command> {
-    let directory = ml_directory()?.canonicalize()?;
-    let python = directory.join(if cfg!(windows) {
-        ".venv/Scripts/python.exe"
-    } else {
-        ".venv/bin/python"
-    });
-    let mut command = if python.is_file() {
-        Command::new(python)
-    } else {
-        let uv = [
-            PathBuf::from("/opt/homebrew/bin/uv"),
-            PathBuf::from("/usr/local/bin/uv"),
-            dirs::home_dir().unwrap_or_default().join(".local/bin/uv"),
-        ]
-        .into_iter()
-        .find(|path| path.is_file())
-        .unwrap_or_else(|| PathBuf::from("uv"));
-        let mut command = Command::new(uv);
-        command
-            .args(["run", "--project"])
-            .arg(&directory)
-            .arg("python");
-        command
-    };
-    command
-        .current_dir(directory)
-        .env("PYTHONUNBUFFERED", "1")
-        .env("CORTEX_CPU_THREADS", "2")
-        .env("OMP_NUM_THREADS", "2")
-        .env("TOKENIZERS_PARALLELISM", "false")
-        .args([
-            "-m",
-            "cortex_ml.embedding.server",
-            "--port",
-            &port.to_string(),
-        ]);
-    Ok(command)
+    Service::Embedding
+        .command(port)
+        .map(Command::from)
+        .map_err(anyhow::Error::msg)
 }
 
 #[cfg(test)]
@@ -223,6 +171,7 @@ mod tests {
         Outbox {
             updates,
             window: eframe::egui::Context::default(),
+            chat: "agent-1".into(),
         }
     }
 
@@ -231,9 +180,13 @@ mod tests {
         format!("http://{}", socket.local_addr().unwrap())
     }
 
+    /// Any Python will do for a stand-in service.
+    fn python() -> Command {
+        Command::new(if cfg!(windows) { "python" } else { "python3" })
+    }
+
     fn fake_command(port: u16) -> Result<Command> {
-        let python = ml_directory()?.join(".venv/bin/python");
-        let mut command = Command::new(python);
+        let mut command = python();
         command.arg("-c").arg(format!(r#"
 import json
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -305,7 +258,7 @@ HTTPServer(('127.0.0.1',{port}),Handler).serve_forever()
                 &address(),
                 &outbox(),
                 |_| {
-                    let mut command = Command::new(ml_directory()?.join(".venv/bin/python"));
+                    let mut command = python();
                     command.args(["-c", "raise SystemExit(7)"]);
                     Ok(command)
                 },

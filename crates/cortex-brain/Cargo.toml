@@ -1,6 +1,6 @@
 [package]
 name = "cortex-brain"
-description = "Brain-inspired advisers: decision controllers (a fly-scale spiking network and a plain baseline) and an associative network for hunches."
+description = "Advisers that learn from runs: a decision controller, an associative network for hunches, and the link to the mind service."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,9 +12,6 @@ async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
-wgpu = { version = "30", default-features = false, features = ["metal", "wgsl", "std", "parking_lot"] }
-bytemuck = { version = "1", features = ["derive"] }
-pollster = "0.4"
 
 [dev-dependencies]
 tokio.workspace = true

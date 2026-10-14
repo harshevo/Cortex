@@ -39,9 +39,6 @@ struct Running {
     /// What the person says while a run is in progress.
     inbox: Arc<Inbox>,
 
-    /// The provider's name, to tell whose conversation a log holds.
-    provider: String,
-
     /// What getting the project ready needs.
     workspace: Workspace,
     model: ModelArgs,
@@ -51,6 +48,12 @@ struct Running {
 
     /// Guesses what the person will ask for next, when the mind is on.
     mind: Option<Arc<Mind>>,
+
+    /// The dendritic network, which guesses it too when the mind is off.
+    living: Option<Arc<cortex_living::Living>>,
+
+    /// The record of how runs went, told when the person stops one.
+    effect: Option<Arc<cortex_core::effect::EffectSink>>,
 }
 
 pub async fn run(
@@ -107,6 +110,11 @@ pub async fn run(
                         if let Some(log) = &launch.open {
                             conversation = take_up(&built, log);
                             interrupted = None;
+                        } else if !launch.fresh {
+                            // A changed setting can change the system
+                            // prompt or the tools under a conversation
+                            // that goes on.
+                            drop_sealed_reasoning(&mut conversation);
                         }
 
                         tokio::spawn(report_memory(built.memory.clone(), outbox.clone()));
@@ -249,6 +257,18 @@ pub async fn run(
                 }
             }
 
+            Command::Compact => {
+                let Some(running) = &running else {
+                    outbox.send(not_set_up());
+
+                    continue;
+                };
+
+                outbox.send(Update::Compacted(
+                    compact(running, &mut conversation).await,
+                ));
+            }
+
             Command::Prepare => {
                 let Some(running) = &running else {
                     outbox.send(not_set_up());
@@ -292,7 +312,10 @@ async fn build(
         // Memory falls back to comparing words, so on a Mac without the
         // Python side the agent still runs.
         if let Err(error) = embeddings.ensure(&model.embedding_url, outbox).await {
-            if model.features.contains(&cortex_cli::args::Feature::Semantic) {
+            if model
+                .features
+                .contains(&cortex_cli::features::Feature::Semantic)
+            {
                 return Err(error);
             }
 
@@ -318,7 +341,6 @@ async fn build(
     outbox.send(Update::Ready(blueprint.info.clone()));
 
     let memory = blueprint.memory.clone();
-    let provider = blueprint.provider.name().to_string();
     let inbox = Arc::new(Inbox::new());
 
     // Embedding a project takes a while the first time. Started now, it
@@ -346,6 +368,24 @@ async fn build(
     let model = blueprint.model.clone();
     let describer = (!blueprint.info.demo).then(|| blueprint.provider.clone());
 
+    let living = blueprint.setup.living.clone();
+    let effect = blueprint.setup.effect.clone();
+
+    {
+        let usage = blueprint.setup.usage.clone();
+        let effect = effect.clone();
+
+        log.name_with(Box::new(move |session| {
+            if let Some(usage) = &usage {
+                usage.set_session(session);
+            }
+
+            if let Some(effect) = &effect {
+                effect.set_session(session);
+            }
+        }));
+    }
+
     let agent = build_agent(blueprint, &log, &inbox, outbox);
 
     Ok(Running {
@@ -354,11 +394,12 @@ async fn build(
         place,
         log,
         inbox,
-        provider,
         workspace,
         model,
         describer,
         mind,
+        living,
+        effect,
     })
 }
 
@@ -406,6 +447,19 @@ async fn get_ready(running: &Running) -> Update {
     }
 }
 
+/// Takes out the blocks of a conversation that only the provider which
+/// wrote them can read, and only under the prompt they were written
+/// under.
+fn drop_sealed_reasoning(conversation: &mut Vec<Message>) {
+    for message in conversation.iter_mut() {
+        message
+            .blocks
+            .retain(|block| !matches!(block, Block::Opaque { .. }));
+    }
+
+    conversation.retain(|message| !message.blocks.is_empty());
+}
+
 /// Takes up the session logged in `log`: returns its conversation and
 /// points the session log at that file, so the session goes on as one.
 fn take_up(running: &Running, log: &std::path::Path) -> Vec<Message> {
@@ -414,21 +468,11 @@ fn take_up(running: &Running, log: &std::path::Path) -> Vec<Message> {
     let mut conversation = replay::conversation(&events);
 
     // Blocks only their own provider understands (a model's sealed
-    // reasoning) cannot be sent to another.
-    let written_by = events.iter().rev().find_map(|event| match event {
-        Event::RunStarted { provider, .. } => Some(provider.as_str()),
-        _ => None,
-    });
-
-    if written_by != Some(running.provider.as_str()) {
-        for message in &mut conversation {
-            message
-                .blocks
-                .retain(|block| !matches!(block, Block::Opaque { .. }));
-        }
-
-        conversation.retain(|message| !message.blocks.is_empty());
-    }
+    // reasoning) cannot be sent to another, and the provider that wrote
+    // them refuses them too once the system prompt or the tools differ
+    // from when they were written, as they may for a session taken up
+    // later. They are dropped; the model's words stay.
+    drop_sealed_reasoning(&mut conversation);
 
     running.log.resume(log);
 
@@ -449,9 +493,19 @@ fn create_demo_project(launch: &Launch) -> Result<TempDir> {
 
 /// Asks the mind what the person is likely to want now, and tells the
 /// window. Only after a run that reached its end: one that was stopped
-/// or failed is usually followed by sending the same thing again.
+/// or failed is usually followed by sending the same thing again. With
+/// the mind off, the dendritic network says a short instruction it has
+/// seen follow this kind of run more than once, if there is one.
 fn suggest_next(running: &Running, finished: bool, outbox: &Outbox) {
-    let Some(mind) = running.mind.clone().filter(|_| finished) else {
+    if !finished {
+        return;
+    }
+
+    let Some(mind) = running.mind.clone() else {
+        if let Some(living) = &running.living {
+            outbox.send(Update::Suggestion(living.suggestion()));
+        }
+
         return;
     };
 
@@ -474,6 +528,33 @@ async fn let_rest(living: std::sync::Weak<cortex_living::Living>, outbox: Outbox
         if living.rest() {
             outbox.wake();
         }
+    }
+}
+
+/// Replaces the older part of the conversation with a summary the model
+/// writes, and says in a line what came of it.
+async fn compact(running: &Running, conversation: &mut Vec<Message>) -> (String, bool) {
+    match running.agent.compact(conversation).await {
+        Ok(Some(compaction)) => (
+            format!(
+                "Compacted: {} earlier messages replaced by a summary, {} characters shorter. \
+                 Writing it took {} tokens.",
+                compaction.messages_replaced,
+                compaction.chars_removed(),
+                compaction.usage.total()
+            ),
+            false,
+        ),
+
+        Ok(None) => (
+            "The conversation is too short to be worth a summary.".to_string(),
+            false,
+        ),
+
+        Err(error) => (
+            format!("The conversation was left as it was: {error}"),
+            true,
+        ),
     }
 }
 
@@ -568,8 +649,16 @@ async fn carry_out(
 
                 command = commands.recv() => match command {
                     Some(Command::InspectBrain(query)) => outbox.send(Update::BrainInspection(running.agent.inspect_brain(&query))),
+                    Some(Command::Stop) => {
+                        if let Some(effect) = &running.effect {
+                            effect.stopped_by_person();
+                        }
+
+                        break true;
+                    }
+
                     // A closed window stops the run as well.
-                    Some(Command::Stop) | None => break true,
+                    None => break true,
 
                     Some(Command::Steer(message) | Command::Submit(message, _)) => {
                         running.inbox.push(message)
@@ -581,6 +670,7 @@ async fn carry_out(
                         | Command::Reset
                         | Command::Open(_)
                         | Command::Prepare
+                        | Command::Compact
                         | Command::Launch(_),
                     ) => {}
                 },

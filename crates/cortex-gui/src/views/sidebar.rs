@@ -296,8 +296,11 @@ fn project_row(
     let hovered = ui.rect_contains_pointer(rect);
 
     if hovered {
-        ui.painter()
-            .rect_filled(rect, CornerRadius::same(6), palette::surface());
+        ui.painter().rect_filled(
+            rect,
+            CornerRadius::same(crate::theme::radius::M),
+            palette::surface(),
+        );
     }
 
     let color = if active {
@@ -412,7 +415,8 @@ fn session_row(
             palette::surface()
         };
 
-        ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
+        ui.painter()
+            .rect_filled(rect, CornerRadius::same(crate::theme::radius::M), fill);
     }
 
     let left = rect.left() + 10.0 + indent;
@@ -502,7 +506,7 @@ fn delete_button(
     if armed {
         ui.painter().rect_stroke(
             rect,
-            CornerRadius::same(6),
+            CornerRadius::same(crate::theme::radius::M),
             Stroke::new(1.0, palette::bad()),
             egui::StrokeKind::Inside,
         );
@@ -534,7 +538,8 @@ fn settings_row(ui: &mut Ui, selected: bool) -> bool {
             palette::surface()
         };
 
-        ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
+        ui.painter()
+            .rect_filled(rect, CornerRadius::same(crate::theme::radius::M), fill);
     }
 
     let color = if selected {

@@ -1,19 +1,75 @@
 //! Past sessions, read back from the trajectory logs.
 
 use std::cmp::Reverse;
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use cortex_core::Event;
 
-use super::transcript::Session;
+use super::Session;
 
 /// Folder inside the project where the engine logs every run.
 pub const TRAJECTORY_DIRECTORY: &str = ".cortex/trajectories";
 
 /// Past sessions listed in the sidebar.
 const MAX_LISTED: usize = 40;
+
+/// Most titles remembered before the list is started again.
+const MAX_TITLES: usize = 4_096;
+
+/// The first instruction of each log that has been listed. A log is
+/// only ever added to, so its first instruction never changes, and the
+/// sidebar's list is asked for many times in a session: on every run's
+/// start and end, and whenever another chat is brought forward. With
+/// this, asking again reads the folder and no file in it.
+static TITLES: Mutex<Option<HashMap<PathBuf, String>>> = Mutex::new(None);
+
+/// The first instruction in the log at `path`, read once.
+fn title(path: &Path) -> Option<String> {
+    let known = |titles: &mut Option<HashMap<PathBuf, String>>| {
+        titles.get_or_insert_with(HashMap::new).get(path).cloned()
+    };
+
+    let mut titles = TITLES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    if let Some(title) = known(&mut titles) {
+        return Some(title);
+    }
+
+    // Not held while the file is read.
+    drop(titles);
+
+    // A log with no run in it yet may gain one, so it is not remembered.
+    let title = first_instruction(path)?;
+
+    let mut titles = TITLES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let titles = titles.get_or_insert_with(HashMap::new);
+
+    if titles.len() >= MAX_TITLES {
+        titles.clear();
+    }
+
+    titles.insert(path.to_path_buf(), title.clone());
+
+    Some(title)
+}
+
+fn forget_title(path: &Path) {
+    let mut titles = TITLES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    if let Some(titles) = titles.as_mut() {
+        titles.remove(path);
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PastSession {
@@ -62,7 +118,7 @@ pub fn list(project: &Path) -> Vec<PastSession> {
 
     logs.into_iter()
         .filter_map(|(updated_ms, started_ms, path)| {
-            let title = first_instruction(&path)?;
+            let title = title(&path)?;
 
             Some(PastSession {
                 path,
@@ -78,16 +134,29 @@ pub fn list(project: &Path) -> Vec<PastSession> {
 /// Deletes a session's log. The work the session did in the project is
 /// not undone; only the record of the conversation goes.
 pub fn delete(path: &Path) -> std::io::Result<()> {
+    forget_title(path);
+
     fs::remove_file(path)
 }
 
 /// Rebuilds a session from its log.
+#[cfg(test)]
 pub fn load(path: &Path) -> Session {
+    let events: Vec<Event> = events(path).collect();
+
+    replay(&events)
+}
+
+/// Rebuilds a session from the events of its log.
+pub fn replay(events: &[Event]) -> Session {
     let mut session = Session::default();
 
-    for event in events(path) {
-        session.apply(&event);
+    for event in events {
+        session.apply(event);
     }
+
+    // The window keeps only what it shows of each call.
+    super::slim(&mut session);
 
     // A log that ends mid-run belongs to a session that was closed or
     // crashed; nothing is running now.
@@ -198,6 +267,29 @@ mod tests {
             .collect();
 
         assert_eq!(titles, ["keep"]);
+    }
+
+    #[test]
+    fn listing_again_reads_no_log_a_second_time() {
+        let project = tempfile::tempdir().unwrap();
+
+        write_log(project.path(), "1000.jsonl", "first words");
+
+        assert_eq!(list(project.path())[0].title, "first words");
+
+        // The log can no longer be read as one; a list that opened it
+        // again would find no instruction in it and leave it out.
+        let path = project.path().join(TRAJECTORY_DIRECTORY).join("1000.jsonl");
+
+        fs::write(&path, "not a log any more").unwrap();
+
+        assert_eq!(list(project.path())[0].title, "first words");
+
+        // Deleted, it is forgotten as well as gone.
+        delete(&path).unwrap();
+        fs::write(&path, "not a log any more").unwrap();
+
+        assert!(list(project.path()).is_empty());
     }
 
     #[test]

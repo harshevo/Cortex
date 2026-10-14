@@ -125,6 +125,10 @@ impl WorkingMemory {
             Event::ContextPrepared { .. }
             | Event::ContextPruned { .. }
             | Event::ContextMasked { .. }
+            | Event::ContextCompacted { .. }
+            | Event::ContextMeasured { .. }
+            | Event::ExperimentAssigned { .. }
+            | Event::ContextWithheld { .. }
             | Event::ReviewRan { .. }
             | Event::LessonsLearned { .. }
             | Event::AttemptStarted { .. }

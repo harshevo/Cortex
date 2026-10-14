@@ -20,6 +20,7 @@ toml.workspace = true
 
 [dev-dependencies]
 cortex-brain.workspace = true
+cortex-living.workspace = true
 async-trait.workspace = true
 cortex-memory.workspace = true
 cortex-verify.workspace = true

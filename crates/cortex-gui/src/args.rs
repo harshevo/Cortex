@@ -65,6 +65,18 @@ pub struct RehearsalArgs {
     #[arg(long, hide = true)]
     pub open_settings: bool,
 
+    /// With `--open-settings`, start on its remote control part.
+    #[arg(long, hide = true)]
+    pub open_remote: bool,
+
+    /// Let phones connect in this run, without saving the choice.
+    #[arg(long, hide = true)]
+    pub remote: bool,
+
+    /// Write a pairing code to this file once phones can connect.
+    #[arg(long, hide = true)]
+    pub pairing_code: Option<PathBuf>,
+
     /// Press stop this many seconds after the window opens.
     #[arg(long, hide = true)]
     pub stop_after: Option<f32>,

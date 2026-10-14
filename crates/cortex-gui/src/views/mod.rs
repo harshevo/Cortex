@@ -5,14 +5,18 @@ pub mod composer;
 pub mod conversation;
 pub mod files;
 pub mod icons;
+pub mod insights;
 pub mod living;
 pub mod memory_space;
 pub mod prose;
+pub mod remote;
 pub mod settings;
 pub mod sidebar;
 pub mod stats_strip;
 pub mod tool_card;
+pub mod trading;
 pub mod top_bar;
+pub mod typeset;
 
 /// What the middle of the window shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,8 +24,15 @@ pub enum View {
     Conversation,
     MemorySpace,
 
-    /// The experimental growing network, drawn live.
+    /// The dendritic network, drawn live.
     Living,
+
+    /// Price bars read with the liquid and the dendritic network.
+    Trading,
+
+    /// Tokens used, and whether the advisers help.
+    Insights,
+
     Settings,
 }
 

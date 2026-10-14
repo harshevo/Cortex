@@ -19,7 +19,7 @@ pub async fn execute(args: SearchArgs) -> Result<ExitCode> {
 
     let client = EmbeddingClient::new(&args.embedding_url);
 
-    client.health().await?;
+    client.wake().await?;
 
     let index = SemanticIndex::new(client, Arc::new(CodeIndex::new()));
 

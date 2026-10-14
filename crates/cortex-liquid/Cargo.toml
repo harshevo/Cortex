@@ -1,0 +1,17 @@
+[package]
+name = "cortex-liquid"
+description = "A small liquid (closed-form continuous-time) network that reads price bars together with the dendritic network, and reports honestly whether either predicts anything. It never advises."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cortex-living.workspace = true
+
+serde.workspace = true
+
+# Without this, a number read back from JSON can differ from the one
+# written in its last digit, and a loaded model would not be the saved one.
+serde_json = { workspace = true, features = ["float_roundtrip"] }
+
+thiserror.workspace = true

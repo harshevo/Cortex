@@ -12,17 +12,19 @@ use crate::attachment::Attachment;
 use crate::engine::{Engine, Info, Launch, PendingApproval, Update};
 use crate::memory::working;
 use crate::rehearsal::Rehearsal;
+use crate::remote;
 use crate::session::history::{self, PastSession};
 use crate::session::{Session, Tone};
-use crate::settings::{Provider, Settings, secrets};
+use crate::settings::Settings;
 use crate::theme::{self, palette};
 use crate::views::composer::{self, Mode};
+use crate::views::conversation::{self, ChatView};
 use crate::views::files::Files;
 use crate::views::memory_space::{self, MemoryView};
 use crate::views::settings::Form;
 use crate::views::sidebar::{self, Shelf};
 use crate::views::stats_strip::{self, Change, Reading};
-use crate::views::{Section, View, conversation, settings as settings_page, top_bar};
+use crate::views::{Section, View, settings as settings_page, top_bar, typeset};
 
 /// Low enough that its buttons sit on a line with the window's own.
 const TOP_BAR_HEIGHT: f32 = 32.0;
@@ -78,8 +80,18 @@ pub struct CortexApp {
     /// watching the same events the engine's own copy does.
     working: WorkingMemory,
 
+    /// What the engine's working memory held when the memory space last
+    /// took its thoughts from it. `working_revision` counts its changes.
+    working_revision: u64,
+    thoughts_revision: Option<u64>,
+
     /// A past session opened from the sidebar, shown instead of `live`.
     viewing: Option<(PathBuf, Session)>,
+
+    /// How the session on screen is laid out and scrolled, and which
+    /// past session that is, if it is one.
+    chat: ChatView,
+    chat_shows: Option<PathBuf>,
 
     /// The past sessions of every folder in the sidebar, newest first.
     sessions: HashMap<PathBuf, Vec<PastSession>>,
@@ -91,16 +103,21 @@ pub struct CortexApp {
     /// Questions from tools, oldest first. The first is on screen.
     approvals: VecDeque<PendingApproval>,
 
-    /// The instruction being typed.
     /// The files of the project, shown on the right.
     files: Files,
 
+    /// The instruction being typed.
     draft: String,
 
-    /// The experimental growing network, when the capability is on, and
-    /// how it is being drawn.
+    /// The dendritic network, when a capability that uses it is on, and
+    /// how it is being drawn. `network_stamp` is what it was at when it
+    /// was last copied for drawing.
     living: Option<std::sync::Arc<cortex_living::Living>>,
     living_view: crate::views::living::LivingView,
+    network_stamp: Option<(u64, u64, bool)>,
+
+    trading: crate::views::trading::TradingView,
+    insights: crate::views::insights::InsightsView,
 
     /// What the mind expects to be asked next. Shown in the empty
     /// composer; Tab takes it.
@@ -121,10 +138,6 @@ pub struct CortexApp {
 
     /// The settings page, while it is open.
     form: Option<Form>,
-
-    /// API keys already read from the keychain, so that it is asked once
-    /// rather than on every change of model.
-    keys: HashMap<Provider, Option<String>>,
 
     rehearsal: Rehearsal,
     requested_session: Option<(PathBuf, Option<PathBuf>)>,
@@ -179,7 +192,11 @@ impl CortexApp {
             live: Session::default(),
             preparing: false,
             working: WorkingMemory::default(),
+            working_revision: 0,
+            thoughts_revision: None,
             viewing: None,
+            chat: ChatView::default(),
+            chat_shows: None,
             sessions: HashMap::new(),
             history_revision: 0,
             confirming: None,
@@ -188,13 +205,15 @@ impl CortexApp {
             draft: String::new(),
             living: None,
             living_view: Default::default(),
+            network_stamp: None,
+            trading: Default::default(),
+            insights: Default::default(),
             suggestion: None,
             attachments: Vec::new(),
             queued: Vec::new(),
             live_log: None,
             memory: MemoryView::default(),
             form: None,
-            keys: HashMap::new(),
             rehearsal,
             requested_session: None,
             requested_delete: None,
@@ -206,6 +225,12 @@ impl CortexApp {
 
         if app.rehearsal.opens_settings() {
             app.open_settings();
+
+            if app.rehearsal.opens_remote()
+                && let Some(form) = &mut app.form
+            {
+                form.show_remote();
+            }
 
             if app.rehearsal.tries_theme()
                 && let Some(form) = &mut app.form
@@ -231,20 +256,12 @@ impl CortexApp {
             self.suggestion = None;
         }
 
-        let provider = self.settings.provider;
-
-        let api_key = if self.demo {
-            None
-        } else {
-            self.keys
-                .entry(provider)
-                .or_insert_with(|| secrets::resolve(provider))
-                .clone()
-        };
-
         if fresh {
+            self.show_phones(Vec::new());
+
             self.live = Session::default();
-            self.working = WorkingMemory::default();
+            self.forget_working();
+            self.chat.reset();
             self.viewing = None;
             self.approvals.clear();
             self.memory = MemoryView::default();
@@ -257,7 +274,11 @@ impl CortexApp {
         self.engine.launch(Launch {
             place: self.place.clone(),
             settings: self.settings.clone(),
-            api_key,
+
+            // The keychain is asked by the engine, off the window's
+            // thread: it can take a while, and may ask the person.
+            api_key: None,
+            look_up_key: !self.demo,
             demo: self.demo,
             fresh,
             open,
@@ -274,6 +295,22 @@ impl CortexApp {
         }
     }
 
+    /// Empties the copy of the engine's working memory, for a session
+    /// that starts anew.
+    fn forget_working(&mut self) {
+        self.working = WorkingMemory::default();
+        self.working_revision += 1;
+    }
+
+    /// Whether the working memory has changed since this was last asked.
+    fn thoughts_changed(&mut self) -> bool {
+        let changed = self.thoughts_revision != Some(self.working_revision);
+
+        self.thoughts_revision = Some(self.working_revision);
+
+        changed
+    }
+
     fn refresh_sessions(&mut self) {
         self.history_revision += 1;
         let folders = self.settings.projects.iter().chain([&self.scratch]);
@@ -284,7 +321,7 @@ impl CortexApp {
     }
 
     /// Takes in everything the agent has reported since the last frame.
-    fn absorb_updates(&mut self, now: f64) {
+    fn absorb_updates(&mut self) {
         let updates: Vec<Update> = self.engine.updates().collect();
 
         for update in updates {
@@ -305,17 +342,15 @@ impl CortexApp {
                 }
 
                 Update::Event(event) => {
-                    if let cortex_core::Event::BrainObserved {
-                        source,
-                        step,
-                        detail,
-                    } = &event
-                    {
-                        self.memory.observe_brain(source, *step, detail, now);
+                    if let cortex_core::Event::BrainObserved { source, detail, .. } = &event {
+                        self.memory.observe_brain(source, detail);
                     }
                     self.heard(&event);
                     self.working.observe(&event);
+                    self.working_revision += 1;
                     self.live.apply(&event);
+
+                    crate::session::slim_after(&mut self.live, &event);
                 }
 
                 Update::ApprovalNeeded(approval) => self.approvals.push_back(approval),
@@ -359,6 +394,12 @@ impl CortexApp {
                     self.suggestion = suggestion.filter(|_| !self.live.running);
                 }
 
+                Update::Compacted((text, failed)) => {
+                    let tone = if failed { Tone::Bad } else { Tone::Muted };
+
+                    self.live.notice(&text, tone);
+                }
+
                 Update::Prepared { text, failed } => {
                     self.preparing = false;
 
@@ -392,8 +433,6 @@ impl CortexApp {
         }
 
         self.status = Status::Ready(info);
-
-        self.memory.activity.agent_rebuilt();
     }
 
     fn submit(&mut self, instruction: &str, images: Vec<Image>) {
@@ -471,9 +510,12 @@ impl CortexApp {
             return;
         }
 
+        self.show_phones(Vec::new());
+
         self.viewing = None;
         self.live = Session::default();
-        self.working = WorkingMemory::default();
+        self.forget_working();
+        self.chat.reset();
         self.live_log = None;
 
         self.engine.reset();
@@ -521,7 +563,10 @@ impl CortexApp {
             return;
         }
 
-        let session = history::load(&path);
+        // The log is read once, here, and everything below is built
+        // from what was read.
+        let events: Vec<cortex_core::Event> = history::events(&path).collect();
+        let session = history::replay(&events);
 
         if self.live.running {
             self.viewing = Some((path, session));
@@ -542,28 +587,27 @@ impl CortexApp {
             self.launch_into(true, Some(path.clone()));
         } else {
             self.viewing = None;
-            self.working = WorkingMemory::default();
             self.approvals.clear();
 
             self.engine.open(path.clone());
         }
 
-        self.working = WorkingMemory::default();
+        self.forget_working();
         self.memory.activity = crate::brain::activity::ActivityView::default();
-        for event in history::events(&path) {
-            self.working.observe(&event);
-            if let cortex_core::Event::BrainObserved {
-                source,
-                step,
-                detail,
-            } = event
-            {
-                self.memory.observe_brain(&source, step, &detail, 0.0);
+
+        for event in &events {
+            self.working.observe(event);
+
+            if let cortex_core::Event::BrainObserved { source, detail, .. } = event {
+                self.memory.observe_brain(source, detail);
             }
         }
-        self.memory.activity.pause();
+
+        self.show_phones(events);
+
         self.live = session;
         self.live_log = Some(path);
+        self.chat.reset();
     }
 
     pub(crate) fn delete_session(&mut self, path: &Path) {
@@ -601,9 +645,6 @@ impl CortexApp {
 
         self.settings = settings;
 
-        // A key may have been saved or removed on the page.
-        self.keys.clear();
-
         self.save_settings();
         self.launch(fresh);
 
@@ -627,17 +668,207 @@ impl CortexApp {
             }
             Change::Effort(effort) => self.settings.effort = effort,
             Change::ApproveEverything(approve) => self.settings.approve_everything = approve,
+
+            // The conversation, not the settings, changes.
+            Change::Compact => {
+                if self.viewing.is_none() && matches!(self.status, Status::Ready(_)) {
+                    self.live.notice("Writing a summary of the conversation so far…", Tone::Muted);
+                    self.engine.compact();
+                } else {
+                    self.live
+                        .notice("There is no conversation in use to compact.", Tone::Muted);
+                }
+
+                return;
+            }
         }
 
         self.save_settings();
         self.launch(false);
     }
 
-    /// The session on screen: the past one being viewed, or the live one.
-    fn shown_session(&mut self) -> &mut Session {
-        match &mut self.viewing {
-            Some((_, session)) => session,
-            None => &mut self.live,
+    /// Tells paired phones the chat now shows another session: a new
+    /// one, or an earlier one whose events these are.
+    fn show_phones(&self, events: Vec<cortex_core::Event>) {
+        remote::tell(
+            self.engine.agent_id(),
+            cortex_remote::wire::ChatDown::Replaced { events },
+        );
+    }
+
+    /// Carries out what paired phones asked for that only the window
+    /// can do, and drops the questions a phone has answered.
+    fn obey_phones(&mut self) {
+        use cortex_remote::wire::ChatUp;
+
+        let Some(bridge) = remote::bridge() else {
+            return;
+        };
+
+        self.approvals.retain(|approval| !approval.answered());
+
+        for ask in bridge.take_asks(self.engine.agent_id()) {
+            // A phone works with the settings as it was last shown them.
+            let mut settings = self
+                .pending_settings
+                .clone()
+                .unwrap_or_else(|| self.settings.clone());
+
+            match ask {
+                // Only where the sidebar could have started one.
+                ChatUp::NewSession { folder } => {
+                    let folder = folder.map(PathBuf::from).unwrap_or(self.place.clone());
+
+                    if self.sessions.contains_key(&folder) && !self.live.running {
+                        self.start_session(folder);
+                    }
+                }
+
+                // Only one the sidebar lists.
+                ChatUp::OpenSession { path } => {
+                    let path = PathBuf::from(path);
+
+                    let listed = self
+                        .sessions
+                        .values()
+                        .flatten()
+                        .any(|session| session.path == path);
+
+                    if listed && !self.live.running {
+                        self.open_past_session(path);
+                    }
+                }
+
+                ChatUp::SetCapability { name, on } => {
+                    if let Some(feature) = remote::view::feature(&name) {
+                        settings.set(feature, on);
+
+                        self.change_settings(settings);
+                    }
+                }
+
+                ChatUp::SetModel { provider, model } => {
+                    if let Some(provider) = remote::view::provider(&provider)
+                        && settings.of(provider).choices().contains(&model)
+                    {
+                        settings.provider = provider;
+                        settings.current_mut().model = model;
+
+                        self.change_settings(settings);
+                    }
+                }
+
+                ChatUp::SetEffort { effort } => {
+                    if let Some(effort) = remote::view::effort(&effort) {
+                        settings.effort = effort;
+
+                        self.change_settings(settings);
+                    }
+                }
+
+                ChatUp::SetApproveEverything { on } => {
+                    settings.approve_everything = on;
+
+                    self.change_settings(settings);
+                }
+
+                // These go straight to the agent and never wait here.
+                ChatUp::Submit { .. }
+                | ChatUp::Steer { .. }
+                | ChatUp::Stop
+                | ChatUp::Continue
+                | ChatUp::Approve { .. } => {}
+            }
+        }
+    }
+
+    /// Takes over settings changed from a phone, now or once the run in
+    /// progress has ended. Unlike [`Self::apply_settings`] it leaves the
+    /// window on the page it is showing.
+    fn change_settings(&mut self, settings: Settings) {
+        if self.live.running || self.preparing {
+            self.pending_settings = Some(settings);
+
+            return;
+        }
+
+        // A different provider cannot carry on another's conversation.
+        let fresh = settings.provider != self.settings.provider;
+
+        self.settings = settings;
+        self.form = None;
+
+        self.save_settings();
+        self.launch(fresh);
+    }
+
+    /// This chat as a paired phone lists it.
+    pub(crate) fn chat_info(&self) -> cortex_remote::wire::ChatInfo {
+        use cortex_remote::wire::{ChatInfo, ChatStatus};
+
+        let status = match &self.status {
+            Status::Starting => ChatStatus::Starting,
+            Status::Ready(_) => ChatStatus::Ready,
+
+            Status::Unavailable(reason) => ChatStatus::Unavailable {
+                reason: reason.clone(),
+            },
+        };
+
+        let settings = self.pending_settings.as_ref().unwrap_or(&self.settings);
+
+        ChatInfo {
+            id: self.engine.agent_id().to_string(),
+            title: self.label(),
+            place: self.place.display().to_string(),
+            status,
+            running: self.live.running,
+            log: self.live_log.as_ref().map(|log| log.display().to_string()),
+            settings: remote::view::settings_view(settings),
+        }
+    }
+
+    /// The sidebar's folders and their sessions, for a paired phone.
+    pub(crate) fn remote_projects(&self) -> Vec<cortex_remote::wire::Project> {
+        use cortex_remote::wire::{PastSession, Project};
+
+        let folders = [&self.scratch].into_iter().chain(&self.settings.projects);
+
+        folders
+            .map(|folder| Project {
+                path: folder.display().to_string(),
+                name: folder
+                    .file_name()
+                    .map(|name| name.to_string_lossy().to_string())
+                    .unwrap_or_else(|| folder.display().to_string()),
+                scratch: *folder == self.scratch,
+                sessions: self
+                    .sessions
+                    .get(folder)
+                    .into_iter()
+                    .flatten()
+                    .map(|session| PastSession {
+                        path: session.path.display().to_string(),
+                        title: session.title.clone(),
+                        updated_ms: session.updated_ms,
+                    })
+                    .collect(),
+            })
+            .collect()
+    }
+
+    /// Puts the last thing the person said back in the composer, to send
+    /// again or change. Asked for with the Up key in an empty composer.
+    fn recall_last(&mut self) {
+        let last = self.live.items.iter().rev().find_map(|item| match item {
+            crate::session::Item::User { text, .. } => Some(text.as_str()),
+            _ => None,
+        });
+
+        if let Some(last) = last
+            && self.draft.is_empty()
+        {
+            self.draft = last.to_string();
         }
     }
 
@@ -905,14 +1136,15 @@ impl CortexApp {
                             self.suggestion.as_deref(),
                         );
 
-                        let settings = self.settings.clone();
-
                         let stand_in = match &self.status {
-                            Status::Ready(info) if info.demo => Some(info.model.clone()),
+                            Status::Ready(info) if info.demo => Some(info.model.as_str()),
                             _ => None,
                         };
 
-                        let session = self.shown_session();
+                        let session = match &self.viewing {
+                            Some((_, session)) => session,
+                            None => &self.live,
+                        };
 
                         let reading = Reading {
                             stats: &session.stats,
@@ -921,10 +1153,10 @@ impl CortexApp {
                                 .writing
                                 .as_ref()
                                 .and_then(|writing| writing.estimated_speed()),
-                            stand_in: stand_in.as_deref(),
+                            stand_in,
                         };
 
-                        let change = stats_strip::show(ui, &reading, &settings, can_change);
+                        let change = stats_strip::show(ui, &reading, &self.settings, can_change);
 
                         (action, change, moved)
                     })
@@ -938,6 +1170,7 @@ impl CortexApp {
             Some(composer::Action::Send(instruction, images)) => self.submit(&instruction, images),
             Some(composer::Action::Refused(why)) => self.live.notice(&why, Tone::Bad),
             Some(composer::Action::Steer(message)) => self.steer(&message),
+            Some(composer::Action::Recall) => self.recall_last(),
             Some(composer::Action::Continue) => self.carry_on(),
             Some(composer::Action::Stop) => self.engine.stop(),
             None => {}
@@ -967,6 +1200,8 @@ impl CortexApp {
                 View::Conversation => self.conversation(ui),
                 View::MemorySpace => self.memory_space(ui),
                 View::Living => self.living_space(ui),
+                View::Trading => crate::views::trading::show(ui, &mut self.trading),
+                View::Insights => crate::views::insights::show(ui, &mut self.insights),
                 View::Settings => self.settings_page(ui),
             });
     }
@@ -1007,18 +1242,47 @@ impl CortexApp {
                     self.prepare();
                 }
             }
+
+            // Nothing about the agent changes, so it is left alone.
+            Some(settings_page::Action::RemoteControl(on)) => {
+                self.settings.remote_control = on;
+                self.save_settings();
+
+                if let Some(bridge) = remote::bridge() {
+                    bridge.switch(on);
+                }
+            }
             None => {}
         }
     }
 
+    /// Copies the network for drawing, if it has changed since it was
+    /// last copied. A copy holds every neuron's name, so it is not made
+    /// on every frame.
+    fn look_at_network(&mut self) {
+        let stamp = self.living.as_ref().map(|living| living.stamp());
+
+        if stamp == self.network_stamp {
+            return;
+        }
+
+        self.network_stamp = stamp;
+
+        self.memory
+            .look_at_network(self.living.as_ref().map(|living| living.snapshot()));
+    }
+
     fn living_space(&mut self, ui: &mut egui::Ui) {
-        let Some(living) = &self.living else {
+        self.look_at_network();
+
+        let Some(snapshot) = &self.memory.activity.network else {
             ui.add_space(40.0);
             ui.vertical_centered(|ui| {
-                ui.label("The living network is switched off.");
+                ui.label("The dendritic network is switched off.");
                 ui.label(
                     egui::RichText::new(
-                        "Turn on the `living` capability under Settings → Capabilities.",
+                        "Turn on Brain (it advises) or Living (it only watches) under \
+                         Settings → Capabilities.",
                     )
                     .color(palette::text_muted()),
                 );
@@ -1027,25 +1291,29 @@ impl CortexApp {
             return;
         };
 
-        let snapshot = living.snapshot();
-
-        crate::views::living::show(ui, &mut self.living_view, &snapshot);
+        crate::views::living::show(ui, &mut self.living_view, snapshot);
     }
 
     fn memory_space(&mut self, ui: &mut egui::Ui) {
-        if let Some(request) = self
-            .approvals
-            .front()
-            .map(|approval| approval.request.clone())
-        {
+        let decision = self.approvals.front().and_then(|approval| {
             ui.label("The agent is waiting for your approval.");
-            if let Some(decision) = conversation::approval_card(ui, &request)
-                && let Some(approval) = self.approvals.pop_front()
-            {
-                approval.answer(decision);
-            }
+
+            conversation::approval_card(ui, &approval.request)
+        });
+
+        if let Some(decision) = decision
+            && let Some(approval) = self.approvals.pop_front()
+        {
+            approval.answer(decision);
         }
-        self.memory.set_thoughts(working::thoughts(&self.working));
+
+        self.look_at_network();
+
+        // The thoughts are built from the working memory only when it
+        // has changed, not on every frame the brain is drawn.
+        if self.thoughts_changed() {
+            self.memory.set_thoughts(working::thoughts(&self.working));
+        }
 
         memory_space::show(
             ui,
@@ -1060,26 +1328,39 @@ impl CortexApp {
     fn conversation(&mut self, ui: &mut egui::Ui) {
         if let Status::Unavailable(problem) = &self.status
             && self.viewing.is_none()
-            && self.problem_banner(ui, &problem.clone())
+            && self.problem_banner(ui, problem)
         {
             self.open_settings();
 
             return;
         }
 
+        // Another session on screen is laid out and scrolled afresh.
+        let shown = self.viewing.as_ref().map(|(path, _)| path.as_path());
+
+        if self.chat_shows.as_deref() != shown {
+            self.chat_shows = shown.map(Path::to_path_buf);
+            self.chat.reset();
+        }
+
         // Questions belong to the live session, not to a past one.
         let question = match self.viewing {
             Some(_) => None,
-            None => self
-                .approvals
-                .front()
-                .map(|approval| approval.request.clone()),
+            None => self.approvals.front().map(|approval| &approval.request),
         };
 
-        let show_thinking = self.settings.show_thinking;
+        let session = match &mut self.viewing {
+            Some((_, session)) => session,
+            None => &mut self.live,
+        };
 
-        let decision =
-            conversation::show(ui, self.shown_session(), question.as_ref(), show_thinking);
+        let decision = conversation::show(
+            ui,
+            &mut self.chat,
+            session,
+            question,
+            self.settings.show_thinking,
+        );
 
         if let Some(decision) = decision
             && let Some(approval) = self.approvals.pop_front()
@@ -1147,13 +1428,23 @@ impl eframe::App for CortexApp {
 
 impl CortexApp {
     pub(crate) fn tick(&mut self, ui: &mut egui::Ui) -> bool {
+        // Looked at on every frame, whatever is on screen: see there.
+        typeset::begin_frame(ui.ctx());
+
         let revision = self.history_revision;
-        self.absorb_updates(ui.input(|i| i.time));
+        self.absorb_updates();
+        self.obey_phones();
         if !self.live.running
             && !self.preparing
             && let Some(settings) = self.pending_settings.take()
         {
-            self.apply_settings(settings);
+            // Asked for on the settings page, which is left once they
+            // apply; asked for from a phone, the window stays as it is.
+            if self.view == View::Settings {
+                self.apply_settings(settings);
+            } else {
+                self.change_settings(settings);
+            }
         }
 
         // The rehearsed instruction waits until there is an agent for it.
@@ -1302,5 +1593,79 @@ mod navigation_tests {
         assert_eq!(app.log_path(), Some(Path::new("current.jsonl")));
         assert!(app.live.running);
         assert_eq!(app.live.items.len(), 1);
+    }
+
+    /// Draws the whole window once and says how soon it asked to be
+    /// drawn again.
+    fn draw(context: &egui::Context, app: &mut CortexApp) -> std::time::Duration {
+        // Whatever the engine has reported, the agent is ready and idle.
+        app.status = Status::Ready(Info {
+            place: app.place.clone(),
+            model: "stand-in".to_string(),
+            max_steps: 10,
+            demo: true,
+        });
+
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1280.0, 800.0),
+            )),
+            ..Default::default()
+        };
+
+        let mut output = context.run_ui(input, |ui| {
+            app.tick(ui);
+            app.top_bar(ui);
+            app.sidebar(ui);
+            app.files_panel(ui);
+            app.render_pane(ui);
+        });
+
+        output.textures_delta.clear();
+
+        output.viewport_output[&egui::ViewportId::ROOT].repaint_delay
+    }
+
+    #[test]
+    fn an_idle_window_does_not_draw_itself_again_and_again() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+
+        // The engine wakes a context of its own, not the one drawn here.
+        let mut app = CortexApp::new(
+            Engine::start(runtime.handle(), egui::Context::default()),
+            Settings::default(),
+            None,
+            true,
+            Rehearsal::new(crate::args::RehearsalArgs::default()),
+        );
+
+        app.live.items.push(crate::session::Item::User {
+            text: "A finished task".into(),
+            images: Vec::new(),
+        });
+
+        let context = egui::Context::default();
+
+        theme::apply(&context);
+
+        for _ in 0..5 {
+            draw(&context, &mut app);
+        }
+
+        // Only the composer's blinking caret asks to be drawn again.
+        let idle = draw(&context, &mut app);
+
+        assert!(idle >= std::time::Duration::from_millis(300), "{idle:?}");
+
+        // A run in progress animates, and asks for it.
+        app.live.running = true;
+
+        let working = draw(&context, &mut app);
+
+        assert!(
+            working <= std::time::Duration::from_millis(100),
+            "{working:?}"
+        );
     }
 }

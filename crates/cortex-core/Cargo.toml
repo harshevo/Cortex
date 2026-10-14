@@ -12,3 +12,8 @@ serde_json.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+
+[dev-dependencies]
+# Only for the tests in `tests/`, which drive the loop with the scripted
+# stand-in for a model.
+cortex-providers.workspace = true

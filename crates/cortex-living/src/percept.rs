@@ -9,6 +9,28 @@ const MAX_WORDS: usize = 5;
 /// Longest text kept of a command or a path.
 const MAX_TEXT: usize = 48;
 
+/// An instruction no longer than this is kept whole as well, so that
+/// one given again and again ("run the tests") can be seen coming.
+const MAX_ASKED: usize = 60;
+
+/// The beginning of the percept that is a whole short instruction.
+pub const ASKS: &str = "asks: ";
+
+/// The percepts that are good or bad news, and how much, from -1 to 1.
+pub const WORTH: [(&str, f32); 8] = [
+    ("checks: passed", 1.0),
+    ("run: ended checked", 1.0),
+    ("person: accepts", 1.0),
+    ("result: worked", 0.15),
+    ("result: failed", -0.3),
+    ("checks: failed", -0.7),
+    ("run: ended failing", -1.0),
+    ("person: rejects", -1.0),
+];
+
+/// The beginnings of the percepts that are things the model does.
+pub const ACTIONS: [&str; 2] = ["does: ", "runs: "];
+
 /// The moments in `event`, in order. Most events are one moment or none.
 pub fn moments(event: &Event) -> Vec<Vec<String>> {
     match event {
@@ -21,6 +43,8 @@ pub fn moments(event: &Event) -> Vec<Vec<String>> {
                     .into_iter()
                     .map(|word| format!("word: {word}")),
             );
+
+            percepts.extend(asked(instruction));
 
             vec![percepts]
         }
@@ -98,6 +122,27 @@ fn intent(call: &ToolCall) -> Vec<String> {
     percepts
 }
 
+/// An action the model is weighing, written `tool: target`, as the
+/// percepts it would be met as.
+pub fn weighed(action: &str) -> Vec<String> {
+    let (tool, target) = action.split_once(':').unwrap_or((action, ""));
+    let (tool, target) = (tool.trim(), target.trim());
+
+    let field = if tool == "shell" { "command" } else { "path" };
+
+    let input = if target.is_empty() {
+        serde_json::json!({})
+    } else {
+        serde_json::json!({ field: target })
+    };
+
+    intent(&ToolCall {
+        id: String::new(),
+        name: tool.to_string(),
+        input,
+    })
+}
+
 fn exited_with_failure(tool: &str, output: &str) -> bool {
     tool == "shell" && !output.starts_with("exit code: 0")
 }
@@ -128,6 +173,17 @@ fn reaction(text: &str) -> Option<&'static str> {
     } else {
         None
     }
+}
+
+/// A short instruction as one percept: lower case, its spaces evened out.
+pub fn asked(instruction: &str) -> Option<String> {
+    let text = instruction
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+
+    (!text.is_empty() && text.chars().count() <= MAX_ASKED).then(|| format!("{ASKS}{text}"))
 }
 
 /// The longer words of an instruction, lower case, in order.
@@ -178,6 +234,19 @@ mod tests {
     }
 
     #[test]
+    fn a_weighed_action_is_read_as_the_call_it_would_be() {
+        assert_eq!(
+            weighed("shell: cargo test -p core"),
+            ["does: shell", "runs: cargo test"]
+        );
+        assert_eq!(
+            weighed("edit_file: src/fees.rs"),
+            ["does: edit_file", "file: src/fees.rs"]
+        );
+        assert_eq!(weighed("list_files"), ["does: list_files"]);
+    }
+
+    #[test]
     fn what_the_person_says_is_read_as_a_reaction() {
         assert_eq!(reaction("no, revert that"), Some("person: rejects"));
         assert_eq!(reaction("Perfect, thanks"), Some("person: accepts"));
@@ -194,7 +263,12 @@ mod tests {
 
         assert_eq!(
             moments(&event),
-            [["person: asks", "word: rounding", "word: commission"]]
+            [[
+                "person: asks",
+                "word: rounding",
+                "word: commission",
+                "asks: fix the rounding of commission fees"
+            ]]
         );
     }
 }

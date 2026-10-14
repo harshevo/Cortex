@@ -1,4 +1,5 @@
-use cortex_brain::{Brain, BrainConfig, Controller, FlyBrainEncoder, Intuition};
+use cortex_brain::{Controller, DirectEncoder, Intuition};
+use cortex_living::{Counsel, Living};
 use cortex_core::{
     Agent, AgentConfig, AutoApprove, Event, JsonlSink, ToolContext, Workspace, replay,
 };
@@ -15,20 +16,24 @@ async fn session_connects_tools_brains_verification_memory_and_replay() {
     let root = directory.path();
     let scope = root.display().to_string();
     let memory_file = root.join("memory.db");
-    let brain_file = root.join("memory.brain.json");
+    let brain_file = root.join("memory.controller.json");
+    let network_file = root.join("network.json");
     let intuition_file = root.join("memory.intuition.json");
     let log_file = root.join("chat.jsonl");
     let memory =
         Arc::new(MemorySystem::open(&memory_file, MemoryConfig::for_scope(&scope)).unwrap());
     let brain = Arc::new(Controller::new(
-        Box::new(FlyBrainEncoder::new(Brain::generate(BrainConfig::tiny()))),
+        Box::new(DirectEncoder),
         Some(brain_file.clone()),
     ));
+    let living = Arc::new(Living::open(Some(network_file.clone())));
+    let counsel = Arc::new(Counsel(living.clone()));
     let intuition = Arc::new(Intuition::new(Some(intuition_file.clone())));
     let mut tools = cortex_tools::default_registry();
     cortex_tools::add_memory_tools(&mut tools, memory.clone());
     tools.register(cortex_tools::BrainState(vec![
         brain.clone(),
+        counsel.clone(),
         intuition.clone(),
     ]));
     let context = ToolContext {
@@ -60,6 +65,8 @@ async fn session_connects_tools_brains_verification_memory_and_replay() {
     .with_context_source(memory.clone())
     .with_sink(brain.clone())
     .with_adviser(brain.clone())
+    .with_sink(living.clone())
+    .with_adviser(counsel.clone())
     .with_sink(intuition.clone())
     .with_adviser(intuition.clone())
     .with_context_source(intuition.clone())
@@ -79,32 +86,25 @@ async fn session_connects_tools_brains_verification_memory_and_replay() {
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
-    let traces: Vec<_> = events
+    // What the dendritic network made of the run is logged, and none of
+    // it is put in front of the model.
+    let observed: Vec<_> = events
         .iter()
         .filter_map(|event| match event {
-            Event::BrainObserved { source, detail, .. } if source == "fly-brain" => Some(detail),
+            Event::BrainObserved { source, detail, .. } if source == "dendritic network" => {
+                Some(detail)
+            }
             _ => None,
         })
         .collect();
-    assert!(traces.len() >= 3);
-    assert_eq!(traces.last().unwrap()["runs"], 1);
-    assert!(
-        traces
-            .iter()
-            .all(|detail| detail["trace"]["frames"].as_array().unwrap().len() == 24)
-    );
-    // Telemetry is logged without consuming the language model's context.
+    assert!(!observed.is_empty());
+    assert!(observed.last().unwrap()["neurons"].as_u64().unwrap() > 6);
     assert!(
         conversation
             .iter()
-            .all(|message| !message.text().contains("neuron_ids"))
+            .all(|message| !message.text().contains("dendritic network"))
     );
     let replayed = replay::conversation(&events);
-    assert!(
-        replayed
-            .iter()
-            .all(|message| !message.text().contains("neuron_ids"))
-    );
     assert!(
         replayed
             .iter()
@@ -120,16 +120,24 @@ async fn session_connects_tools_brains_verification_memory_and_replay() {
             .contains("7*24 = 168")
     );
     assert_eq!(
-        Controller::new(
-            Box::new(FlyBrainEncoder::new(Brain::generate(BrainConfig::tiny()))),
-            Some(brain_file)
-        )
-        .runs(),
+        Controller::new(Box::new(DirectEncoder), Some(brain_file)).runs(),
         1
     );
     assert_eq!(Intuition::new(Some(intuition_file)).runs(), 1);
-    let state =
-        cortex_core::Adviser::inspect(brain.as_ref(), &json!({"neuron_ids":[0, 2999]})).unwrap();
-    assert_eq!(state["neurons"].as_array().unwrap().len(), 2);
-    assert_eq!(state["checked_runs"], 1);
+
+    // The network grew from the run, kept it, and answers the model's
+    // own questions about what it has seen.
+    let lived = living.snapshot();
+    assert!(lived.meters.moments >= 4);
+    assert!(lived.meters.branched > 0);
+    assert_eq!(
+        Living::open(Some(network_file)).snapshot().neurons.len(),
+        lived.neurons.len()
+    );
+    let imagined = cortex_core::Adviser::inspect(
+        counsel.as_ref(),
+        &json!({"imagine": ["write_file: capacity.txt"]}),
+    )
+    .unwrap();
+    assert_eq!(imagined["imagined"][0]["met_before"], true);
 }

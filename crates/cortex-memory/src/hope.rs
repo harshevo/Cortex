@@ -7,6 +7,7 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
+use cortex_core::services::Service;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -15,6 +16,10 @@ use crate::similarity::Reranker;
 pub const DEFAULT_URL: &str = "http://127.0.0.1:8766";
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long a service that was just started is given to answer. Loading
+/// its libraries takes far longer the first time on a machine.
+const START_TIMEOUT: Duration = Duration::from_secs(90);
 
 #[derive(Debug, Deserialize)]
 pub struct HopeHealth {
@@ -59,6 +64,46 @@ impl HopeClient {
             .ok()?;
 
         response.json().await.ok()
+    }
+
+    /// Starts the service on this machine when it is not answering, and
+    /// waits for it. The service outlives this process, so only the first
+    /// use waits.
+    pub async fn wake(&self) -> Result<HopeHealth, String> {
+        if let Some(health) = self.health().await {
+            return Ok(health);
+        }
+
+        let address = self.url.strip_prefix("http://").unwrap_or(&self.url);
+
+        let port = match address.rsplit_once(':') {
+            Some(("127.0.0.1" | "localhost", port)) => port.parse::<u16>().ok(),
+            _ => None,
+        };
+
+        let Some(port) = port else {
+            return Err(format!("the service at {} is not answering", self.url));
+        };
+
+        tokio::task::spawn_blocking(move || Service::Hope.start_detached(port))
+            .await
+            .map_err(|error| error.to_string())??;
+
+        let started = tokio::time::Instant::now();
+
+        while started.elapsed() < START_TIMEOUT {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+
+            if let Some(health) = self.health().await {
+                return Ok(health);
+            }
+        }
+
+        Err(format!(
+            "the service was started and did not answer within {} seconds; see \
+             ~/.cortex/logs/hope-service.log",
+            START_TIMEOUT.as_secs()
+        ))
     }
 }
 

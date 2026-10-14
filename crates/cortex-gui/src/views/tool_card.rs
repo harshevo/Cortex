@@ -1,7 +1,9 @@
 //! Tool calls: a run of them as one line that unfolds into a table, each
 //! row unfolding into what was asked and what came back.
 
-use eframe::egui::{self, Align2, CornerRadius, Pos2, RichText, Sense, Stroke, Ui, vec2};
+use std::borrow::Cow;
+
+use eframe::egui::{self, Align2, CornerRadius, Pos2, Sense, Stroke, Ui, vec2};
 use serde_json::Value;
 
 use super::prose::code_block;
@@ -12,20 +14,21 @@ use crate::theme::{self, palette};
 /// Input fields worth showing on the folded card, in order of preference.
 const SUMMARY_FIELDS: [&str; 5] = ["command", "path", "pattern", "query", "symbol"];
 
-/// Longest output shown in the unfolded card, in characters.
-const MAX_OUTPUT_CHARS: usize = 6_000;
+/// Longest summary of a call's input worked out for a row, in bytes.
+/// Rows are a line long; no more of the input is ever read for one.
+const MAX_SUMMARY_BYTES: usize = 400;
 
 const MAX_OUTPUT_HEIGHT: f32 = 260.0;
 
 /// Height of the line that folds a run of activity, and of each row in
 /// its table.
-const HEADER_HEIGHT: f32 = 24.0;
-const ROW_HEIGHT: f32 = 28.0;
+pub(super) const HEADER_HEIGHT: f32 = 24.0;
+pub(super) const ROW_HEIGHT: f32 = 28.0;
 
 /// Width given to a character when cutting text to fit a row.
 const CHAR_WIDTH: f32 = 6.9;
 
-const TABLE_RADIUS: u8 = 8;
+const TABLE_RADIUS: u8 = theme::radius::L;
 
 /// Draws a run of consecutive tool calls as one line that unfolds into a
 /// table, a row per call; a row unfolds into the call's input and output.
@@ -60,15 +63,15 @@ pub fn show_group(ui: &mut Ui, items: &mut [Item], live: bool, show_thinking: bo
             let mut first = true;
 
             for (index, item) in items.iter_mut().enumerate() {
-                let thought = match item {
-                    Item::Tool(_) => None,
-
-                    Item::Assistant { thinking, .. } if show_thinking && !thinking.is_empty() => {
-                        Some(thinking.clone())
-                    }
-
-                    _ => continue,
+                let shown = match item {
+                    Item::Tool(_) => true,
+                    Item::Assistant { thinking, .. } => show_thinking && !thinking.is_empty(),
+                    _ => false,
                 };
+
+                if !shown {
+                    continue;
+                }
 
                 if !std::mem::take(&mut first) {
                     let (line, _) =
@@ -81,9 +84,10 @@ pub fn show_group(ui: &mut Ui, items: &mut [Item], live: bool, show_thinking: bo
                     );
                 }
 
-                ui.push_id(index, |ui| match (item, thought) {
-                    (Item::Tool(tool), _) => row(ui, tool),
-                    (_, Some(thinking)) => thought_row(ui, &thinking),
+                // The reasoning is borrowed, not copied, on every frame.
+                ui.push_id(index, |ui| match item {
+                    Item::Tool(tool) => row(ui, tool),
+                    Item::Assistant { thinking, .. } => thought_row(ui, thinking),
                     _ => {}
                 });
             }
@@ -264,7 +268,7 @@ fn thought_row(ui: &mut Ui, thinking: &str) {
     let opening = painter.text(
         Pos2::new(verb.right() + 7.0, rect.center().y),
         Align2::LEFT_CENTER,
-        format::one_line(thinking, room),
+        format::one_line(head(thinking, MAX_SUMMARY_BYTES), room),
         font,
         palette::text_secondary(),
     );
@@ -413,34 +417,26 @@ fn digest(items: &[Item], live: bool) -> (String, usize, u64) {
 fn details(ui: &mut Ui, tool: &ToolItem) {
     ui.add_space(2.0);
 
-    section_label(ui, "Input");
-
     let input = serde_json::to_string_pretty(&tool.call.input)
         .unwrap_or_else(|_| tool.call.input.to_string());
 
-    code_block(ui, &input, MAX_OUTPUT_HEIGHT);
+    code_block(ui, "input", &input, MAX_OUTPUT_HEIGHT);
 
     let Some(result) = &tool.result else {
         return;
     };
 
-    section_label(ui, if result.is_error { "Error" } else { "Output" });
+    let label = if result.is_error { "error" } else { "output" };
 
-    let output = if result.output.is_empty() {
-        "(no output)".to_string()
+    if result.output.is_empty() {
+        code_block(ui, label, "(no output)", MAX_OUTPUT_HEIGHT);
     } else {
-        clip(&result.output)
-    };
+        // Already cut where it came in; cut here too for a call that
+        // did not come that way.
+        let output = crate::session::clip(&result.output, crate::session::MAX_OUTPUT_CHARS);
 
-    code_block(ui, &output, MAX_OUTPUT_HEIGHT);
-}
-
-fn section_label(ui: &mut Ui, text: &str) {
-    ui.label(
-        RichText::new(text)
-            .font(theme::small())
-            .color(palette::text_muted()),
-    );
+        code_block(ui, label, &output, MAX_OUTPUT_HEIGHT);
+    }
 }
 
 fn status(tool: &ToolItem) -> (String, egui::Color32) {
@@ -453,24 +449,63 @@ fn status(tool: &ToolItem) -> (String, egui::Color32) {
     }
 }
 
-/// The one thing about the input most worth seeing at a glance.
-fn summary(input: &Value) -> String {
-    SUMMARY_FIELDS
+/// The one thing about the input most worth seeing at a glance: the
+/// telling field if it has one, otherwise the beginning of the input as
+/// it was written. This is asked for on every frame a row is on screen,
+/// so it borrows where it can and never writes out more than a row
+/// could show.
+fn summary(input: &Value) -> Cow<'_, str> {
+    let telling = SUMMARY_FIELDS
         .iter()
-        .find_map(|field| input.get(field)?.as_str())
-        .map(str::to_string)
-        .unwrap_or_else(|| input.to_string())
+        .find_map(|field| input.get(field)?.as_str());
+
+    match telling {
+        Some(text) => Cow::Borrowed(head(text, MAX_SUMMARY_BYTES)),
+        None => Cow::Owned(beginning(input)),
+    }
 }
 
-fn clip(output: &str) -> String {
-    if output.chars().count() <= MAX_OUTPUT_CHARS {
-        return output.to_string();
+/// The first `max_bytes` of `text`, on a character boundary.
+fn head(text: &str, max_bytes: usize) -> &str {
+    let mut end = text.len().min(max_bytes);
+
+    while !text.is_char_boundary(end) {
+        end -= 1;
     }
 
-    let shown: String = output.chars().take(MAX_OUTPUT_CHARS).collect();
-    let hidden = output.chars().count() - MAX_OUTPUT_CHARS;
+    &text[..end]
+}
 
-    format!("{shown}\n\n… {hidden} more characters")
+/// The beginning of `input` written out as JSON. Writing stops once
+/// there is enough for a row, however large the input is.
+fn beginning(input: &Value) -> String {
+    struct Short(Vec<u8>);
+
+    impl std::io::Write for Short {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            // Taking only what fits and then nothing makes the writer
+            // stop: a huge string is never copied whole.
+            let room = MAX_SUMMARY_BYTES.saturating_sub(self.0.len());
+            let taken = bytes.len().min(room);
+
+            self.0.extend_from_slice(&bytes[..taken]);
+
+            Ok(taken)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let mut short = Short(Vec::new());
+
+    // An error only means that it was stopped.
+    let _ = serde_json::to_writer(&mut short, input);
+
+    let text = String::from_utf8_lossy(&short.0);
+
+    head(&text, MAX_SUMMARY_BYTES).to_string()
 }
 
 #[cfg(test)]
@@ -539,5 +574,22 @@ mod tests {
         assert_eq!(summary(&json!({ "path": "a.py", "offset": 3 })), "a.py");
         assert_eq!(summary(&json!({ "command": "ls", "path": "." })), "ls");
         assert_eq!(summary(&json!({ "depth": 2 })), r#"{"depth":2}"#);
+    }
+
+    #[test]
+    fn the_summary_of_a_huge_input_is_cut_short_without_writing_it_all_out() {
+        let content = "é".repeat(500_000);
+
+        let input = json!({ "path": content.clone() });
+        let by_field = summary(&input);
+
+        assert!(matches!(by_field, Cow::Borrowed(_)));
+        assert!(by_field.len() <= MAX_SUMMARY_BYTES);
+
+        let input = json!({ "content": content });
+        let written = summary(&input);
+
+        assert!(written.starts_with(r#"{"content":"é"#));
+        assert!(written.len() <= MAX_SUMMARY_BYTES);
     }
 }

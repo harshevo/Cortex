@@ -56,6 +56,10 @@ impl Rehearsal {
         self.args.open_settings
     }
 
+    pub fn opens_remote(&self) -> bool {
+        self.args.open_remote
+    }
+
     pub fn selects_newest(&self) -> bool {
         self.args.select_newest
     }

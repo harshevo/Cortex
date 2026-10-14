@@ -9,6 +9,7 @@ use serde_json::Value;
 use crate::error::ProviderError;
 use crate::message::Message;
 use crate::usage::Usage;
+use crate::window::PlanQuota;
 
 /// A tool as advertised to the model.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -84,6 +85,13 @@ pub trait ModelProvider: Send + Sync {
 
     /// The model this provider instance talks to.
     fn model(&self) -> &str;
+
+    /// How much of a subscription's allowance is used, as the provider
+    /// last said. `None` for a provider that is paid per token, and for
+    /// one that has not been told.
+    fn quota(&self) -> Option<PlanQuota> {
+        None
+    }
 
     async fn complete(&self, request: ModelRequest<'_>) -> Result<ModelResponse, ProviderError>;
 

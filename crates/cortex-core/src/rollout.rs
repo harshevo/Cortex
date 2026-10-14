@@ -379,6 +379,8 @@ impl Agent {
         let config = AgentConfig {
             extras: Extras {
                 mask: self.config.extras.mask.clone(),
+                compact: self.config.extras.compact.clone(),
+                context_window: self.config.extras.context_window,
                 ..Extras::default()
             },
             ..self.config.clone()
@@ -395,6 +397,7 @@ impl Agent {
             advisers: Vec::new(),
             stream_observer: None,
             inbox: None,
+            heard: Arc::default(),
         }
     }
 }
@@ -573,13 +576,41 @@ async fn copy_project(root: &Path, sandbox: Sandbox) -> io::Result<(TempDir, Wor
 
     let cloned = cfg!(target_os = "macos") && copy_with(&["-Rc"], &source, copy.path()).await?;
 
-    if !cloned && !copy_with(&["-R"], &source, copy.path()).await? {
-        return Err(io::Error::other("`cp` failed"));
+    if !cloned {
+        // Windows has no `cp`.
+        let copied = cfg!(unix) && copy_with(&["-R"], &source, copy.path()).await?;
+
+        if !copied {
+            let (from, to) = (root.to_path_buf(), copy.path().to_path_buf());
+
+            tokio::task::spawn_blocking(move || copy_tree(&from, &to))
+                .await
+                .map_err(io::Error::other)??;
+        }
     }
 
     let workspace = Workspace::new(copy.path())?.with_sandbox(sandbox);
 
     Ok((copy, workspace))
+}
+
+/// Copies everything in `source` into `target`, which exists.
+fn copy_tree(source: &Path, target: &Path) -> io::Result<()> {
+    for entry in std::fs::read_dir(source)? {
+        let entry = entry?;
+        let to = target.join(entry.file_name());
+
+        if entry.file_type()?.is_dir() {
+            std::fs::create_dir_all(&to)?;
+
+            copy_tree(&entry.path(), &to)?;
+        } else {
+            // A link that points nowhere is not worth failing the copy.
+            let _ = std::fs::copy(entry.path(), &to);
+        }
+    }
+
+    Ok(())
 }
 
 async fn copy_with(flags: &[&str], source: &Path, target: &Path) -> io::Result<bool> {

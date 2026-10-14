@@ -38,12 +38,12 @@ use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
+use cortex_core::services::Service;
 use cortex_core::{
     Advice, Adviser, Briefing, ContextSource, Event, ToolCall, ToolResult, TrajectorySink,
     Workspace,
@@ -67,8 +67,9 @@ const CONNECT_TIMEOUT: Duration = Duration::from_millis(300);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// How long a service that was just started is given to answer. Loading
-/// its libraries takes a few seconds the first time.
-const START_TIMEOUT: Duration = Duration::from_secs(20);
+/// its libraries takes a few seconds, and far longer the first time on a
+/// machine, while the system checks every library it has not seen before.
+const START_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// How much of the instruction, of an action and of a result goes into the
 /// text the brain compares situations by. The instruction is kept short so
@@ -236,32 +237,11 @@ impl Mind {
             return Err(format!("the service at {} is not answering", self.address));
         }
 
-        let project = brain_project().ok_or(
-            "the brain project was not found. Set CORTEX_BRAIN_DIR to the folder that holds it",
-        )?;
+        let port: u16 = port
+            .parse()
+            .map_err(|_| format!("{} has no port", self.address))?;
 
-        let python = std::env::var("CORTEX_PYTHON").unwrap_or_else(|_| "python3".to_string());
-
-        let mut command = Command::new(&python);
-
-        command
-            .args(["-m", "cortex.brain.server", "--port", port])
-            .current_dir(&project)
-            .stdin(Stdio::null());
-
-        match service_log() {
-            Some((out, err)) => command.stdout(out).stderr(err),
-            None => command.stdout(Stdio::null()).stderr(Stdio::null()),
-        };
-
-        // Its own process group, so that Ctrl-C in the terminal stops the
-        // agent and leaves the brain running for the next one.
-        #[cfg(unix)]
-        std::os::unix::process::CommandExt::process_group(&mut command, 0);
-
-        command
-            .spawn()
-            .map_err(|error| format!("cannot run `{python}` in {}: {error}", project.display()))?;
+        Service::Mind.start_detached(port)?;
 
         let started = Instant::now();
 
@@ -274,9 +254,8 @@ impl Mind {
         }
 
         Err(format!(
-            "the service was started from {} and did not answer within {} seconds; see \
+            "the service was started and did not answer within {} seconds; see \
              ~/.cortex/mind/server.log",
-            project.display(),
             START_TIMEOUT.as_secs()
         ))
     }
@@ -750,33 +729,11 @@ impl ContextSource for Mind {
     }
 }
 
-/// The brain project: where `CORTEX_BRAIN_DIR` says, else `~/.cortex/brain`,
-/// else beside the checkout this was built from.
+/// The brain project the mind is run from: where `CORTEX_BRAIN_DIR` says,
+/// else the one packaged with the program, else `~/.cortex/brain`, else
+/// beside the checkout.
 pub fn brain_project() -> Option<PathBuf> {
-    let named = std::env::var_os("CORTEX_BRAIN_DIR").map(PathBuf::from);
-    let home = std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cortex/brain"));
-    let beside = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../brain"));
-
-    named
-        .into_iter()
-        .chain(home)
-        .chain([beside])
-        .find(|folder| folder.join("cortex/brain/server.py").is_file())
-}
-
-/// Where a service started from here writes what it prints.
-fn service_log() -> Option<(std::fs::File, std::fs::File)> {
-    let folder = PathBuf::from(std::env::var_os("HOME")?).join(".cortex/mind");
-
-    std::fs::create_dir_all(&folder).ok()?;
-
-    let log = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(folder.join("server.log"))
-        .ok()?;
-
-    Some((log.try_clone().ok()?, log))
+    Service::Mind.folder().ok()
 }
 
 /// A tool call as the brain compares actions: the tool and what it was

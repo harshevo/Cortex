@@ -48,6 +48,63 @@ pub enum Command {
     /// Show what the mind has learned and how runs have gone with it
     /// speaking and with it silent: checks passed, steps, tokens and time.
     Mind(MindArgs),
+
+    /// Show the tokens used: a calendar of one month with the total of
+    /// each day, then the busiest day and hour, the model used most, the
+    /// sessions, and what it cost where the price is known.
+    Usage(UsageArgs),
+
+    /// Show whether the advisers help: for each one, how runs went with
+    /// it speaking and with it held out.
+    Effect(EffectArgs),
+}
+
+#[derive(Args)]
+pub struct UsageArgs {
+    /// The month to show, as `YYYY-MM`. Defaults to this month.
+    #[arg(long, value_name = "YYYY-MM")]
+    pub month: Option<String>,
+
+    /// Print everything as JSON.
+    #[arg(long)]
+    pub json: bool,
+
+    /// The folder the records are kept under, instead of `~/.cortex`.
+    #[arg(long, value_name = "FOLDER")]
+    pub records_dir: Option<PathBuf>,
+
+    /// Minutes your clock is ahead of UTC, when it cannot be found out
+    /// from the system. Days are counted on your clock.
+    #[arg(long, value_name = "MINUTES", allow_hyphen_values = true)]
+    pub utc_offset: Option<i32>,
+}
+
+#[derive(Args)]
+pub struct EffectArgs {
+    /// Only runs from this day on, as `YYYY-MM-DD`. Defaults to all.
+    #[arg(long, value_name = "YYYY-MM-DD")]
+    pub since: Option<String>,
+
+    /// Only runs in this project folder.
+    #[arg(long, value_name = "FOLDER")]
+    pub project: Option<String>,
+
+    /// Only runs of this model.
+    #[arg(long)]
+    pub model: Option<String>,
+
+    /// Print everything as JSON.
+    #[arg(long)]
+    pub json: bool,
+
+    /// The folder the records are kept under, instead of `~/.cortex`.
+    #[arg(long, value_name = "FOLDER")]
+    pub records_dir: Option<PathBuf>,
+
+    /// Minutes your clock is ahead of UTC, when it cannot be found out
+    /// from the system.
+    #[arg(long, value_name = "MINUTES", allow_hyphen_values = true)]
+    pub utc_offset: Option<i32>,
 }
 
 #[derive(Args)]
@@ -124,11 +181,6 @@ pub struct ModelArgs {
     #[arg(long, default_value = cortex_retrieval::client::DEFAULT_URL)]
     pub embedding_url: String,
 
-    /// A measured connectome for `--with brain`, as a text file of
-    /// `source,target,strength` lines. Without it the wiring is generated.
-    #[arg(long, value_name = "FILE")]
-    pub connectome: Option<PathBuf>,
-
     /// Address of the HOPE memory service used by `--with hope`.
     #[arg(long, default_value = cortex_memory::hope::DEFAULT_URL)]
     pub hope_url: String,
@@ -140,6 +192,9 @@ pub struct ModelArgs {
 
     /// The share of runs in which the mind watches and says nothing, so
     /// that `cortex mind` can compare the rest with them. 0 for none.
+    /// Only used with `--holdout 0`: otherwise the mind is held out by
+    /// `--holdout` like every other adviser, and `cortex effect` makes
+    /// the comparison.
     #[arg(long, default_value_t = cortex_brain::mind::DEFAULT_CONTROL, value_name = "SHARE")]
     pub mind_control: f64,
 
@@ -190,6 +245,46 @@ pub struct ModelArgs {
     /// temporary folders, and cannot read where keys are kept.
     #[arg(long)]
     pub no_sandbox: bool,
+
+    /// The model's context window in tokens. Needed for a model whose
+    /// window is not known (any that is not one of Anthropic's), both to
+    /// show how full it is and for `--with compact` to act on its own.
+    /// A smaller number than the real window makes it compact sooner.
+    #[arg(long, value_name = "TOKENS")]
+    pub context_window: Option<u64>,
+
+    /// With `--with compact`, the share of the context window at which
+    /// the conversation is compacted.
+    #[arg(long, default_value_t = cortex_core::compact::DEFAULT_AUTO_AT, value_name = "SHARE")]
+    pub compact_at: f32,
+
+    /// With `--with compact`, the latest responses of the model that are
+    /// kept as they are. Not used with the Anthropic provider, where the
+    /// summary replaces everything.
+    #[arg(long, default_value_t = cortex_core::compact::DEFAULT_KEEP_RECENT, value_name = "RESPONSES")]
+    pub compact_keep: usize,
+
+    /// The share of runs each adviser (brain, intuition, controller,
+    /// mind) is held out of: it watches and learns, and what it would
+    /// have said is recorded and not shown to the model, so that
+    /// `cortex effect` can compare runs with and without it. 0 for none.
+    #[arg(long, default_value_t = cortex_core::effect::DEFAULT_SHARE, value_name = "SHARE")]
+    pub holdout: f64,
+
+    /// The same for what is put before a task: memory, lessons, the
+    /// router's findings. Off unless given, because a run without its
+    /// memory differs more. A skill asked for by name is never held out.
+    #[arg(long, default_value_t = 0.0, value_name = "SHARE")]
+    pub holdout_briefings: f64,
+
+    /// The folder the records of tokens used and of how runs went are
+    /// kept under, instead of `~/.cortex`.
+    #[arg(long, value_name = "FOLDER")]
+    pub records_dir: Option<PathBuf>,
+
+    /// Keep no record of tokens used or of how runs went.
+    #[arg(long)]
+    pub no_records: bool,
 
     /// Maximum number of model calls per instruction.
     #[arg(long, default_value_t = 60)]

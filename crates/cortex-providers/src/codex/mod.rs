@@ -12,10 +12,15 @@ mod auth;
 mod login;
 mod wire;
 
+use std::sync::Mutex;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use cortex_core::{ModelProvider, ModelRequest, ModelResponse, ProviderError, StreamObserver};
+use cortex_core::{
+    ModelProvider, ModelRequest, ModelResponse, PlanQuota, ProviderError, QuotaWindow,
+    StreamObserver,
+};
+use reqwest::header::HeaderMap;
 use serde_json::Value;
 
 pub use self::auth::status as sign_in_status;
@@ -73,6 +78,10 @@ pub struct CodexProvider {
     /// Names this provider's requests as one conversation, which is what
     /// lets the service reuse its cache from one step to the next.
     conversation: String,
+
+    /// How much of the plan's allowance is used, as the service last
+    /// said in the headers of a response.
+    quota: Mutex<Option<PlanQuota>>,
 }
 
 impl CodexProvider {
@@ -88,6 +97,7 @@ impl CodexProvider {
             session: Session::open(http.clone())?,
             http,
             conversation: conversation_id()?,
+            quota: Mutex::new(None),
         })
     }
 
@@ -132,6 +142,15 @@ impl CodexProvider {
         }
 
         let status = response.status();
+
+        // Sent with failures too: a used-up allowance says when it is
+        // back.
+        if let Some(quota) = quota_in(response.headers(), unix_millis()) {
+            *self
+                .quota
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(quota);
+        }
 
         if !status.is_success() {
             let retry_after = retry::parse_retry_after(response.headers());
@@ -183,6 +202,13 @@ impl ModelProvider for CodexProvider {
         &self.config.model
     }
 
+    fn quota(&self) -> Option<PlanQuota> {
+        *self
+            .quota
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     /// The service only streams, so this is a stream nobody watches.
     async fn complete(&self, request: ModelRequest<'_>) -> Result<ModelResponse, ProviderError> {
         self.complete_streaming(request, &Unwatched).await
@@ -222,6 +248,51 @@ fn sorted(error: ProviderError) -> Attempt {
     }
 }
 
+fn unix_millis() -> u64 {
+    cortex_core::trajectory::unix_millis() as u64
+}
+
+/// How much of the plan's allowance is used, from a response's headers.
+///
+/// The names are the ones the open-source Codex command-line tool reads
+/// from this service: `x-codex-primary-used-percent`,
+/// `x-codex-primary-window-minutes`, and for when the window starts
+/// again either `x-codex-primary-reset-at` (seconds since 1970) or the
+/// older `x-codex-primary-reset-after-seconds`; the same with
+/// `secondary`. They are not a documented interface, so each is taken
+/// when present and its absence is not an error. `None` when neither
+/// window is reported.
+fn quota_in(headers: &HeaderMap, now_ms: u64) -> Option<PlanQuota> {
+    let number =
+        |name: String| -> Option<f64> { headers.get(name)?.to_str().ok()?.trim().parse().ok() };
+
+    let window = |which: &str| -> Option<QuotaWindow> {
+        let used_percent = number(format!("x-codex-{which}-used-percent"))?;
+
+        let resets_at_ms = number(format!("x-codex-{which}-reset-at"))
+            .map(|seconds| (seconds * 1000.0) as u64)
+            .or_else(|| {
+                number(format!("x-codex-{which}-reset-after-seconds"))
+                    .map(|seconds| now_ms + (seconds * 1000.0) as u64)
+            });
+
+        Some(QuotaWindow {
+            used_percent,
+            window_minutes: number(format!("x-codex-{which}-window-minutes"))
+                .map(|minutes| minutes as u64),
+            resets_at_ms,
+        })
+    };
+
+    let (primary, secondary) = (window("primary"), window("secondary"));
+
+    (primary.is_some() || secondary.is_some()).then_some(PlanQuota {
+        primary,
+        secondary,
+        observed_ms: now_ms,
+    })
+}
+
 /// A random identifier in the usual 8-4-4-4-12 form.
 fn conversation_id() -> Result<String, ProviderError> {
     let mut bytes = [0u8; 16];
@@ -238,4 +309,60 @@ fn conversation_id() -> Result<String, ProviderError> {
         &hex[16..20],
         &hex[20..]
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use reqwest::header::{HeaderName, HeaderValue};
+
+    use super::*;
+
+    fn headers(pairs: &[(&'static str, &'static str)]) -> HeaderMap {
+        pairs
+            .iter()
+            .map(|(name, value)| {
+                (
+                    HeaderName::from_static(name),
+                    HeaderValue::from_static(value),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_allowance_is_read_from_the_headers_that_are_there() {
+        let quota = quota_in(
+            &headers(&[
+                ("x-codex-primary-used-percent", "41.5"),
+                ("x-codex-primary-window-minutes", "300"),
+                ("x-codex-primary-reset-after-seconds", "90"),
+                ("x-codex-secondary-used-percent", "12"),
+                ("x-codex-secondary-reset-at", "1791158400"),
+            ]),
+            1_000_000,
+        )
+        .unwrap();
+
+        let primary = quota.primary.unwrap();
+
+        assert_eq!(primary.used_percent, 41.5);
+        assert_eq!(primary.window_minutes, Some(300));
+        assert_eq!(primary.resets_at_ms, Some(1_090_000));
+
+        let secondary = quota.secondary.unwrap();
+
+        assert_eq!(secondary.used_percent, 12.0);
+        assert_eq!(secondary.window_minutes, None);
+        assert_eq!(secondary.resets_at_ms, Some(1_791_158_400_000));
+
+        assert_eq!(quota.observed_ms, 1_000_000);
+    }
+
+    #[test]
+    fn a_response_that_says_nothing_about_the_allowance_reports_none() {
+        assert_eq!(
+            quota_in(&headers(&[("content-type", "text/event-stream")]), 5),
+            None
+        );
+    }
 }

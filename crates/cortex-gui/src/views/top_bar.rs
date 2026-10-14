@@ -38,6 +38,7 @@ pub struct Place<'a> {
 
 /// Draws the bar. `files_open` is whether the files of the project are
 /// shown on the right; the button at the right-hand end switches it.
+#[allow(clippy::too_many_arguments)]
 pub fn show(
     ui: &mut Ui,
     place: &Place<'_>,
@@ -132,7 +133,7 @@ pub fn show(
             if *files_open {
                 ui.painter().rect_stroke(
                     files.rect,
-                    CornerRadius::same(6),
+                    CornerRadius::same(crate::theme::radius::M),
                     Stroke::new(1.0, palette::border()),
                     egui::StrokeKind::Inside,
                 );
@@ -142,17 +143,39 @@ pub fn show(
                 *files_open = !*files_open;
             }
 
-            // The memory space has no tab any more, so this is the way
-            // out of it.
-            if matches!(*view, View::MemorySpace | View::Living)
-                && icons::button(ui, Icon::Back, "Back to the chat", false).clicked()
-            {
-                *view = View::Conversation;
-            }
+            ui.add_space(8.0);
+
+            views(ui, view);
         });
     });
 
     step
+}
+
+/// The views the middle of the window can show, as a row of small tabs.
+/// Drawn right to left, so the last is first.
+fn views(ui: &mut Ui, view: &mut View) {
+    const TABS: [(View, &str, &str); 5] = [
+        (View::Insights, "Insights", "Tokens used, and whether the advisers help"),
+        (View::Trading, "Trading", "Price bars read with the liquid and dendritic networks"),
+        (View::Living, "Network", "The dendritic network, growing as it watches"),
+        (View::MemorySpace, "Memory", "What Cortex remembers, drawn as a brain"),
+        (View::Conversation, "Chat", "The conversation"),
+    ];
+
+    for (tab, name, help) in TABS {
+        let chosen = *view == tab || (tab == View::Conversation && *view == View::Settings);
+
+        let text = egui::RichText::new(name).font(theme::small()).color(if chosen {
+            palette::text()
+        } else {
+            palette::text_muted()
+        });
+
+        if ui.selectable_label(chosen, text).on_hover_text(help).clicked() {
+            *view = tab;
+        }
+    }
 }
 
 /// A laptop, the app's name and a small arrow, as one thing to click.
@@ -165,8 +188,11 @@ fn title(ui: &mut Ui) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(vec2(width, 24.0), Sense::click());
 
     if response.hovered() {
-        ui.painter()
-            .rect_filled(rect, CornerRadius::same(6), palette::surface());
+        ui.painter().rect_filled(
+            rect,
+            CornerRadius::same(crate::theme::radius::M),
+            palette::surface(),
+        );
     }
 
     let mut left = rect.left() + 6.0;
@@ -208,8 +234,11 @@ fn section_switch(ui: &mut Ui, section: &mut Section) {
 
     let (rect, _) = ui.allocate_exact_size(vec2(PART.x * 2.0, PART.y), Sense::hover());
 
-    ui.painter()
-        .rect_filled(rect, CornerRadius::same(6), palette::sunken());
+    ui.painter().rect_filled(
+        rect,
+        CornerRadius::same(crate::theme::radius::M),
+        palette::sunken(),
+    );
 
     let parts = [
         (
@@ -239,7 +268,7 @@ fn section_switch(ui: &mut Ui, section: &mut Section) {
         if selected {
             ui.painter().rect_filled(
                 part_rect.shrink(2.0),
-                CornerRadius::same(4),
+                CornerRadius::same(crate::theme::radius::S),
                 palette::raised(),
             );
         }
@@ -270,8 +299,11 @@ fn chip(ui: &mut Ui, label: &str) {
 
     let (rect, _) = ui.allocate_exact_size(text.size() + vec2(14.0, 6.0), Sense::hover());
 
-    ui.painter()
-        .rect_filled(rect, CornerRadius::same(6), palette::surface());
+    ui.painter().rect_filled(
+        rect,
+        CornerRadius::same(crate::theme::radius::M),
+        palette::surface(),
+    );
 
     ui.painter()
         .galley(rect.min + vec2(7.0, 3.0), text, palette::text_secondary());
@@ -287,7 +319,7 @@ fn badge(ui: &mut Ui, label: &str) {
 
     ui.painter().rect_filled(
         rect,
-        CornerRadius::same(4),
+        CornerRadius::same(crate::theme::radius::S),
         palette::warning().gamma_multiply(0.16),
     );
 

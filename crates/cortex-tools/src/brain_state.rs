@@ -10,8 +10,8 @@ impl Tool for BrainState {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "brain_state".into(),
-            description: "Inspect the real brain state and learned intuition. `imagine` takes up to 5 next actions you are weighing, each written as `tool: target` (for example `shell: cargo test` or `edit_file: src/lib.rs`), and returns how the mind predicts each would turn out here: `p` is the chance it works, with how often the same action worked and failed in situations like this one, and what the mind would do itself. Optional neuron_ids inspects up to 8 neurons anywhere in the fly network, returning voltage and up to 64 outgoing synapses each; offset pages through their connections. Predictions and measurements are not proof of task correctness.".into(),
-            input_schema: json!({"type":"object","properties":{"imagine":{"type":"array","maxItems":5,"items":{"type":"string"}},"neuron_ids":{"type":"array","maxItems":8,"items":{"type":"integer","minimum":0}},"offset":{"type":"integer","minimum":0},"sample_count":{"type":"integer","enum":[96,256,512]}},"additionalProperties":false}),
+            description: "Ask the learning networks what they expect. `imagine` takes up to 5 next actions you are weighing, each written as `tool: target` (for example `shell: cargo test` or `edit_file: src/lib.rs`). Each network that is on answers in its own words: the mind gives `p`, the chance the action works here, with how often it worked and failed in situations like this one; the dendritic network gives the steps it has seen follow that action from here, how sure it is of each, and whether they ended in good or bad news. `goal` takes an outcome such as `checks: passed` and returns the steps that have led to it before. With neither, it returns what each network expects next and why. These are habits learned from earlier runs, not proof that anything is correct.".into(),
+            input_schema: json!({"type":"object","properties":{"imagine":{"type":"array","maxItems":5,"items":{"type":"string"}},"goal":{"type":"string"}},"additionalProperties":false}),
         }
     }
     fn access(&self) -> Access {
@@ -20,14 +20,6 @@ impl Tool for BrainState {
     async fn run(&self, query: Value, _context: &ToolContext) -> Result<String, ToolError> {
         if !query.is_object() {
             return Err(ToolError::InvalidInput("Expected an object".into()));
-        }
-        if query
-            .get("sample_count")
-            .is_some_and(|count| !matches!(count.as_u64(), Some(96 | 256 | 512)))
-        {
-            return Err(ToolError::InvalidInput(
-                "sample_count must be 96, 256, or 512".into(),
-            ));
         }
         if let Some(actions) = query.get("imagine") {
             let actions = actions
@@ -39,22 +31,9 @@ impl Tool for BrainState {
                 ));
             }
         }
-        if let Some(ids) = query.get("neuron_ids") {
-            let ids = ids
-                .as_array()
-                .ok_or_else(|| ToolError::InvalidInput("neuron_ids must be an array".into()))?;
-            if ids.len() > 8 || ids.iter().any(|id| id.as_u64().is_none()) {
-                return Err(ToolError::InvalidInput(
-                    "Use up to 8 non-negative integer neuron IDs".into(),
-                ));
-            }
-        }
-        if query
-            .get("offset")
-            .is_some_and(|offset| offset.as_u64().is_none())
-        {
+        if query.get("goal").is_some_and(|goal| !goal.is_string()) {
             return Err(ToolError::InvalidInput(
-                "offset must be a non-negative integer".into(),
+                "goal must be a string such as `checks: passed`".into(),
             ));
         }
         let states: Vec<_> = self

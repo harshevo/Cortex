@@ -413,9 +413,36 @@ pub fn current() -> &'static Theme {
     &THEMES[ACTIVE.load(Ordering::Relaxed)]
 }
 
+/// Which theme is in use, as a number that changes when another is
+/// chosen. Whatever was laid out in one theme's colours is keyed by it.
+pub fn index() -> usize {
+    ACTIVE.load(Ordering::Relaxed)
+}
+
 pub fn background() -> Color32 {
     current().background
 }
+
+/// The ground of a label drawn over the brain: the theme's own ground,
+/// let through a little, so that the label's text keeps its contrast in
+/// light themes as well as dark ones.
+pub fn veil() -> Color32 {
+    translucent(current().sunken, 205)
+}
+
+/// The ground of a card drawn over the brain.
+pub fn card_veil() -> Color32 {
+    translucent(current().surface, 238)
+}
+
+fn translucent(color: Color32, alpha: u8) -> Color32 {
+    Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), alpha)
+}
+
+/// A pairing code is drawn dark on white whatever the theme: that is
+/// what cameras read best.
+pub const CODE_PAPER: Color32 = Color32::WHITE;
+pub const CODE_INK: Color32 = Color32::BLACK;
 
 pub fn sidebar() -> Color32 {
     current().sidebar
