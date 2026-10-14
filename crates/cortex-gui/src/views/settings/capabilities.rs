@@ -9,6 +9,7 @@ use super::rows::{self, Filter};
 use super::{Action, Form};
 use crate::settings::capabilities::{self, About, Group};
 use crate::theme::{self, palette, space};
+use crate::views::menu::{self, Opens};
 use crate::views::tool_card;
 
 /// How often each adviser is held out, to choose from.
@@ -21,17 +22,26 @@ pub fn show(ui: &mut Ui, form: &mut Form, filter: &Filter) -> Option<Action> {
         ui,
         filter,
         "Measure whether advisers help",
-        "In this share of runs each adviser (the dendritic network, intuition, the controller, \
-         the mind) is held out at random: it still watches and learns, but the model is not \
-         shown what it says. Insights → Does it help? compares those runs with the rest. \
-         Never turns the comparison off.",
+        "Share of runs in which each adviser is held out at random, so that Insights → \
+         Does it help? can compare. It still watches and learns.",
         |ui| {
-            for (share, name) in HOLDOUTS {
-                let chosen = form.draft.holdout_percent == share;
+            let current = form.draft.holdout_percent;
+            let label = HOLDOUTS
+                .iter()
+                .find(|(share, _)| *share == current)
+                .map_or("Custom".to_string(), |(_, name)| name.to_string());
 
-                if rows::choice(ui, name, chosen).clicked() {
-                    form.draft.holdout_percent = share;
-                }
+            let (_, chosen) = menu::dropdown(ui, None, &label, false, Opens::DownLeft, |ui| {
+                HOLDOUTS
+                    .into_iter()
+                    .find(|(share, name)| {
+                        menu::item(ui, None, name, "", *share == current).clicked()
+                    })
+                    .map(|(share, _)| share)
+            });
+
+            if let Some(Some(share)) = chosen {
+                form.draft.holdout_percent = share;
             }
         },
     );

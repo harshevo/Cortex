@@ -417,7 +417,12 @@ pub async fn setup(args: &ModelArgs, memory_location: MemoryLocation) -> Result<
         .flatten();
 
     if let Some(living) = &living {
-        sinks.push(living.clone());
+        sinks.push(living.sink());
+        #[cfg(unix)]
+        {
+            tools.register(cortex_tools::BrainChat(living.clone()));
+            tools.register(cortex_tools::TeachBrain(crate::brain_commands::teacher_config(args, "")));
+        }
     }
 
     let mut advisers: Vec<Arc<dyn Adviser>> = Vec::new();
@@ -755,6 +760,15 @@ fn living() -> Option<Arc<Living>> {
         .join("living")
         .join("network.json");
 
+    #[cfg(all(unix, not(target_os = "ios"), not(target_os = "android")))]
+    let living = match Living::connect(&file) {
+        Ok(living) => living,
+        Err(error) => {
+            eprintln!("network: background service unavailable: {error}");
+            return None;
+        }
+    };
+    #[cfg(any(not(unix), target_os = "ios", target_os = "android"))]
     let living = Living::shared(&file);
     let meters = living.snapshot().meters;
 

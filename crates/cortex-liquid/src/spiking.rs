@@ -69,6 +69,40 @@ pub struct Activity {
 }
 
 impl Reservoir {
+    pub fn is_sound(&self) -> bool {
+        self.neurons > 0
+            && self.neurons <= u16::MAX as usize
+            && self.inputs > 0
+            && self.taps.len() == self.neurons
+            && self.feeds.len() == self.neurons
+            && self.bias.len() == self.neurons
+            && self.bias.iter().all(|b| b.is_finite())
+            && self
+                .taps
+                .iter()
+                .flatten()
+                .all(|(c, w)| usize::from(*c) < self.inputs * 2 && w.is_finite())
+            && self
+                .feeds
+                .iter()
+                .flatten()
+                .all(|(n, w)| usize::from(*n) < self.neurons && w.is_finite())
+    }
+    pub fn rewired(&self, seed: u64) -> Self {
+        let mut candidate = self.clone();
+        let mut rng = Rng::new(seed);
+        for (neuron, feeds) in candidate.feeds.iter_mut().enumerate() {
+            if feeds.is_empty() || candidate.neurons < 2 {
+                continue;
+            }
+            let at = rng.below(feeds.len());
+            let from = rng.below(candidate.neurons);
+            if from != neuron {
+                feeds[at].0 = from as u16;
+            }
+        }
+        candidate
+    }
     /// A reservoir of `neurons` listening to `inputs` numbers per bar.
     /// The same seed gives the same reservoir.
     pub fn new(neurons: usize, inputs: usize, seed: u64) -> Self {

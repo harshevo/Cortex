@@ -52,7 +52,10 @@ fn normalize(vector: &mut [f32]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::layout::dot;
+
+    fn dot(a: &[f32], b: &[f32]) -> f32 {
+        a.iter().zip(b).map(|(x, y)| x * y).sum()
+    }
 
     #[test]
     fn texts_that_share_words_are_closer() {

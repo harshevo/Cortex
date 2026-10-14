@@ -28,6 +28,7 @@
 //! be called from a background thread of an app. Nothing here is advice: the output is a
 //! forecast and a measurement of how such forecasts did on past bars.
 
+pub mod abilities;
 pub mod analysis;
 pub mod bars;
 pub mod cfc;

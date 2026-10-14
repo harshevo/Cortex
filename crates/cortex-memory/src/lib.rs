@@ -27,6 +27,7 @@
 
 pub mod consolidate;
 pub mod episode;
+pub mod experience;
 pub mod fact;
 pub mod hope;
 pub mod lesson;

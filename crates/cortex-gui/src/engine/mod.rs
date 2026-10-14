@@ -62,7 +62,6 @@ pub struct Launch {
 
 /// What the window asks of the agent.
 pub enum Command {
-    InspectBrain(serde_json::Value),
     /// Build the agent, replacing the one in use.
     Launch(Box<Launch>),
 
@@ -98,7 +97,6 @@ pub enum Command {
 
 /// What the agent tells the window.
 pub enum Update {
-    BrainInspection(Vec<serde_json::Value>),
     ServiceStarting(String),
     /// The agent has been built and is waiting for instructions.
     Ready(Info),
@@ -230,9 +228,6 @@ pub struct Engine {
 }
 
 impl Engine {
-    pub fn inspect_brain(&self, query: serde_json::Value) {
-        let _ = self.commands.send(Command::InspectBrain(query));
-    }
     /// Starts the background task. It has no agent until the first
     /// [`Engine::launch`].
     pub fn start(runtime: &Handle, window: egui::Context) -> Self {

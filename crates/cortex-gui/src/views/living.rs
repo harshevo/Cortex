@@ -1,10 +1,16 @@
-//! The living network, drawn as it is: one dot per neuron it holds and
-//! one line per synapse, laid out by the synapses themselves. A neuron
-//! appears on screen in the moment it is created.
+//! The shared brain, drawn as it is. Above, one dot per word or event
+//! neuron and one line per synapse, laid out by the synapses themselves;
+//! a neuron appears on screen in the moment it is created. Below, the
+//! spiking cells of the language learner, each with its dendritic
+//! branches drawn as long as their synapses are strong; a cell that is
+//! born arrives with a ring, and one that dies flashes as it is replaced.
+//! Beside them: what the background service is doing, the teacher, what
+//! the brain is curious about, what it has been taught, and how it has
+//! grown and been pruned.
 
 use std::collections::{HashMap, HashSet};
 
-use cortex_living::{Id, Kind, NeuronView, Sample, Snapshot};
+use cortex_living::{CellView, Id, Kind, NeuronView, Sample, Snapshot};
 use eframe::egui::{
     self, Align2, Color32, FontId, Pos2, Rect, RichText, ScrollArea, Sense, Stroke, Ui, Vec2, vec2,
 };
@@ -46,12 +52,18 @@ pub struct LivingView {
     places: HashMap<Id, Place>,
     selected: Option<Id>,
 
+    /// When each spiking cell was born, by its own count, and when it
+    /// came on screen; and when a cell last died.
+    cells: HashMap<usize, (u64, f64)>,
+    deaths: HashMap<usize, f64>,
+
     /// Something has been drawn once, so what is new arrives on screen
     /// instead of simply being there.
     shown: bool,
 }
 
-pub fn show(ui: &mut Ui, view: &mut LivingView, snapshot: &Snapshot) {
+/// `remembered` is one line on the agent's own remembered tasks.
+pub fn show(ui: &mut Ui, view: &mut LivingView, snapshot: &Snapshot, remembered: &str) {
     let now = ui.input(|input| input.time);
 
     egui::Panel::right(ui.id().with("living panel"))
@@ -65,11 +77,25 @@ pub fn show(ui: &mut Ui, view: &mut LivingView, snapshot: &Snapshot) {
         .show(ui, |ui| {
             ScrollArea::vertical()
                 .auto_shrink(false)
-                .show(ui, |ui| panel(ui, view, snapshot));
+                .show(ui, |ui| panel(ui, view, snapshot, remembered));
         });
 
     let (response, painter) = ui.allocate_painter(ui.available_size(), Sense::click());
-    let rect = response.rect;
+    let whole = response.rect;
+
+    // The spiking cells get a band along the bottom.
+    let band = if snapshot.cells.is_empty() {
+        0.0
+    } else {
+        (whole.height() * 0.3).clamp(110.0, 240.0)
+    };
+    let rect = Rect::from_min_max(whole.min, egui::pos2(whole.max.x, whole.max.y - band));
+
+    if band > 0.0 {
+        let cells = Rect::from_min_max(egui::pos2(whole.min.x, rect.max.y), whole.max);
+
+        view.draw_cells(&painter, cells, &snapshot.cells, snapshot.language.spikes, now);
+    }
 
     let drawn = choose(snapshot);
     let ids: HashSet<Id> = drawn.iter().map(|neuron| neuron.id).collect();
@@ -344,6 +370,120 @@ impl LivingView {
     }
 }
 
+impl LivingView {
+    /// The spiking cells in a grid, each a soma with its four dendritic
+    /// branches. A branch is drawn as long and as bright as its synapses
+    /// are strong; a cell glows when it spiked in the last few words.
+    fn draw_cells(
+        &mut self,
+        painter: &egui::Painter,
+        rect: Rect,
+        cells: &[CellView],
+        spikes: u64,
+        now: f64,
+    ) {
+        let first = self.cells.is_empty();
+
+        for cell in cells {
+            match self.cells.get(&cell.id) {
+                Some((born, _)) if *born == cell.born => {}
+                Some(_) => {
+                    // Its place was taken by a newly wired cell.
+                    self.deaths.insert(cell.id, now);
+                    self.cells.insert(cell.id, (cell.born, now));
+                }
+                None => {
+                    let arrived = if first { f64::NEG_INFINITY } else { now };
+                    self.cells.insert(cell.id, (cell.born, arrived));
+                }
+            }
+        }
+        self.deaths.retain(|_, when| now - *when < 3.0);
+
+        painter.rect_filled(rect.shrink(6.0), egui::CornerRadius::same(8), palette::sunken());
+
+        let inhibitory = cells.iter().filter(|cell| cell.inhibitory).count();
+        painter.text(
+            rect.left_top() + vec2(16.0, 12.0),
+            Align2::LEFT_TOP,
+            format!(
+                "Spiking cells: {}  ({} excitatory, {} inhibitory)  ·  {} dendritic branches  ·  {} spikes",
+                cells.len(),
+                cells.len() - inhibitory,
+                inhibitory,
+                cells.iter().map(|cell| cell.branches.len()).sum::<usize>(),
+                spikes
+            ),
+            theme::small(),
+            palette::text_secondary(),
+        );
+
+        let inner = Rect::from_min_max(
+            rect.left_top() + vec2(16.0, 34.0),
+            rect.right_bottom() - vec2(16.0, 12.0),
+        );
+        let count = cells.len().max(1) as f32;
+        let columns = (count * inner.width() / inner.height().max(1.0)).sqrt().ceil().max(1.0);
+        let rows = (count / columns).ceil().max(1.0);
+        let step = vec2(inner.width() / columns, inner.height() / rows);
+        let reach = step.x.min(step.y);
+
+        for (at, cell) in cells.iter().enumerate() {
+            let column = (at as f32 % columns).floor();
+            let row = (at as f32 / columns).floor();
+            let soma = inner.left_top()
+                + vec2((column + 0.5) * step.x, (row + 0.5) * step.y + reach * 0.22);
+
+            let glow = (-(cell.silent as f32) / 40.0).exp();
+            let colour = if cell.inhibitory {
+                palette::warning()
+            } else {
+                palette::accent()
+            };
+
+            for (branch, weight) in cell.branches.iter().enumerate() {
+                let spread = (branch as f32 - (cell.branches.len() as f32 - 1.0) / 2.0) * 0.55;
+                let length = reach * (0.12 + 0.42 * weight.clamp(0.0, 1.0));
+                let tip = soma + vec2(spread.sin(), -spread.cos()) * length;
+
+                painter.line_segment(
+                    [soma, tip],
+                    Stroke::new(
+                        0.8 + weight,
+                        colour.gamma_multiply(0.18 + 0.5 * weight + 0.3 * glow),
+                    ),
+                );
+            }
+
+            let radius = (reach * 0.11).clamp(1.6, 4.5);
+
+            painter.circle_filled(soma, radius, colour.gamma_multiply(0.3 + 0.7 * glow));
+
+            if let Some((_, arrived)) = self.cells.get(&cell.id) {
+                let age = ((now - arrived) / ARRIVAL).clamp(0.0, 1.0) as f32;
+
+                if age < 1.0 {
+                    painter.circle_stroke(
+                        soma,
+                        radius + reach * 0.5 * age,
+                        Stroke::new(1.5, palette::good().gamma_multiply(1.0 - age)),
+                    );
+                }
+            }
+
+            if let Some(died) = self.deaths.get(&cell.id) {
+                let fading = (1.0 - (now - died) / 3.0).clamp(0.0, 1.0) as f32;
+
+                painter.circle_stroke(
+                    soma,
+                    radius + 3.0,
+                    Stroke::new(2.0, palette::bad().gamma_multiply(fading)),
+                );
+            }
+        }
+    }
+}
+
 /// A label beside a neuron, kept inside the picture.
 fn label(painter: &egui::Painter, rect: Rect, centre: Pos2, off: f32, text: &str, colour: Color32) {
     let (anchor, at) = if centre.x > rect.right() - 190.0 {
@@ -395,19 +535,112 @@ fn percent(share: f32) -> String {
     format!("{:.0}%", share * 100.0)
 }
 
-fn panel(ui: &mut Ui, view: &mut LivingView, snapshot: &Snapshot) {
+fn panel(ui: &mut Ui, view: &mut LivingView, snapshot: &Snapshot, remembered: &str) {
     ui.set_width(PANEL_WIDTH - 32.0);
 
-    ui.label(RichText::new("Living network").font(theme::strong(15.0)));
+    ui.label(RichText::new("Brain").font(theme::strong(15.0)));
 
     muted(
         ui,
-        "Experimental. It watches every run, grows and rewires as it goes, and never advises \
-         the model. The figures are measurements of the mechanisms named; none of them is \
-         evidence of experience.",
+        "One spiking and dendritic network shared by chat, code and trading. It learns \
+         from what is said and done, keeps learning in the background after Cortex closes, \
+         and is taught by an LLM teacher. These are measurements of learning mechanisms; \
+         they do not show awareness.",
     );
 
     ui.add_space(8.0);
+
+    let background = &snapshot.background;
+    ui.horizontal(|ui| {
+        let (dot, _) = ui.allocate_exact_size(vec2(10.0, 14.0), Sense::hover());
+        let colour = if background.running {
+            palette::good()
+        } else {
+            palette::bad()
+        };
+        ui.painter().circle_filled(dot.center(), 4.0, colour);
+        ui.label(
+            RichText::new(if background.running {
+                format!("Alive in the background (PID {})", background.pid)
+            } else {
+                "Background service not reached".to_string()
+            })
+            .font(theme::small())
+            .color(palette::text()),
+        );
+    });
+    if !background.phase.is_empty() {
+        muted(ui, &background.phase);
+    }
+    if background.pending > 0 {
+        row(ui, "Experiences waiting", &background.pending.to_string());
+    }
+    if let Some(problem) = &background.problem {
+        muted(ui, problem);
+    }
+
+    teacher(ui, &snapshot.teaching);
+
+    heading(ui, "Curious about");
+    listed(
+        ui,
+        &snapshot.curious,
+        "Nothing yet. Questions it cannot answer and words it keeps meeting land here.",
+    );
+
+    memories(ui, snapshot);
+    if !remembered.is_empty() {
+        muted(ui, &format!("The coding agent's own memory: {remembered}."));
+    }
+    growth(ui, snapshot);
+
+    let language = &snapshot.language;
+    heading(ui, "Language");
+    row(ui, "Vocabulary", &language.vocabulary.to_string());
+    row(
+        ui,
+        "Messages / words heard",
+        &format!("{} / {}", language.messages, language.tokens),
+    );
+    row(
+        ui,
+        "Quizzes right / wrong",
+        &format!("{} / {}", language.quiz_correct, language.quiz_wrong),
+    );
+    if language.scored > 0 {
+        row(
+            ui,
+            "Next word right",
+            &format!(
+                "{:.1}%",
+                100.0 * language.correct as f64 / language.scored as f64
+            ),
+        );
+        row(
+            ui,
+            "…by guessing the commonest",
+            &format!(
+                "{:.1}%",
+                100.0 * language.baseline_correct as f64 / language.scored as f64
+            ),
+        );
+    }
+    if !language.recent_words.is_empty() {
+        muted(
+            ui,
+            &format!(
+                "Last heard: {}",
+                language.recent_words.iter().rev().cloned().collect::<Vec<_>>().join(" ")
+            ),
+        );
+    }
+    muted(
+        ui,
+        "It answers from what it was taught and continues text from word associations; it is \
+         not yet a fluent language model.",
+    );
+
+    heading(ui, "Agent events");
 
     let state = if snapshot.resting {
         format!(
@@ -533,6 +766,213 @@ fn panel(ui: &mut Ui, view: &mut LivingView, snapshot: &Snapshot) {
     for line in snapshot.log.iter().rev().take(10) {
         muted(ui, line);
     }
+}
+
+/// What the LLM teacher is doing, with its latest rounds.
+fn teacher(ui: &mut Ui, teaching: &serde_json::Value) {
+    heading(ui, "Teacher");
+
+    if teaching.is_null() {
+        muted(ui, "Not reached.");
+        return;
+    }
+
+    let active = teaching["active"].as_bool().unwrap_or(false);
+    let phase = teaching["phase"].as_str().unwrap_or_default();
+
+    if active {
+        row(ui, "Teaching", phase);
+    } else {
+        muted(
+            ui,
+            "Not teaching. Type /teach snn+dann [topic] in a chat to start; /teach stop ends it; \
+             /brain <question> asks the brain itself.",
+        );
+    }
+
+    if let Some(model) = teaching["model"].as_str() {
+        row(ui, "Teacher model", &shorten(model, 30));
+    }
+
+    if let Some(topic) = teaching["topic"].as_str() {
+        muted(ui, &format!("Topic: {topic}"));
+    }
+
+    let rounds = teaching["rounds"].as_u64().unwrap_or(0);
+
+    if rounds > 0 || active {
+        row(
+            ui,
+            "Rounds · right · wrong",
+            &format!(
+                "{rounds} · {} · {}",
+                teaching["correct"].as_u64().unwrap_or(0),
+                teaching["wrong"].as_u64().unwrap_or(0)
+            ),
+        );
+    }
+
+    if let Some(problem) = teaching["problem"].as_str() {
+        muted(ui, problem);
+    }
+
+    let events = teaching["events"].as_array().cloned().unwrap_or_default();
+
+    for event in events.iter().rev().take(6) {
+        let kind = event["kind"].as_str().unwrap_or_default();
+        let name = match kind {
+            "lesson" => "Teacher",
+            "quiz" => "Quiz",
+            "brain_answer" => "Brain",
+            "feedback" => "Judged",
+            "curious" => "Brain asks",
+            "error" => "Problem",
+            other => other,
+        };
+        let colour = match (kind, event["correct"].as_bool()) {
+            ("feedback", Some(true)) => palette::good(),
+            ("feedback", Some(false)) | ("error", _) => palette::bad(),
+            ("brain_answer" | "curious", _) => palette::accent(),
+            _ => palette::text_secondary(),
+        };
+
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(name).font(theme::strong(11.5)).color(colour));
+            if let Some(time) = event["time_ms"].as_u64() {
+                ui.label(
+                    RichText::new(crate::format::ago(time))
+                        .font(theme::small())
+                        .color(palette::text_muted()),
+                );
+            }
+        });
+        ui.add(
+            egui::Label::new(
+                RichText::new(shorten(event["text"].as_str().unwrap_or_default(), 220))
+                    .font(theme::small())
+                    .color(palette::text()),
+            )
+            .wrap(),
+        );
+    }
+}
+
+/// What it has been taught, each with how strong it is and how it has
+/// done in quizzes, and what the agent remembers of its tasks.
+fn memories(ui: &mut Ui, snapshot: &Snapshot) {
+    heading(ui, "Memories");
+
+    if snapshot.memories.is_empty() {
+        muted(ui, "Nothing taught yet.");
+    }
+
+    for memory in snapshot.memories.iter().take(12) {
+        ui.add_space(3.0);
+        ui.label(
+            RichText::new(shorten(&memory.question, 60))
+                .font(theme::small())
+                .color(palette::text()),
+        );
+        ui.label(
+            RichText::new(format!("→ {}", shorten(&memory.answer, 80)))
+                .font(theme::small())
+                .color(palette::text_secondary()),
+        );
+
+        let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), 4.0), Sense::hover());
+        let share = (memory.strength / 4.0).clamp(0.0, 1.0);
+
+        ui.painter()
+            .rect_filled(bar, egui::CornerRadius::same(2), palette::sunken());
+        ui.painter().rect_filled(
+            Rect::from_min_size(bar.min, vec2(bar.width() * share, bar.height())),
+            egui::CornerRadius::same(2),
+            if memory.misses > memory.hits {
+                palette::warning()
+            } else {
+                palette::accent()
+            },
+        );
+
+        if memory.hits + memory.misses > 0 {
+            muted(
+                ui,
+                &format!("quizzed right {} · wrong {}", memory.hits, memory.misses),
+            );
+        }
+    }
+
+    if snapshot.memories.len() > 12 {
+        muted(ui, &format!("…and {} more.", snapshot.memories.len() - 12));
+    }
+}
+
+/// How the brain has grown, rewired and been pruned.
+fn growth(ui: &mut Ui, snapshot: &Snapshot) {
+    let language = &snapshot.language;
+    let meters = &snapshot.meters;
+
+    heading(ui, "Growth and plasticity");
+
+    row(
+        ui,
+        "Spiking cells",
+        &format!(
+            "{}  (+{} born, −{} died)",
+            snapshot.cells.len(),
+            language.cells_grown,
+            language.cells_died
+        ),
+    );
+    row(
+        ui,
+        "Spiking synapses",
+        &format!(
+            "{}  ({} regrown)",
+            language.synapses, language.synapses_retracted
+        ),
+    );
+    row(
+        ui,
+        "Word and event neurons",
+        &format!(
+            "{}  (+{} −{})",
+            meters.neurons, meters.grown, meters.removed
+        ),
+    );
+    row(
+        ui,
+        "Their synapses",
+        &format!(
+            "{}  (+{} −{})",
+            meters.synapses, meters.connected, meters.disconnected
+        ),
+    );
+    row(
+        ui,
+        "Dendritic branches",
+        &format!(
+            "{}  (+{} −{})",
+            meters.segments, meters.branched, meters.pruned
+        ),
+    );
+    row(
+        ui,
+        "Spikes · weight changes",
+        &format!("{} · {}", language.spikes, language.updates),
+    );
+    row(
+        ui,
+        "Replays · dreams",
+        &format!("{} · {}", language.replays + meters.replays, language.dreams),
+    );
+    row(
+        ui,
+        "Associations faded",
+        &language.associations_faded.to_string(),
+    );
+    row(ui, "Words forgotten", &language.words_forgotten.to_string());
 }
 
 /// What made the selected neuron, and its strongest synapses each way.
@@ -714,7 +1154,7 @@ mod tests {
 
     fn draw(context: &egui::Context, view: &mut LivingView, snapshot: &Snapshot) {
         let mut output = context.run_ui(egui::RawInput::default(), |ui| {
-            egui::CentralPanel::default().show(ui, |ui| show(ui, view, snapshot));
+            egui::CentralPanel::default().show(ui, |ui| show(ui, view, snapshot, ""));
         });
 
         output.textures_delta.clear();

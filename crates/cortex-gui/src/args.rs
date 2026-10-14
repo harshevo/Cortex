@@ -112,6 +112,15 @@ pub struct RehearsalArgs {
     #[arg(long, hide = true)]
     pub reopen_then: Option<String>,
 
+    /// Open the window at this size, as `<width>x<height>` in points,
+    /// instead of filling the screen: for trying narrow layouts.
+    #[arg(long, hide = true)]
+    pub window_size: Option<String>,
+
+    /// Start on the insights view instead of the conversation.
+    #[arg(long, hide = true)]
+    pub open_insights: bool,
+
     /// Save a picture of the window here, then quit.
     #[arg(long, hide = true)]
     pub screenshot: Option<PathBuf>,

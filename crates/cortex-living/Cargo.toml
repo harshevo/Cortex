@@ -7,9 +7,13 @@ license.workspace = true
 
 [dependencies]
 cortex-core.workspace = true
+cortex-providers.workspace = true
+cortex-neural.workspace = true
 
 serde.workspace = true
 serde_json.workspace = true
-
-[dev-dependencies]
 tempfile.workspace = true
+tokio.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = "4"

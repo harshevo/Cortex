@@ -3,8 +3,12 @@
 use eframe::egui::{self, Align, CornerRadius, Layout, Sense, Stroke, Ui, vec2};
 
 use super::icons::{self, Icon};
+use super::menu::{self, Opens};
 use super::{Section, View};
-use crate::theme::{self, palette};
+use crate::theme::{self, control, palette, radius, space};
+
+/// Below this much room right of the title, the views go into one menu.
+const NARROW_WIDTH: f32 = 300.0;
 
 /// Room left for the window's close, minimise and zoom buttons, which sit
 /// on top of this bar.
@@ -34,6 +38,11 @@ pub struct Place<'a> {
     /// The agent is the scripted stand-in, not a real model.
     pub demo: bool,
     pub busy: bool,
+
+    /// Width at the right-hand end that belongs to a panel running the
+    /// full height of the window, such as the trading chat: the bar
+    /// leaves it empty, in that panel's colour.
+    pub covered_right: f32,
 }
 
 /// Draws the bar. `files_open` is whether the files of the project are
@@ -74,18 +83,23 @@ pub fn show(
 
         ui.spacing_mut().item_spacing.x = 2.0;
 
-        ui.add_enabled_ui(steps.back, |ui| {
-            if icons::button(ui, Icon::Back, "Back to the session before  ⌘[", false).clicked() {
-                step = Some(Step::Back);
-            }
-        });
+        // The arrows show only once there is a chat to step to.
+        if steps.back || steps.forward {
+            ui.add_enabled_ui(steps.back, |ui| {
+                if icons::button(ui, Icon::Back, "Back to the session before  ⌘[", false).clicked()
+                {
+                    step = Some(Step::Back);
+                }
+            });
 
-        ui.add_enabled_ui(steps.forward, |ui| {
-            if icons::button(ui, Icon::Forward, "Forward to the next session  ⌘]", false).clicked()
-            {
-                step = Some(Step::Forward);
-            }
-        });
+            ui.add_enabled_ui(steps.forward, |ui| {
+                if icons::button(ui, Icon::Forward, "Forward to the next session  ⌘]", false)
+                    .clicked()
+                {
+                    step = Some(Step::Forward);
+                }
+            });
+        }
 
         // The switch belongs to the sidebar: it sits at the sidebar's
         // right-hand edge and goes away with it.
@@ -99,95 +113,243 @@ pub fn show(
             section_switch(ui, section);
         }
 
-        ui.add_space(14.0);
-        ui.spacing_mut().item_spacing.x = 6.0;
+        ui.add_space(space::L);
+        ui.spacing_mut().item_spacing.x = space::S;
 
         // The title opens the menu of chats and layouts.
-        let title = title(ui);
+        let title = title(ui, place.project);
 
-        egui::Popup::menu(&title).show(workspace_menu);
+        menu::attach(&title, Opens::Down, |ui| {
+            ui.set_min_width(menu::MIN_WIDTH + 40.0);
+            workspace_menu(ui);
+        });
 
         if place.busy {
             let (rect, response) = ui.allocate_exact_size(vec2(12.0, 18.0), Sense::hover());
             icons::activity_dot(ui, rect.center());
-            response.on_hover_text("Task in progress");
+            response.on_hover_text("Working");
         }
-
-        chip(ui, place.project.unwrap_or("No project"));
 
         if place.demo {
             badge(ui, "Demo");
         }
 
+        let narrow = ui.available_width() - place.covered_right < NARROW_WIDTH;
+
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.add_space(6.0);
+            ui.spacing_mut().item_spacing.x = space::XS;
+            ui.add_space(space::XS + place.covered_right);
 
-            let tooltip = if *files_open {
-                "Hide the files  ⌘E"
-            } else {
-                "Show the files  ⌘E"
-            };
+            // The trading screen has its own chat switch in its header.
+            if *view != View::Trading {
+                let tooltip = if *files_open {
+                    "Hide the files  ⌘E"
+                } else {
+                    "Show the files  ⌘E"
+                };
 
-            let files = icons::button(ui, Icon::Folder, tooltip, false);
+                let files = icons::button(ui, Icon::Folder, tooltip, false);
 
-            if *files_open {
-                ui.painter().rect_stroke(
-                    files.rect,
-                    CornerRadius::same(crate::theme::radius::M),
-                    Stroke::new(1.0, palette::border()),
-                    egui::StrokeKind::Inside,
-                );
+                if *files_open {
+                    ui.painter().rect_stroke(
+                        files.rect,
+                        CornerRadius::same(crate::theme::radius::M),
+                        Stroke::new(1.0, palette::border()),
+                        egui::StrokeKind::Inside,
+                    );
+                }
+
+                if files.clicked() {
+                    *files_open = !*files_open;
+                }
             }
 
-            if files.clicked() {
-                *files_open = !*files_open;
-            }
+            ui.add_space(space::S);
 
-            ui.add_space(8.0);
-
-            views(ui, view);
+            views(ui, view, narrow);
         });
     });
 
     step
 }
 
-/// The views the middle of the window can show, as a row of small tabs.
-/// Drawn right to left, so the last is first.
-fn views(ui: &mut Ui, view: &mut View) {
-    const TABS: [(View, &str, &str); 5] = [
-        (View::Insights, "Insights", "Tokens used, and whether the advisers help"),
-        (View::Trading, "Trading", "Live Dhan data and ten-candle forecasts"),
-        (View::Living, "Network", "The dendritic network, growing as it watches"),
-        (View::MemorySpace, "Memory", "What Cortex remembers, drawn as a brain"),
+/// The views the middle of the window can show. The two used most are
+/// always in sight; the rest share the third place, which names the one
+/// on screen and opens a menu of the others. In a narrow window all of
+/// them go into one menu.
+fn views(ui: &mut Ui, view: &mut View, narrow: bool) {
+    if ui.input_mut(|input| {
+        input.consume_key(
+            egui::Modifiers {
+                shift: true,
+                ..egui::Modifiers::COMMAND
+            },
+            egui::Key::L,
+        )
+    }) {
+        *view = View::Living;
+    }
+    const SHOWN: [(View, &str, &str); 2] = [
         (View::Conversation, "Chat", "The conversation"),
+        (
+            View::Living,
+            "Network",
+            "The shared brain, drawn live (⌘⇧L)",
+        ),
     ];
 
-    for (tab, name, help) in TABS {
-        let chosen = *view == tab || (tab == View::Conversation && *view == View::Settings);
+    const TUCKED: [(View, &str); 2] = [
+        (View::Trading, "Trading"),
+        (View::Insights, "Insights"),
+    ];
 
-        let text = egui::RichText::new(name).font(theme::small()).color(if chosen {
-            palette::text()
-        } else {
-            palette::text_muted()
-        });
+    // Settings belong to the chat they were opened from.
+    let on_screen = if *view == View::Settings {
+        View::Conversation
+    } else {
+        *view
+    };
 
-        if ui.selectable_label(chosen, text).on_hover_text(help).clicked() {
-            *view = tab;
+    let name_of = |wanted: View| {
+        SHOWN
+            .iter()
+            .map(|(view, name, _)| (*view, *name))
+            .chain(TUCKED)
+            .find(|(view, _)| *view == wanted)
+            .map_or("Chat", |(_, name)| name)
+    };
+
+    if narrow {
+        let (_, chosen) =
+            menu::dropdown(ui, None, name_of(on_screen), true, Opens::DownLeft, |ui| {
+                let mut chosen = None;
+
+                for (tab, name) in SHOWN
+                    .iter()
+                    .map(|(view, name, _)| (*view, *name))
+                    .chain(TUCKED)
+                {
+                    if menu::item(ui, None, name, "", tab == on_screen).clicked() {
+                        chosen = Some(tab);
+                    }
+                }
+
+                chosen
+            });
+
+        if let Some(Some(chosen)) = chosen {
+            *view = chosen;
+        }
+
+        return;
+    }
+
+    // Drawn right to left: the menu first, then the two in sight.
+    let tucked = TUCKED.iter().find(|(tab, _)| *tab == on_screen);
+    let label = tucked.map_or("More", |(_, name)| name);
+
+    let (more, _) = segment(ui, label, tucked.is_some(), true);
+
+    let chosen = menu::attach(&more, Opens::DownLeft, |ui| {
+        let mut chosen = None;
+
+        for (tab, name) in TUCKED {
+            if menu::item(ui, None, name, "", tab == on_screen).clicked() {
+                chosen = Some(tab);
+            }
+        }
+
+        chosen
+    });
+
+    if let Some(Some(chosen)) = chosen {
+        *view = chosen;
+    }
+
+    for (tab, name, help) in SHOWN.iter().rev() {
+        let (response, _) = segment(ui, name, on_screen == *tab, false);
+
+        if response.on_hover_text(*help).clicked() {
+            *view = *tab;
         }
     }
 }
 
+/// One tab of the row of views: a pill, filled while it is the one on
+/// screen. `menu` adds a chevron, for the tab that opens a menu.
+fn segment(ui: &mut Ui, label: &str, chosen: bool, menu: bool) -> (egui::Response, egui::Rect) {
+    let color = if chosen {
+        palette::text()
+    } else {
+        palette::text_secondary()
+    };
+
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_string(), theme::small(), color);
+
+    let chevron = if menu { space::S + 6.0 } else { 0.0 };
+    let width = galley.size().x + 2.0 * space::M + chevron;
+
+    let (rect, response) = ui.allocate_exact_size(vec2(width, control::SMALL), Sense::click());
+
+    let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&response));
+
+    if chosen || open || response.hovered() {
+        ui.painter().rect_filled(
+            rect,
+            CornerRadius::same(radius::M),
+            if chosen {
+                palette::raised()
+            } else {
+                palette::surface()
+            },
+        );
+    }
+
+    let text_color = if chosen || response.hovered() {
+        palette::text()
+    } else {
+        palette::text_secondary()
+    };
+
+    ui.painter().galley(
+        egui::pos2(
+            rect.left() + space::M,
+            rect.center().y - galley.size().y / 2.0,
+        ),
+        galley,
+        text_color,
+    );
+
+    if menu {
+        icons::chevron(
+            ui,
+            egui::pos2(rect.right() - space::M - 1.0, rect.center().y + 0.5),
+            palette::text_muted(),
+        );
+    }
+
+    let rect = response.rect;
+
+    (
+        response.on_hover_cursor(egui::CursorIcon::PointingHand),
+        rect,
+    )
+}
+
 /// A laptop, the app's name and a small arrow, as one thing to click.
-fn title(ui: &mut Ui) -> egui::Response {
+fn title(ui: &mut Ui, project: Option<&str>) -> egui::Response {
     let text =
         ui.painter()
             .layout_no_wrap("Cortex".to_string(), theme::strong(13.0), palette::text());
 
     let width = 6.0 + 16.0 + 6.0 + text.size().x + 6.0 + 8.0 + 6.0;
-    let (rect, response) = ui.allocate_exact_size(vec2(width, 24.0), Sense::click());
+    let (rect, response) = ui.allocate_exact_size(vec2(width, control::SMALL), Sense::click());
 
-    if response.hovered() {
+    let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&response));
+
+    if response.hovered() || open {
         ui.painter().rect_filled(
             rect,
             CornerRadius::same(crate::theme::radius::M),
@@ -214,18 +376,16 @@ fn title(ui: &mut Ui) -> egui::Response {
         palette::text(),
     );
 
-    let centre = egui::pos2(left + text_width + 6.0 + 4.0, rect.center().y + 0.5);
-
-    ui.painter().line(
-        vec![
-            centre + vec2(-3.0, -1.5),
-            centre + vec2(0.0, 1.5),
-            centre + vec2(3.0, -1.5),
-        ],
-        Stroke::new(1.2, palette::text_secondary()),
+    icons::chevron(
+        ui,
+        egui::pos2(left + text_width + 6.0 + 4.0, rect.center().y + 0.5),
+        palette::text_muted(),
     );
 
-    response.on_hover_text("Chats and layout")
+    response.on_hover_text(match project {
+        Some(project) => format!("Chats and layout  ·  {project}"),
+        None => "Chats and layout".to_string(),
+    })
 }
 
 /// The two-part switch between chats and coding projects.
@@ -289,24 +449,6 @@ fn section_switch(ui: &mut Ui, section: &mut Section) {
             *section = part;
         }
     }
-}
-
-/// The project's name on a quiet rounded ground.
-fn chip(ui: &mut Ui, label: &str) {
-    let text =
-        ui.painter()
-            .layout_no_wrap(label.to_string(), theme::small(), palette::text_secondary());
-
-    let (rect, _) = ui.allocate_exact_size(text.size() + vec2(14.0, 6.0), Sense::hover());
-
-    ui.painter().rect_filled(
-        rect,
-        CornerRadius::same(crate::theme::radius::M),
-        palette::surface(),
-    );
-
-    ui.painter()
-        .galley(rect.min + vec2(7.0, 3.0), text, palette::text_secondary());
 }
 
 fn badge(ui: &mut Ui, label: &str) {

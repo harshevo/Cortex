@@ -12,8 +12,15 @@
 //! - [`network`] is the network itself and says what each mechanism is.
 //! - [`percept`] reads a run's events as the moments the network lives.
 
+pub mod hybrid;
+pub mod language;
 pub mod network;
 pub mod percept;
+#[cfg(unix)]
+pub mod service;
+#[cfg(unix)]
+pub mod teacher;
+pub mod tutoring;
 
 use std::collections::HashMap;
 use std::fs;
@@ -24,6 +31,12 @@ use std::time::{Duration, Instant};
 use cortex_core::{Advice, Adviser, Event, TrajectorySink};
 use serde_json::json;
 
+/// The standalone brain the background service runs and the teacher
+/// teaches.
+pub use cortex_neural as neural;
+
+pub use hybrid::CellView;
+pub use language::MemoryView;
 pub use network::{
     Hunch, HunchKind, Id, Kind, Meters, Network, NeuronView, Reason, Sample, Snapshot, Thought,
 };
@@ -35,11 +48,27 @@ const SUGGESTED: f32 = 0.6;
 /// How long nothing must have happened before the network rests.
 const QUIET: Duration = Duration::from_secs(3);
 
+/// How often it dreams once there is nothing left to replay.
+const DREAMING: Duration = Duration::from_secs(10);
+
 pub struct Living {
+    #[cfg(unix)]
+    remote: Option<Arc<service::Client>>,
     /// Where the network is kept. `None` keeps it in memory only.
     file: Option<PathBuf>,
 
     state: Mutex<State>,
+}
+
+pub struct LearningSink {
+    living: Arc<Living>,
+    session: String,
+}
+
+impl TrajectorySink for LearningSink {
+    fn record(&self, event: &Event) {
+        self.living.record_in(&self.session, event);
+    }
 }
 
 struct State {
@@ -48,9 +77,124 @@ struct State {
 
     /// Rests since the network was last saved.
     unsaved_rests: u32,
+
+    last_dream: Instant,
 }
 
 impl Living {
+    pub fn teach(
+        &self,
+        id: &str,
+        session: &str,
+        lesson: &tutoring::Lesson,
+        source: &str,
+    ) -> std::io::Result<()> {
+        lesson.validate().map_err(std::io::Error::other)?;
+        #[cfg(unix)]
+        if let Some(remote) = &self.remote {
+            remote.request(&service::Request::BrainLesson {
+                id: id.into(),
+                session: session.into(),
+                lesson: lesson.clone(),
+                source: source.into(),
+            })?;
+            return Ok(());
+        }
+        let mut state = self.state();
+        state
+            .network
+            .teach(id, session, lesson, source)
+            .map_err(std::io::Error::other)?;
+        state.last_event = Instant::now();
+        if let Some(file) = &self.file {
+            store(file, &state.network)?;
+        }
+        Ok(())
+    }
+
+    pub fn answer(
+        &self,
+        session: &str,
+        question: &str,
+        learn_user: bool,
+    ) -> std::io::Result<tutoring::Answer> {
+        if question.trim().is_empty() || question.len() > 4096 {
+            return Err(std::io::Error::other("Give a question of 1–4,096 bytes"));
+        }
+        #[cfg(unix)]
+        if let Some(remote) = &self.remote {
+            return serde_json::from_value(remote.request(&service::Request::BrainAsk {
+                session: session.into(),
+                question: question.into(),
+                learn_user,
+            })?)
+            .map_err(std::io::Error::from);
+        }
+        let mut state = self.state();
+        let answer = state.network.answer(session, question, learn_user);
+        if learn_user {
+            state.last_event = Instant::now();
+        }
+        if let Some(file) = &self.file {
+            store(file, &state.network)?;
+        }
+        Ok(answer)
+    }
+
+    pub fn grade(
+        &self,
+        attempt: &str,
+        correct: bool,
+        feedback: &str,
+        correction: Option<&str>,
+        source: &str,
+    ) -> std::io::Result<tutoring::Evaluation> {
+        if feedback.len() > 4096
+            || correction.is_some_and(|text| text.len() > 2048)
+            || (!correct && correction.is_none_or(|text| text.trim().is_empty()))
+        {
+            return Err(std::io::Error::other(
+                "Wrong answers require a bounded corrective answer",
+            ));
+        }
+        #[cfg(unix)]
+        if let Some(remote) = &self.remote {
+            return serde_json::from_value(remote.request(&service::Request::BrainFeedback {
+                attempt: attempt.into(),
+                correct,
+                feedback: feedback.into(),
+                correction: correction.map(str::to_string),
+                source: source.into(),
+            })?)
+            .map_err(std::io::Error::from);
+        }
+        let mut state = self.state();
+        let evaluation = state
+            .network
+            .grade(attempt, correct, feedback, correction, source)
+            .map_err(std::io::Error::other)?;
+        state.last_event = Instant::now();
+        if let Some(file) = &self.file {
+            store(file, &state.network)?;
+        }
+        Ok(evaluation)
+    }
+    pub fn sink(self: &Arc<Self>) -> Arc<LearningSink> {
+        static SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let session = format!(
+            "{}-{now}-{}",
+            std::process::id(),
+            SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        );
+        Arc::new(LearningSink {
+            living: self.clone(),
+            session,
+        })
+    }
     /// A network of its own, loaded from `file` when there is one.
     pub fn open(file: Option<PathBuf>) -> Self {
         // A default network has not been given its own states yet.
@@ -58,11 +202,14 @@ impl Living {
         let network = file.as_deref().and_then(load).unwrap_or_else(Network::new);
 
         Self {
+            #[cfg(unix)]
+            remote: None,
             file,
             state: Mutex::new(State {
                 network,
                 last_event: Instant::now(),
                 unsaved_rests: 0,
+                last_dream: Instant::now(),
             }),
         }
     }
@@ -91,6 +238,10 @@ impl Living {
 
     /// The network as it is now, for drawing.
     pub fn snapshot(&self) -> Snapshot {
+        #[cfg(unix)]
+        if let Some(remote) = &self.remote {
+            return remote.snapshot();
+        }
         self.state().network.snapshot()
     }
 
@@ -98,6 +249,10 @@ impl Living {
     /// replayed, and whether it is resting. For a caller that draws it
     /// many times a second and need not copy it when nothing happened.
     pub fn stamp(&self) -> (u64, u64, bool) {
+        #[cfg(unix)]
+        if let Some(remote) = &self.remote {
+            return remote.stamp();
+        }
         let state = self.state();
         let meters = state.network.meters();
 
@@ -107,9 +262,18 @@ impl Living {
     /// Lets the network go over recent moments, if nothing has happened
     /// for a while. Returns whether it did.
     pub fn rest(&self) -> bool {
+        #[cfg(unix)]
+        if self.remote.is_some() {
+            return false;
+        }
         let mut state = self.state();
 
-        if state.last_event.elapsed() < QUIET || !state.network.rest() {
+        if state.last_event.elapsed() < QUIET {
+            return false;
+        }
+        let replayed = state.network.rest();
+        let text = state.network.replay_language();
+        if !replayed && !text {
             return false;
         }
 
@@ -130,11 +294,26 @@ impl Living {
     /// app the system has woken in the background. Returns how many times
     /// it replayed.
     pub fn sleep(&self, limit: std::time::Duration) -> u32 {
+        #[cfg(unix)]
+        if let Some(remote) = &self.remote {
+            return remote
+                .request(&service::Request::Consolidate {
+                    milliseconds: limit.as_millis().min(500) as u64,
+                })
+                .ok()
+                .and_then(|v| v.as_u64())
+                .unwrap_or_default() as u32;
+        }
         let started = Instant::now();
         let mut state = self.state();
         let mut replays = 0;
 
-        while started.elapsed() < limit && state.network.rest() {
+        while started.elapsed() < limit {
+            let replayed = state.network.rest();
+            let text = state.network.replay_language();
+            if !replayed && !text {
+                break;
+            }
             replays += 1;
         }
 
@@ -150,6 +329,13 @@ impl Living {
     /// The short instruction the network expects to be given next, when
     /// it has seen it follow what just happened more than once.
     pub fn suggestion(&self) -> Option<String> {
+        #[cfg(unix)]
+        if let Some(remote) = &self.remote {
+            return remote
+                .request(&service::Request::Suggestion)
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_string));
+        }
         let (label, _) = self.state().network.foresee(percept::ASKS, SUGGESTED)?;
 
         label.strip_prefix(percept::ASKS).map(str::to_string)
@@ -158,7 +344,159 @@ impl Living {
     /// Something worth saying about the next step, by the network's own
     /// record. `None` is the usual answer.
     pub fn hunch(&self) -> Option<Hunch> {
+        #[cfg(unix)]
+        if let Some(remote) = &self.remote {
+            return remote
+                .request(&service::Request::Hunch)
+                .ok()
+                .and_then(|v| serde_json::from_value(v).ok());
+        }
         self.state().network.advise()
+    }
+
+    /// The standalone brain as the background service last reported it.
+    /// `None` without a service.
+    pub fn neural(&self) -> Option<cortex_neural::NeuralSnapshot> {
+        #[cfg(unix)]
+        if let Some(remote) = &self.remote {
+            return remote.neural();
+        }
+        None
+    }
+
+    pub fn language(&self, query: &serde_json::Value) -> serde_json::Value {
+        #[cfg(unix)]
+        if let Some(remote) = &self.remote {
+            return remote
+                .request(&service::Request::Language {
+                    query: query.clone(),
+                })
+                .unwrap_or_else(|error| json!({"error":error.to_string()}));
+        }
+        self.state().network.language(query)
+    }
+
+    #[cfg(unix)]
+    pub fn connect(file: &Path) -> std::io::Result<Arc<Self>> {
+        static OPEN: OnceLock<Mutex<HashMap<PathBuf, Weak<Living>>>> = OnceLock::new();
+        let mut open = OPEN
+            .get_or_init(Mutex::default)
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        if let Some(living) = open.get(file).and_then(Weak::upgrade) {
+            return Ok(living);
+        }
+        let remote = service::Client::connect(file)?;
+        let mut living = Self::open(None);
+        living.remote = Some(remote);
+        let living = Arc::new(living);
+        open.insert(file.to_path_buf(), Arc::downgrade(&living));
+        Ok(living)
+    }
+
+    fn learn_event(state: &mut State, session: &str, event: &Event) {
+        if matches!(event, Event::RunStarted { .. }) {
+            state.network.begin();
+        }
+        for percepts in percept::moments(event) {
+            state.network.live(&percepts);
+        }
+        Self::learn_dialogue(state, session, event);
+        state.last_event = Instant::now();
+    }
+
+    fn learn_dialogue(state: &mut State, session: &str, event: &Event) {
+        match event {
+            Event::RunStarted { instruction, .. } => {
+                state.network.hear_in(session, "user", instruction)
+            }
+            Event::UserInterjected { text, .. } => state.network.hear_in(session, "user", text),
+            Event::ModelResponded { message, .. } => {
+                state.network.hear_in(session, "assistant", &message.text())
+            }
+            _ => {}
+        }
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn deliver(&self, id: &str, session: &str, event: &Event) {
+        let mut state = self.state();
+        if !state.network.delivered(id) {
+            if id.starts_with("history-") {
+                Self::learn_dialogue(&mut state, session, event);
+                state.last_event = Instant::now();
+            } else {
+                Self::learn_event(&mut state, session, event);
+            }
+            state.network.mark_delivered(id.to_string());
+        }
+    }
+
+    pub fn checkpoint(&self) -> std::io::Result<()> {
+        #[cfg(unix)]
+        if let Some(remote) = &self.remote {
+            remote.request(&service::Request::Flush)?;
+            return Ok(());
+        }
+        if let Some(file) = &self.file {
+            store(file, &self.state().network)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn cycle(&self, pending: usize, problem: Option<String>) -> bool {
+        let mut state = self.state();
+        state.network.background(pending, problem);
+        if state.last_event.elapsed() < QUIET {
+            state.network.phase("observing new experience");
+            return false;
+        }
+        let replayed = state.network.replay_language();
+        let events = state.network.rest();
+        if events {
+            state.network.phase(if replayed {
+                "replaying dialogue and event patterns"
+            } else {
+                "replaying event patterns"
+            });
+        }
+        if events || replayed {
+            return true;
+        }
+        if state.last_dream.elapsed() < DREAMING {
+            return false;
+        }
+        state.last_dream = Instant::now();
+        let phase = match state.network.dream() {
+            Some(words) => format!("dreaming: rehearsing \u{201c}{words}\u{201d}"),
+            None => "dreaming: nothing to rehearse yet".to_string(),
+        };
+        state.network.phase(&phase);
+        true
+    }
+
+    /// Lets the network hear a line of conversation that did not come
+    /// through an agent run, such as the trading chat. `speaker` is
+    /// `user` or `assistant`.
+    pub fn hear(&self, session: &str, speaker: &str, text: &str) {
+        if text.trim().is_empty() || text.len() > 64 * 1024 {
+            return;
+        }
+        #[cfg(unix)]
+        if let Some(remote) = &self.remote {
+            if let Err(error) = remote.request(&service::Request::Hear {
+                session: session.into(),
+                speaker: speaker.into(),
+                text: text.into(),
+            }) {
+                eprintln!("warning: the network did not hear the conversation: {error}");
+            }
+            return;
+        }
+        let mut state = self.state();
+        state.network.hear_in(session, speaker, text);
+        state.last_event = Instant::now();
     }
 
     fn state(&self) -> MutexGuard<'_, State> {
@@ -178,8 +516,15 @@ impl Living {
     }
 }
 
-impl TrajectorySink for Living {
-    fn record(&self, event: &Event) {
+impl Living {
+    fn record_in(&self, session: &str, event: &Event) {
+        #[cfg(unix)]
+        if let Some(remote) = &self.remote {
+            if !percept::moments(event).is_empty() {
+                remote.record(session, event);
+            }
+            return;
+        }
         let moments = percept::moments(event);
 
         if moments.is_empty() {
@@ -188,19 +533,17 @@ impl TrajectorySink for Living {
 
         let mut state = self.state();
 
-        if matches!(event, Event::RunStarted { .. }) {
-            state.network.begin();
-        }
-
-        for percepts in &moments {
-            state.network.live(percepts);
-        }
-
-        state.last_event = Instant::now();
+        Self::learn_event(&mut state, session, event);
 
         if matches!(event, Event::RunFinished { .. }) {
             self.save(&state.network);
         }
+    }
+}
+
+impl TrajectorySink for Living {
+    fn record(&self, event: &Event) {
+        self.record_in("default", event);
     }
 }
 
@@ -234,6 +577,19 @@ impl Adviser for Counsel {
     /// Answers the model's own questions: how actions it is weighing
     /// have gone on from here, or how an outcome has been reached.
     fn inspect(&self, query: &serde_json::Value) -> Option<serde_json::Value> {
+        #[cfg(unix)]
+        if let Some(remote) = &self.0.remote {
+            return remote
+                .request(&service::Request::Inspect {
+                    query: query.clone(),
+                })
+                .ok();
+        }
+        if let Some(language) = query.get("language") {
+            return Some(
+                json!({"source":"spiking dendritic language learner","language":self.0.language(language)}),
+            );
+        }
         let state = self.0.state();
         let network = &state.network;
 
@@ -389,11 +745,17 @@ fn store(file: &Path, network: &Network) -> std::io::Result<()> {
         fs::create_dir_all(folder)?;
     }
 
-    let partial = file.with_extension("partial");
-
-    fs::write(&partial, serde_json::to_string(network)?)?;
-
-    fs::rename(&partial, file)
+    use std::io::Write;
+    let folder = file
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let mut partial = tempfile::NamedTempFile::new_in(folder)?;
+    serde_json::to_writer(&mut partial, network)?;
+    partial.flush()?;
+    partial.as_file().sync_all()?;
+    partial.persist(file).map_err(|error| error.error)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -453,7 +815,8 @@ mod tests {
 
         one.record(&started("fix the rounding"));
 
-        assert_eq!(other.snapshot().moment, 1);
+        assert_eq!(other.snapshot().moment, one.snapshot().moment);
+        assert_eq!(other.snapshot().language.messages, 1);
     }
 
     #[test]

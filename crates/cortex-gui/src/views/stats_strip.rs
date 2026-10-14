@@ -1,12 +1,11 @@
 //! The quiet row under the composer: on the left one line of numbers
-//! (cache, step) that opens into the detail; in the middle the speed; on
-//! the right the model, how hard it thinks, and whether it asks before
-//! changing things.
+//! (cache, speed, step) that opens upward into the detail; on the right
+//! whether it asks before changing things, the model, and how hard it
+//! thinks.
 
-use eframe::egui::containers::menu::{MenuButton, MenuConfig};
-use eframe::egui::{
-    self, Color32, CornerRadius, PopupCloseBehavior, Pos2, RichText, Sense, Stroke, Ui, vec2,
-};
+use eframe::egui::{self, Color32, CornerRadius, Pos2, RichText, Sense, Stroke, Ui, vec2};
+
+use super::menu::{self, Opens};
 
 use crate::format;
 use crate::session::{Cell, Stats};
@@ -31,12 +30,9 @@ const DETAIL_WIDTH: f32 = 270.0;
 /// Longest model name shown before it is cut.
 const MAX_MODEL_CHARS: usize = 26;
 
-const MENU_ROW_HEIGHT: f32 = 26.0;
+const MENU_ROW_HEIGHT: f32 = crate::theme::control::MEDIUM;
 const MODEL_MENU_WIDTH: f32 = 230.0;
 const EFFORT_MENU_WIDTH: f32 = 170.0;
-
-/// Clear space kept on each side of the speed in the middle of the row.
-const SPEED_GAP: f32 = 12.0;
 
 /// A choice made in the row.
 pub enum Change {
@@ -74,82 +70,30 @@ pub fn show(
 ) -> Option<Change> {
     let mut change = None;
 
-    let row = ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 5.0;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = crate::theme::space::XS;
 
         change = summary(ui, reading, can_change);
 
-        let left_end = ui.cursor().left();
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.spacing_mut().item_spacing.x = crate::theme::space::XS;
 
-        let right_start = ui
-            .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
-
-                if let Some(model) = reading.stand_in {
-                    quiet(ui, model);
-                } else {
-                    ui.add_enabled_ui(can_change, |ui| {
-                        if let Some(chosen) = effort_selector(ui, settings)
-                            .or_else(|| model_selector(ui, settings))
-                            .or_else(|| approval_toggle(ui, settings))
-                        {
-                            change = Some(chosen);
-                        }
-                    });
-                }
-
-                ui.min_rect().left()
-            })
-            .inner;
-
-        (left_end, right_start)
+            if let Some(model) = reading.stand_in {
+                quiet(ui, model);
+            } else {
+                ui.add_enabled_ui(can_change, |ui| {
+                    if let Some(chosen) = effort_selector(ui, settings)
+                        .or_else(|| model_selector(ui, settings))
+                        .or_else(|| approval_toggle(ui, settings))
+                    {
+                        change = Some(chosen);
+                    }
+                });
+            }
+        });
     });
 
-    let (left_end, right_start) = row.inner;
-
-    speed_in_the_middle(ui, reading, row.response.rect, left_end, right_start);
-
     change
-}
-
-/// The speed, centred in the row. Left out when the two ends leave no
-/// room for it; the detail on the left still has it.
-fn speed_in_the_middle(
-    ui: &Ui,
-    reading: &Reading<'_>,
-    row: egui::Rect,
-    left_end: f32,
-    right_start: f32,
-) {
-    let text = match (reading.live_speed, reading.stats.speed()) {
-        (Some(speed), _) => format!("~{speed:.0} tok/s"),
-        (None, Some(speed)) => format!("{speed:.0} tok/s"),
-        (None, None) => return,
-    };
-
-    let galley = ui.painter().layout_no_wrap(
-        text,
-        theme::small(),
-        if reading.live_speed.is_some() {
-            palette::text_secondary()
-        } else {
-            palette::text_muted()
-        },
-    );
-
-    let half = galley.size().x / 2.0;
-    let lowest = left_end + SPEED_GAP + half;
-    let highest = right_start - SPEED_GAP - half;
-
-    if lowest > highest {
-        return;
-    }
-
-    let centre = row.center().x.clamp(lowest, highest);
-    let position = Pos2::new(centre - half, row.center().y - galley.size().y / 2.0);
-
-    ui.painter()
-        .galley(position, galley, palette::text_secondary());
 }
 
 /// The numbers in one line. Clicking it opens the detail, where the
@@ -184,6 +128,14 @@ fn summary(ui: &mut Ui, reading: &Reading<'_>, can_change: bool) -> Option<Chang
         parts.push(format!("{} cached", format::percent(ratio)));
     }
 
+    if roomy {
+        match (reading.live_speed, stats.speed()) {
+            (Some(speed), _) => parts.push(format!("~{speed:.0} tok/s")),
+            (None, Some(speed)) => parts.push(format!("{speed:.0} tok/s")),
+            (None, None) => {}
+        }
+    }
+
     // Only while there are steps to count.
     if stats.step > 0 {
         parts.push(format!("step {}/{}", stats.step, reading.max_steps));
@@ -196,83 +148,81 @@ fn summary(ui: &mut Ui, reading: &Reading<'_>, can_change: bool) -> Option<Chang
         });
     }
 
-    let stay_open = MenuConfig::new().close_behavior(PopupCloseBehavior::CloseOnClickOutside);
+    let button = ui.add(selector(&parts.join("  ·  ")));
 
-    selector(&parts.join("  ·  "))
-        .config(stay_open)
-        .ui(ui, |ui| {
-            ui.set_width(DETAIL_WIDTH);
-            ui.spacing_mut().item_spacing.y = 7.0;
+    menu::attach_sticky(&button, Opens::Up, |ui| {
+        ui.set_width(DETAIL_WIDTH);
+        ui.spacing_mut().item_spacing.y = 7.0;
 
-            detail(ui, "Speed", |ui| speed(ui, reading));
-            detail(ui, "Cache", |ui| cache(ui, stats));
-            detail(ui, "Loop", |ui| agent_loop(ui, reading));
+        detail(ui, "Speed", |ui| speed(ui, reading));
+        detail(ui, "Cache", |ui| cache(ui, stats));
+        detail(ui, "Loop", |ui| agent_loop(ui, reading));
 
-            if let Some(context) = &stats.context {
-                detail(ui, "Context", |ui| {
-                    value(ui, &context_line(context));
-                });
+        if let Some(context) = &stats.context {
+            detail(ui, "Context", |ui| {
+                value(ui, &context_line(context));
+            });
 
-                parts_of(ui, context);
-            }
+            parts_of(ui, context);
+        }
 
-            if let Some(quota) = &stats.quota {
-                detail(ui, "Plan", |ui| {
-                    value(ui, &quota_line(quota));
-                });
-            }
+        if let Some(quota) = &stats.quota {
+            detail(ui, "Plan", |ui| {
+                value(ui, &quota_line(quota));
+            });
+        }
 
-            if !stats.held_out.is_empty() {
-                ui.label(
-                    RichText::new(format!(
-                        "Held out of this run, to measure whether they help: {}.",
-                        stats.held_out.join(", ")
-                    ))
-                    .font(theme::small())
-                    .color(palette::text_muted()),
-                );
-            }
+        if !stats.held_out.is_empty() {
+            ui.label(
+                RichText::new(format!(
+                    "Held out of this run, to measure whether they help: {}.",
+                    stats.held_out.join(", ")
+                ))
+                .font(theme::small())
+                .color(palette::text_muted()),
+            );
+        }
 
-            ui.horizontal(|ui| {
-                let button = ui.add_enabled(can_change, egui::Button::new("Compact now"));
+        ui.horizontal(|ui| {
+            let button = ui.add_enabled(can_change, egui::Button::new("Compact now"));
 
-                let button = button.on_hover_text(
-                    "Replace the older part of the conversation with a summary the model \
+            let button = button.on_hover_text(
+                "Replace the older part of the conversation with a summary the model \
                      writes. One extra model call; the next call reads less.",
-                );
+            );
 
-                if button.clicked() {
-                    change = Some(Change::Compact);
-                }
+            if button.clicked() {
+                change = Some(Change::Compact);
+            }
 
-                if stats.compactions > 0 {
-                    ui.label(
-                        RichText::new(format!("compacted {} times", stats.compactions))
-                            .font(theme::small())
-                            .color(palette::text_muted()),
-                    );
-                }
-            });
-
-            detail(ui, "Tokens", |ui| {
-                value(
-                    ui,
-                    &format!(
-                        "{} in, {} out",
-                        format::count(stats.usage.total_input()),
-                        format::count(stats.usage.output_tokens),
-                    ),
-                );
-            });
-
-            if let Some(savings) = stats.savings() {
+            if stats.compactions > 0 {
                 ui.label(
-                    RichText::new(format!("Spared: {savings}."))
+                    RichText::new(format!("compacted {} times", stats.compactions))
                         .font(theme::small())
                         .color(palette::text_muted()),
                 );
             }
         });
+
+        detail(ui, "Tokens", |ui| {
+            value(
+                ui,
+                &format!(
+                    "{} in, {} out",
+                    format::count(stats.usage.total_input()),
+                    format::count(stats.usage.output_tokens),
+                ),
+            );
+        });
+
+        if let Some(savings) = stats.savings() {
+            ui.label(
+                RichText::new(format!("Spared: {savings}."))
+                    .font(theme::small())
+                    .color(palette::text_muted()),
+            );
+        }
+    });
 
     change
 }
@@ -503,58 +453,20 @@ fn cell_color(cell: Cell, pulse: f32) -> Color32 {
     }
 }
 
-/// A quiet button that opens a menu.
-fn selector<'a>(label: &str) -> MenuButton<'a> {
-    let button = egui::Button::new(
+/// A quiet button that opens the detail.
+fn selector(label: &str) -> egui::Button<'static> {
+    egui::Button::new(
         RichText::new(label.to_string())
             .font(theme::small())
             .color(palette::text_secondary()),
     )
     .fill(Color32::TRANSPARENT)
-    .stroke(Stroke::NONE);
-
-    MenuButton::from_button(button)
+    .stroke(Stroke::NONE)
 }
 
-/// A button that looks like one and opens a menu: the model and the
-/// effort. A small chevron at its right-hand end says so.
-fn dropdown<R>(
-    ui: &mut Ui,
-    label: &str,
-    config: MenuConfig,
-    content: impl FnOnce(&mut Ui) -> R,
-) -> Option<R> {
-    // The spaces keep room for the chevron.
-    let button = egui::Button::new(
-        RichText::new(format!("{label}\u{a0}\u{a0}\u{a0}\u{a0}"))
-            .font(theme::small())
-            .color(palette::text()),
-    )
-    .fill(palette::surface())
-    .stroke(Stroke::new(1.0, palette::border()))
-    .corner_radius(CornerRadius::same(crate::theme::radius::M));
-
-    let (response, inner) = MenuButton::from_button(button)
-        .config(config)
-        .ui(ui, content);
-
-    let centre = Pos2::new(response.rect.right() - 10.0, response.rect.center().y + 0.5);
-    let color = if ui.is_enabled() {
-        palette::text_secondary()
-    } else {
-        palette::text_muted()
-    };
-
-    ui.painter().line(
-        vec![
-            centre + vec2(-3.0, -1.5),
-            centre + vec2(0.0, 1.5),
-            centre + vec2(3.0, -1.5),
-        ],
-        Stroke::new(1.2, color),
-    );
-
-    inner.map(|inner| inner.inner)
+/// A selector that opens a menu upward: the model and the effort.
+fn dropdown<R>(ui: &mut Ui, label: &str, content: impl FnOnce(&mut Ui) -> R) -> Option<R> {
+    menu::dropdown(ui, None, label, true, Opens::UpLeft, content).1
 }
 
 /// One choice in a menu. Returns its rectangle, for whatever the caller
@@ -595,14 +507,7 @@ fn menu_row(
 }
 
 fn menu_title(ui: &mut Ui, text: &str) {
-    ui.horizontal(|ui| {
-        ui.add_space(8.0);
-        ui.label(
-            RichText::new(text)
-                .font(theme::strong(11.0))
-                .color(palette::text_muted()),
-        );
-    });
+    menu::title(ui, text);
 }
 
 /// Every provider's models in one menu, under the provider's name.
@@ -617,7 +522,7 @@ fn model_selector(ui: &mut Ui, settings: &Settings) -> Option<Change> {
 
     let mut change = None;
 
-    dropdown(ui, &label, MenuConfig::new(), |ui| {
+    dropdown(ui, &label, |ui| {
         ui.set_width(MODEL_MENU_WIDTH);
         ui.spacing_mut().item_spacing.y = 1.0;
 
@@ -689,7 +594,7 @@ fn effort_selector(ui: &mut Ui, settings: &Settings) -> Option<Change> {
 
     let mut change = None;
 
-    dropdown(ui, settings.effort.label(), MenuConfig::new(), |ui| {
+    dropdown(ui, settings.effort.label(), |ui| {
         ui.set_width(EFFORT_MENU_WIDTH);
         ui.spacing_mut().item_spacing.y = 1.0;
 

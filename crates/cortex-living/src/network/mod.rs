@@ -61,6 +61,8 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
+use crate::language::{Language, Reading as LanguageReading};
+use crate::tutoring::{Answer, Evaluation, Lesson};
 use serde::{Deserialize, Serialize};
 
 pub type Id = u64;
@@ -185,6 +187,19 @@ const MIN_RECORD: u32 = 4;
 const MARGIN: f32 = 0.15;
 
 /// The network's own states. Each has a neuron from the start.
+/// How word neurons are labelled.
+const WORD: &str = "language word: ";
+
+/// What each dream leaves of a word synapse and of a word association.
+/// At one dream every ten seconds, an unrehearsed synapse of 0.2 falls
+/// below [`WEAKEST`] in about half a day.
+const WORD_FADING: f32 = 0.9997;
+const LANGUAGE_FADING: f32 = 0.999;
+
+/// Moments a word neuron with no connections left is kept before it is
+/// removed.
+const ISOLATED: u64 = 200;
+
 const SURPRISED: &str = "I was surprised";
 const EXPECTED_IT: &str = "I expected this";
 const GREW: &str = "I grew";
@@ -448,7 +463,7 @@ impl Default for Meters {
 }
 
 /// One step of an imagined way on from here.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Thought {
     pub labels: Vec<String>,
 
@@ -460,7 +475,7 @@ pub struct Thought {
 }
 
 /// Why something is expected: the branch that says so and its record.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Reason {
     pub expected: String,
 
@@ -472,7 +487,7 @@ pub struct Reason {
     pub misses: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HunchKind {
     /// What has usually come next here, and gone well.
     Next,
@@ -482,7 +497,7 @@ pub enum HunchKind {
 }
 
 /// Something the network is sure enough of to say.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Hunch {
     pub kind: HunchKind,
 
@@ -507,6 +522,10 @@ pub struct Hunch {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Network {
+    language: Language,
+    deliveries: VecDeque<String>,
+    #[serde(skip)]
+    background: Background,
     moment: u64,
     next_id: Id,
     neurons: Vec<Neuron>,
@@ -582,7 +601,7 @@ pub struct Network {
 }
 
 /// One neuron, as the picture shows it.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NeuronView {
     pub id: Id,
     pub kind: Kind,
@@ -606,8 +625,23 @@ pub struct NeuronView {
 }
 
 /// The whole network at one moment, for drawing.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Background {
+    pub running: bool,
+    pub pid: u32,
+    pub cycles: u64,
+    pub last_cycle_ms: u64,
+    pub phase: String,
+    pub pending: usize,
+    pub problem: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Snapshot {
+    pub background: Background,
+    pub language: LanguageReading,
     pub moment: u64,
     pub neurons: Vec<NeuronView>,
 
@@ -641,6 +675,18 @@ pub struct Snapshot {
     pub log: Vec<String>,
 
     pub resting: bool,
+
+    /// The spiking cells of the language learner, with their dendrites.
+    pub cells: Vec<crate::hybrid::CellView>,
+
+    /// What it has been taught, strongest first.
+    pub memories: Vec<crate::language::MemoryView>,
+
+    /// What it would like to be taught next.
+    pub curious: Vec<String>,
+
+    /// The LLM teacher's state, filled in by the background service.
+    pub teaching: serde_json::Value,
 }
 
 /// A neuron with an active branch, and how sure that branch is.
@@ -654,6 +700,265 @@ struct Prediction {
 }
 
 impl Network {
+    pub fn teach(
+        &mut self,
+        id: &str,
+        session: &str,
+        lesson: &Lesson,
+        source: &str,
+    ) -> Result<(), String> {
+        lesson.validate()?;
+        if self.delivered(id) {
+            return Ok(());
+        }
+        self.hear_in(session, "teacher", &lesson.text);
+        for example in &lesson.examples {
+            self.hear_in(
+                session,
+                "teacher",
+                &format!("{} {}", example.question, example.answer),
+            );
+            self.language.teach_example(example, source);
+        }
+        self.mark_delivered(id.to_string());
+        Ok(())
+    }
+
+    pub fn answer(&mut self, session: &str, question: &str, learn_user: bool) -> Answer {
+        if learn_user {
+            self.hear_in(session, "user", question);
+        }
+        self.language.answer(question)
+    }
+
+    pub fn grade(
+        &mut self,
+        attempt: &str,
+        correct: bool,
+        feedback: &str,
+        correction: Option<&str>,
+        source: &str,
+    ) -> Result<Evaluation, String> {
+        let (evaluation, replacement) = self
+            .language
+            .grade(attempt, correct, feedback, correction, source)?;
+        if let Some(example) = replacement {
+            let lesson = Lesson {
+                text: format!("Correction: {} {}", example.question, example.answer),
+                examples: vec![example],
+            };
+            self.teach(
+                &format!("correction-{attempt}"),
+                "teacher-correction",
+                &lesson,
+                source,
+            )?;
+        }
+        Ok(evaluation)
+    }
+
+    pub fn is_sound(&self) -> bool {
+        self.language.is_sound()
+            && self.neurons.iter().all(|neuron| {
+                neuron.born <= self.moment
+                    && neuron.last_fired <= self.moment
+                    && neuron.value.is_finite()
+                    && neuron.expects_surprise.is_finite()
+                    && neuron.segments.iter().all(|segment| {
+                        segment.synapses.iter().all(|synapse| {
+                            synapse.weight.is_finite() && (0.0..=1.0).contains(&synapse.weight)
+                        })
+                    })
+            })
+    }
+    pub fn language(&self, query: &serde_json::Value) -> serde_json::Value {
+        self.language.inspect(query)
+    }
+
+    pub(crate) fn delivered(&self, id: &str) -> bool {
+        self.deliveries.iter().any(|known| known == id)
+    }
+
+    pub(crate) fn mark_delivered(&mut self, id: String) {
+        self.deliveries.push_back(id);
+        while self.deliveries.len() > 4096 {
+            self.deliveries.pop_front();
+        }
+    }
+
+    pub(crate) fn background(&mut self, pending: usize, problem: Option<String>) {
+        self.background.running = true;
+        self.background.pid = std::process::id();
+        self.background.cycles += 1;
+        self.background.last_cycle_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        self.background.pending = pending;
+        self.background.problem = problem;
+    }
+
+    pub(crate) fn replay_language(&mut self) -> bool {
+        let replayed = self.language.replay();
+        // With nothing to replay, what it was last doing (dreaming, say)
+        // still describes it.
+        if replayed {
+            self.background.phase = "replaying experience".to_string();
+        } else if self.background.phase.is_empty() {
+            self.background.phase = "ready for experience".to_string();
+        }
+        replayed
+    }
+
+    pub(crate) fn phase(&mut self, phase: &str) {
+        self.background.phase = phase.to_string();
+    }
+
+    pub fn hear_text(&mut self, speaker: &str, text: &str) {
+        self.hear_in("default", speaker, text);
+    }
+
+    pub(crate) fn hear_in(&mut self, session: &str, speaker: &str, text: &str) {
+        let words = self.language.observe_in(session, speaker, text);
+        self.wire_words(&words, 0.1);
+    }
+
+    /// Fires the word neuron of each word in turn, growing one for a word
+    /// not met before, and strengthens or grows the branch that ties each
+    /// to the two words before it. `rate` is how far a known synapse moves
+    /// towards full strength.
+    fn wire_words(&mut self, words: &[String], rate: f32) {
+        if words.is_empty() {
+            return;
+        }
+        self.moment += 1;
+        let ids: Vec<_> = words
+            .iter()
+            .take(72)
+            .map(|word| self.sense(&format!("{WORD}{word}")))
+            .collect();
+        for (at, id) in ids.iter().enumerate() {
+            let sources: Vec<_> = ids[at.saturating_sub(2)..at]
+                .iter()
+                .copied()
+                .filter(|source| source != id)
+                .collect();
+            let moment = self.moment;
+            let Some(neuron) = self.neuron_mut(*id) else {
+                continue;
+            };
+            neuron.fired = neuron.fired.saturating_add(1);
+            neuron.last_fired = moment;
+            if sources.is_empty() {
+                continue;
+            }
+            if let Some(segment) = neuron.segments.iter_mut().find(|segment| {
+                segment
+                    .synapses
+                    .iter()
+                    .map(|s| s.from)
+                    .eq(sources.iter().copied())
+            }) {
+                segment.hits = segment.hits.saturating_add(1);
+                segment.last_active = moment;
+                for synapse in &mut segment.synapses {
+                    synapse.weight += rate * (1.0 - synapse.weight);
+                }
+            } else if neuron.segments.len() < MAX_SEGMENTS {
+                neuron.segments.push(Segment {
+                    synapses: sources
+                        .iter()
+                        .map(|from| Synapse {
+                            from: *from,
+                            lag: LATEST,
+                            weight: 0.2,
+                        })
+                        .collect(),
+                    hits: 1,
+                    misses: 0,
+                    last_active: moment,
+                });
+                self.meters.connected += sources.len() as u64;
+                self.meters.branched += 1;
+            }
+        }
+        self.count();
+    }
+
+    /// What it does with nothing to learn from and nothing left to replay:
+    /// rehearses one of its own memories, grows or replaces spiking cells,
+    /// and lets unused connections fade. Word synapses that fade below the
+    /// floor are cut, and a word neuron left with no connections at all is
+    /// removed. Returns what it rehearsed, if anything.
+    pub(crate) fn dream(&mut self) -> Option<String> {
+        let random = self.draw();
+        let rehearsed = self.language.dream(random);
+        if let Some(words) = &rehearsed {
+            self.wire_words(words, 0.05);
+        }
+        let (grown, died) = self.language.restructure();
+        if grown > 0 {
+            self.log_line(format!(
+                "grew {grown} spiking cell{}: its vocabulary grew",
+                if grown == 1 { "" } else { "s" }
+            ));
+        }
+        if died > 0 {
+            self.log_line(format!(
+                "{died} spiking cell{} died after a long silence; newly wired ones took the place",
+                if died == 1 { "" } else { "s" }
+            ));
+        }
+        self.language.fade(LANGUAGE_FADING);
+        self.fade_words(WORD_FADING);
+        self.count();
+        let words = rehearsed?;
+        Some(words.into_iter().take(10).collect::<Vec<_>>().join(" "))
+    }
+
+    fn fade_words(&mut self, factor: f32) {
+        let mut dropped = 0;
+        let mut pruned = 0;
+        for neuron in self.neurons.iter_mut().filter(|n| n.label.starts_with(WORD)) {
+            for segment in &mut neuron.segments {
+                let before = segment.synapses.len();
+                for synapse in &mut segment.synapses {
+                    synapse.weight *= factor;
+                }
+                segment.synapses.retain(|synapse| synapse.weight >= WEAKEST);
+                dropped += before - segment.synapses.len();
+            }
+            let before = neuron.segments.len();
+            neuron.segments.retain(|segment| !segment.synapses.is_empty());
+            pruned += before - neuron.segments.len();
+        }
+        self.meters.disconnected += dropped as u64;
+        self.meters.pruned += pruned as u64;
+
+        let sources: HashSet<Id> = self
+            .neurons
+            .iter()
+            .flat_map(|neuron| &neuron.segments)
+            .flat_map(|segment| &segment.synapses)
+            .map(|synapse| synapse.from)
+            .collect();
+        let now = self.moment;
+        let gone: HashSet<Id> = self
+            .neurons
+            .iter()
+            .filter(|neuron| {
+                neuron.label.starts_with(WORD)
+                    && neuron.segments.is_empty()
+                    && !sources.contains(&neuron.id)
+                    && now - neuron.last_fired > ISOLATED
+            })
+            .map(|neuron| neuron.id)
+            .collect();
+        if !gone.is_empty() {
+            self.remove(gone, "it lost all its connections");
+        }
+    }
+
     pub fn new() -> Self {
         let mut network = Self::default();
 
@@ -698,6 +1003,7 @@ impl Network {
 
         self.rebuild_index();
         self.grow_dendrites_from_old_synapses();
+        self.language.wake();
 
         for state in OWN_STATES {
             if !self.by_label.contains_key(state) {
@@ -929,6 +1235,9 @@ impl Network {
         self.fired_world = 0;
 
         for at in start..end {
+            if self.remembered[at].replayed >= REPLAYS {
+                break;
+            }
             self.remembered[at].replayed += 1;
 
             let percepts = self.remembered[at].percepts.clone();
@@ -2140,6 +2449,12 @@ impl Network {
             return;
         }
 
+        self.remove(gone, "long unused");
+    }
+
+    /// Removes neurons, and every synapse from them, with the reason for
+    /// the log.
+    fn remove(&mut self, mut gone: HashSet<Id>, why: &str) {
         // An assembly whose member is gone can never fire again.
         for neuron in &self.neurons {
             if neuron.members.iter().any(|member| gone.contains(member)) {
@@ -2155,7 +2470,7 @@ impl Network {
             .collect();
 
         for label in labels {
-            self.log_line(format!("removed `{label}`: long unused"));
+            self.log_line(format!("removed `{label}`: {why}"));
         }
 
         self.neurons.retain(|neuron| !gone.contains(&neuron.id));
@@ -2390,6 +2705,8 @@ impl Network {
             .sum();
 
         Snapshot {
+            background: self.background.clone(),
+            language: self.language.reading(),
             moment: self.moment,
             neurons,
             synapses,
@@ -2405,6 +2722,10 @@ impl Network {
             history: self.history.iter().copied().collect(),
             log: self.log.iter().cloned().collect(),
             resting: self.resting,
+            cells: self.language.cells(),
+            memories: self.language.memories(),
+            curious: self.language.curiosity(),
+            teaching: serde_json::Value::Null,
         }
     }
 }

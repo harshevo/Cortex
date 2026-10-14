@@ -89,6 +89,24 @@ A saved session can be continued by clicking it in the sidebar. If its chat is a
 
 The dendritic network is drawn in the memory space as its own region: up to 320 of its most lately fired neurons and the strongest synapses between them, glowing as they fire. The **Brain inspector** shows what it expects next and why (the branch, and how often that branch has been right), what it imagines from here, how the best outcome it knows has been reached before, the last thing it said, and the rates it has set for itself. Positions are display layouts, not anatomy. The model's internal neurons are not exposed. 
 
+The desktop living network now belongs to a separate local service, shared by desktop and CLI chat workers. Ending a run or closing the window does not end the service. Open **More → Network**, or press **⌘⇧L**, to inspect it. Events enter a durable private inbox; one writer updates the network and atomically saves its parameters. Processed events remain in an experience archive for later training. While idle it replays stored dialogue and event patterns, then remains ready for more experience. Replay does not count as fresh evidence or improve the reported accuracy by itself.
+
+Its experimental language learner combines 64 spiking cells with four nonlinear dendritic branches per cell, adaptive input synapses, inhibitory recurrence and activity regulation. An associative decoder learns word transitions and spiking context features. It learns vocabulary and nearby word usage from user and assistant text; grows word nodes and connections in the displayed graph; and can produce short learned continuations. Explicit `correct` / `wrong` feedback adjusts the corresponding assistant example within its chat worker. Simple `a robin is a bird` assertions support conditional category chains with their premises and source. Assistant assertions require human confirmation before entering such chains. Neither user assertions nor inferred chains are automatically verified facts. This is a small experimental learner, not a fluent LLM or a demonstration of general reasoning or awareness.
+
+Build and manage the service independently:
+
+```bash
+cargo build --release -p cortex-living-service
+target/release/cortex-living-service install   # macOS: start now and at login
+target/release/cortex-living-service status
+target/release/cortex-living-service import .cortex/trajectories
+target/release/cortex-living-service inspect '{"word":"memory"}'
+target/release/cortex-living-service inspect '{"complete":"birds can","tokens":12}'
+target/release/cortex-living-service stop
+```
+
+The macOS service is installed in `~/.cortex/bin/` with LaunchAgent `dev.cortex.living-network`; its state, event inbox, experience archive and log are under `~/.cortex/living/`. `start` runs it without installing login startup. Imports of the same unchanged saved trajectory are idempotent. The online learner currently keeps up to 4,096 words, 32 associations per word, and 256 replay episodes; it processes up to 256 words per message and displays up to 72 word observations. Full accepted dialogue events remain archived. Generated continuations never become training data. `brain_state` accepts a `language` object with `word`, `complete`, or `subject` and `category` to inspect it. Background execution pauses while the computer sleeps or is powered off; the service resumes when the system runs again.
+
 Intuition activity and learned connections update from the running chat. Opening an old chat restores its recorded brain activity and working memory. Persistent memory includes chat-only answers and the last five successful calculation results per task. `calculate` evaluates numeric arithmetic locally using bounded double-precision parsing; it does not execute code. `brain_state` exposes bounded diagnostics when a brain adviser is enabled. Raw simulation frames are logged as `brain_observed` events, never inserted automatically into the model prompt.
 
 Parallel chats merge learned state under file locks and replace JSON atomically. SQLite consolidates episodes and derived facts in one transaction.  The dendritic network is one per machine and shared between chats. The inspector reports observed verification outcomes and median task steps. These observations are not a controlled accuracy comparison; use the evaluation harness to compare enabled capabilities against the baseline.

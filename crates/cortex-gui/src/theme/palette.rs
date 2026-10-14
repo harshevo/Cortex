@@ -5,7 +5,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use eframe::egui::Color32;
 
-use crate::memory::Region;
 
 /// The colours of one theme.
 pub struct Theme {
@@ -423,21 +422,6 @@ pub fn background() -> Color32 {
     current().background
 }
 
-/// The ground of a label drawn over the brain: the theme's own ground,
-/// let through a little, so that the label's text keeps its contrast in
-/// light themes as well as dark ones.
-pub fn veil() -> Color32 {
-    translucent(current().sunken, 205)
-}
-
-/// The ground of a card drawn over the brain.
-pub fn card_veil() -> Color32 {
-    translucent(current().surface, 238)
-}
-
-fn translucent(color: Color32, alpha: u8) -> Color32 {
-    Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), alpha)
-}
 
 /// A pairing code is drawn dark on white whatever the theme: that is
 /// what cameras read best.
@@ -500,22 +484,6 @@ pub fn model() -> Color32 {
     current().model
 }
 
-/// The colour of each kind of memory, in the brain and on its labels.
-pub fn region(region: Region) -> Color32 {
-    match region {
-        Region::ShortTerm => Color32::from_rgb(0x5c, 0xe6, 0xff),
-        Region::Episodic => Color32::from_rgb(0xff, 0x8f, 0x5c),
-        Region::LongTerm => Color32::from_rgb(0xd8, 0x9a, 0xff),
-        Region::Neural => Color32::from_rgb(0x50, 0xc8, 0xff),
-        Region::Intuition => Color32::from_rgb(0xff, 0xd8, 0x5c),
-    }
-}
-
-/// An episode whose run failed or stopped early.
-pub const TROUBLED: Color32 = Color32::from_rgb(0xff, 0x4d, 0x5e);
-
-/// The links that carry episodes into long-term memory, and the tracts.
-pub const TRACT: Color32 = Color32::from_rgb(0x4d, 0xff, 0x7a);
 
 #[cfg(test)]
 mod tests {

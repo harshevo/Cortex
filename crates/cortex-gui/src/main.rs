@@ -7,7 +7,6 @@
 mod app;
 mod args;
 mod attachment;
-mod brain;
 mod engine;
 mod environment;
 mod format;
@@ -35,6 +34,16 @@ use crate::rehearsal::Rehearsal;
 use crate::settings::Settings;
 
 fn main() -> ExitCode {
+    #[cfg(unix)]
+    if let Some(result) = cortex_living::service::serve_argument() {
+        return match result {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("error: {error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     environment::adopt_shell_path();
 
     match run() {
@@ -84,17 +93,24 @@ fn run() -> Result<()> {
     let remote_control = settings.remote_control || args.rehearsal.remote;
     let pairing_code = args.rehearsal.pairing_code.clone();
     let tried_theme = args.rehearsal.theme.clone();
+    let window_size = args.rehearsal.window_size.as_deref().and_then(|size| {
+        let (width, height) = size.split_once('x')?;
+
+        Some([width.trim().parse::<f32>().ok()?, height.trim().parse::<f32>().ok()?])
+    });
     let rehearsal = Rehearsal::new(args.rehearsal);
     let demo = args.demo;
     let split = args.split;
 
     let viewport = egui::ViewportBuilder::default()
         .with_title("Cortex")
-        .with_inner_size([1280.0, 820.0])
-        .with_min_inner_size([900.0, 560.0])
+        .with_inner_size(window_size.unwrap_or([1280.0, 820.0]))
+        // Small enough to sit beside an editor: the sidebar steps aside
+        // and the bars fold their controls into menus to fit.
+        .with_min_inner_size([640.0, 480.0])
         // Open filling the screen; the size above is what the window
         // returns to when it is un-zoomed.
-        .with_maximized(true)
+        .with_maximized(window_size.is_none())
         // Let the app draw its own top bar under the window's buttons.
         .with_fullsize_content_view(true)
         .with_titlebar_shown(false)
@@ -111,7 +127,7 @@ fn run() -> Result<()> {
         "Cortex",
         options,
         Box::new(move |creation| {
-            let render_state = creation
+            creation
                 .wgpu_render_state
                 .as_ref()
                 .ok_or("the app needs the wgpu renderer")?;
@@ -124,7 +140,6 @@ fn run() -> Result<()> {
             }
 
             theme::apply(&creation.egui_ctx);
-            brain::install(render_state);
 
             // Before the first chat, so that its agent can be reached.
             remote::install(&handle, creation.egui_ctx.clone());

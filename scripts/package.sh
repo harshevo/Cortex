@@ -9,7 +9,7 @@
 #     scripts/package.sh --install    macOS: also copies it to /Applications
 #     scripts/package.sh --fresh      builds the Python side again from nothing
 #
-# What goes in beside the two programs is a `services` folder:
+# What goes in beside the desktop, CLI and learning service is a `services` folder:
 #
 #     python/    an interpreter of its own, with torch and the rest installed
 #     ml/        cortex_ml and the trained HOPE weights
@@ -61,7 +61,7 @@ command -v uv >/dev/null || { echo "uv is needed to build the Python side: https
 
 # ---------------------------------------------------------------- programs
 
-cargo build --release -p cortex-gui -p cortex-cli
+cargo build --release -p cortex-gui -p cortex-cli -p cortex-living-service
 
 # ------------------------------------------------------------- Python side
 
@@ -165,7 +165,7 @@ if [ "$system" = Darwin ]; then
     rm -rf "$app"
     mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 
-    cp "$target/release/cortex-gui" "$target/release/cortex" "$app/Contents/MacOS/"
+    cp "$target/release/cortex-gui" "$target/release/cortex" "$target/release/cortex-living-service" "$app/Contents/MacOS/"
 
     # A clone: no second copy of two gigabytes is kept on the disk.
     cp -Rc "$services" "$app/Contents/Resources/services"
@@ -211,7 +211,7 @@ else
     rm -rf "$package"
     mkdir -p "$package"
 
-    cp "$target/release/cortex-gui" "$target/release/cortex" "$package/"
+    cp "$target/release/cortex-gui" "$target/release/cortex" "$target/release/cortex-living-service" "$package/"
     cp -al "$services" "$package/services" 2>/dev/null || cp -a "$services" "$package/services"
 
     archive=dist/cortex-$version-linux-$machine.tar.gz

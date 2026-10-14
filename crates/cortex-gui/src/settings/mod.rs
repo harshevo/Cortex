@@ -505,6 +505,15 @@ impl Settings {
             arguments.extend(["--with".to_string(), capability.clone()]);
         }
 
+        // One brain is shared by every chat, code and trading session, so
+        // it always watches. Brain on in Capabilities lets it advise too.
+        let brain = capability_name(Feature::Brain);
+        let living = capability_name(Feature::Living);
+
+        if !self.capabilities.iter().any(|c| *c == brain || *c == living) {
+            arguments.extend(["--with".to_string(), living]);
+        }
+
         let parsed = ModelOnly::try_parse_from(arguments)
             .context("the saved settings are not ones the agent accepts")?;
 

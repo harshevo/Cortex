@@ -7,7 +7,7 @@
 //! what it gets.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 use cortex_liquid::{Account, Bar, Forecaster, Net, PathReport, PathSettings, PredictedCandle};
@@ -16,9 +16,11 @@ use tokio::runtime::Runtime;
 use tokio::sync::watch;
 
 use crate::clock::{self, Session};
+use crate::dhan::depth::{self, DepthMode};
 use crate::dhan::feed::{self, FeedNews, Packet, Tick};
 use crate::dhan::instruments::{self, Instrument};
 use crate::dhan::{Credentials, Dhan, Level, Profile, Quote};
+use crate::flow::DepthSnapshot;
 use crate::indicators::{self, Indicators, Levels};
 use crate::kinds::{Brain, Interval, Source};
 use crate::llm::{self, Oracle, Picture};
@@ -95,7 +97,7 @@ pub struct LlmState {
 }
 
 /// The numbers for right now.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize)]
 pub struct Now {
     pub price: f64,
     pub previous_close: Option<f64>,
@@ -128,7 +130,7 @@ pub struct Now {
 }
 
 /// One row of the forecast table.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Row {
     pub step: usize,
     pub time_ms: i64,
@@ -193,6 +195,9 @@ pub struct Snapshot {
     /// Recorded forecasts of this instrument, newest first.
     pub outcomes: Vec<Prediction>,
     pub tallies: Vec<Tally>,
+    pub depth: DepthSnapshot,
+    pub networks: Vec<(String, Vec<PredictedCandle>)>,
+    pub flow_history: Vec<crate::flow::FlowSample>,
 }
 
 /// What is kept between runs.
@@ -201,6 +206,18 @@ struct Kept {
     instrument: Option<Instrument>,
     interval: Option<Interval>,
     brain: Option<Brain>,
+    #[serde(default)]
+    depth_mode: Option<DepthMode>,
+}
+
+#[cfg(feature = "desktop")]
+#[derive(Serialize, Deserialize)]
+struct SavedModel {
+    schema: u32,
+    scope: String,
+    interval: Interval,
+    forecaster: Forecaster,
+    report: PathReport,
 }
 
 struct State {
@@ -222,13 +239,23 @@ struct State {
     ledger: Ledger,
     oracle: Option<Arc<dyn Oracle>>,
     last_notice: Instant,
+    depth_mode: DepthMode,
+    depth_configured: bool,
+    depth_generation: u64,
+    stop_depth: Option<watch::Sender<bool>>,
+    #[cfg(feature = "desktop")]
+    learning: Option<Arc<crate::learning::Learning>>,
+    #[cfg(feature = "desktop")]
+    last_observed: i64,
 }
 
 struct Inner {
     folder: PathBuf,
-    runtime: Runtime,
+    runtime: &'static Runtime,
     state: Mutex<State>,
-    changed: Box<dyn Fn() + Send + Sync>,
+    changed: Mutex<Vec<(u64, Box<dyn Fn() + Send + Sync>)>>,
+    #[cfg(feature = "desktop")]
+    desktop_root: Mutex<Option<PathBuf>>,
 }
 
 /// One instrument being watched. Cheap to clone; every clone is the same.
@@ -242,12 +269,15 @@ impl Market {
     /// whenever there is something new to show. Reconnects to Dhan and
     /// watches the instrument of the last run, if there was one.
     pub fn new(folder: &Path, changed: impl Fn() + Send + Sync + 'static) -> Self {
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .thread_name("market")
-            .enable_all()
-            .build()
-            .expect("the market needs its background threads");
+        static RUNTIME: OnceLock<Runtime> = OnceLock::new();
+        let runtime = RUNTIME.get_or_init(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .thread_name("market")
+                .enable_all()
+                .build()
+                .expect("the market needs its background threads")
+        });
 
         let _ = std::fs::create_dir_all(folder);
 
@@ -280,8 +310,18 @@ impl Market {
                     ledger: Ledger::open(&folder.join("outcomes.json")),
                     oracle: None,
                     last_notice: Instant::now(),
+                    depth_mode: kept.depth_mode.unwrap_or_default(),
+                    depth_configured: kept.depth_mode.is_some(),
+                    depth_generation: 0,
+                    stop_depth: None,
+                    #[cfg(feature = "desktop")]
+                    learning: None,
+                    #[cfg(feature = "desktop")]
+                    last_observed: 0,
                 }),
-                changed: Box::new(changed),
+                changed: Mutex::new(vec![(0, Box::new(changed))]),
+                #[cfg(feature = "desktop")]
+                desktop_root: Mutex::new(None),
             }),
         };
 
@@ -303,7 +343,48 @@ impl Market {
     }
 
     fn tell(&self) {
-        (self.inner.changed)();
+        for (_, changed) in self.inner.changed.lock().unwrap().iter() {
+            changed();
+        }
+    }
+
+    #[cfg(feature = "desktop")]
+    pub(crate) fn listen(&self, changed: impl Fn() + Send + Sync + 'static) -> u64 {
+        static SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let id = SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.inner
+            .changed
+            .lock()
+            .unwrap()
+            .push((id, Box::new(changed)));
+        id
+    }
+    #[cfg(feature = "desktop")]
+    pub(crate) fn unlisten(&self, id: u64) {
+        self.inner
+            .changed
+            .lock()
+            .unwrap()
+            .retain(|(key, _)| *key != id);
+    }
+    #[cfg(feature = "desktop")]
+    pub(crate) fn set_desktop_root(&self, folder: &Path) {
+        *self.inner.desktop_root.lock().unwrap() = Some(folder.into());
+    }
+    #[cfg(feature = "desktop")]
+    pub(crate) fn pause_subscription(&self) {
+        let mut state = self.state();
+        if let Some(stop) = state.stop_feed.take() {
+            let _ = stop.send(true);
+        }
+        if let Some(stop) = state.stop_depth.take() {
+            let _ = stop.send(true);
+        }
+        state.generation += 1;
+        state.depth_generation += 1;
+        state.snapshot.feed = FeedState::Off;
+        state.snapshot.depth = DepthSnapshot::default();
+        bump(&mut state);
     }
 
     /// Changes whenever anything in the snapshot does.
@@ -313,6 +394,342 @@ impl Market {
 
     pub fn snapshot(&self) -> Snapshot {
         self.state().snapshot.clone()
+    }
+
+    pub fn depth_mode(&self) -> DepthMode {
+        self.state().depth_mode
+    }
+
+    pub fn set_depth_mode(&self, mode: DepthMode) {
+        {
+            let mut state = self.state();
+            state.depth_mode = mode;
+            state.depth_configured = true;
+        }
+        self.keep();
+        self.start_depth();
+        self.tell();
+    }
+
+    fn start_depth(&self) {
+        if !cfg!(feature = "desktop") {
+            return;
+        }
+        #[cfg(feature = "desktop")]
+        if self.state().learning.is_none() {
+            return;
+        }
+        let (credentials, instrument, mode, generation, depth_generation, stopped) = {
+            let mut state = self.state();
+            if let Some(stop) = state.stop_depth.take() {
+                let _ = stop.send(true);
+            }
+            state.depth_generation += 1;
+            state.snapshot.depth = DepthSnapshot::default();
+            if state.depth_mode == DepthMode::Five {
+                return;
+            }
+            let Some(Source::Dhan { instrument }) = state.snapshot.source.clone() else {
+                return;
+            };
+            if !matches!(
+                instrument.segment,
+                crate::Segment::NseEquity | crate::Segment::NseDerivatives
+            ) {
+                state.snapshot.depth.status =
+                    "Deep depth unavailable for this segment; Full feed fallback".into();
+                return;
+            }
+            let Some(credentials) = state.credentials.clone() else {
+                return;
+            };
+            if !credentials.api.is_empty() && std::env::var("CORTEX_DHAN_DEPTH").is_err() {
+                return;
+            }
+            let (tx, rx) = watch::channel(false);
+            state.stop_depth = Some(tx);
+            state.snapshot.depth.status = "Connecting depth…".into();
+            (
+                credentials,
+                instrument,
+                state.depth_mode,
+                state.generation,
+                state.depth_generation,
+                rx,
+            )
+        };
+        let market = self.clone();
+        let id = instrument.security_id.parse::<u32>().unwrap_or_default();
+        let segment = instrument.segment.number();
+        self.inner.runtime.spawn(depth::watch(credentials,instrument,mode,stopped,move |news| {
+            let mut state=market.state();if state.generation!=generation || state.depth_generation!=depth_generation {return;}
+            match news {
+                depth::News::Connecting=>state.snapshot.depth.status="Connecting depth…".into(),
+                depth::News::Packet(packet) if packet.security_id==id && packet.segment==segment=>{
+                    #[cfg(feature="desktop")]
+                    if let Some(learning)=&state.learning {learning.recorder.record(serde_json::json!({"received_ms":clock::now_ms(),"kind":"depth","source":state.snapshot.source,"bid":packet.bid,"levels":packet.levels,"coverage":mode.levels()}));}
+
+                    if state.snapshot.depth.coverage!=mode.levels() {state.snapshot.depth=DepthSnapshot::default();}
+                    state.snapshot.depth.set_side(packet.bid,packet.levels,clock::now_ms(),mode.levels());
+                    state.snapshot.depth.status=format!("Dhan · {} levels",mode.levels());
+                },
+                depth::News::Packet(_)=>{},
+                depth::News::Dropped=>{state.snapshot.depth=DepthSnapshot::default();state.snapshot.depth.status="Depth reconnecting; Full feed fallback".into();},
+                depth::News::Stopped(reason)=>{state.snapshot.depth=DepthSnapshot::default();state.snapshot.depth.status=reason;},
+            }
+            refresh_flow(&mut state.snapshot,clock::now_ms());
+                bump(&mut state);drop(state);market.notice();
+            #[cfg(feature="desktop")]
+            market.observe_desktop();
+        }));
+    }
+
+    #[cfg(feature = "desktop")]
+    pub fn enable_learning(&self, learning: Arc<crate::learning::Learning>) {
+        let mut state = self.state();
+        if state
+            .learning
+            .as_ref()
+            .is_some_and(|existing| Arc::ptr_eq(existing, &learning))
+        {
+            return;
+        }
+        if !state.depth_configured {
+            state.depth_mode = DepthMode::Twenty;
+        }
+        state.learning = Some(learning);
+        drop(state);
+        self.start_depth();
+    }
+
+    #[cfg(feature = "desktop")]
+    fn observe_desktop(&self) {
+        use cortex_liquid::abilities::{INPUTS, Perception};
+        let mut state = self.state();
+        let now = clock::now_ms();
+        if now - state.last_observed < 10_000
+            || state.snapshot.now.price <= 0.
+            || !state.snapshot.now.tick_ms.is_some_and(|t| now - t <= 5000)
+        {
+            return;
+        }
+        let Some(learning) = state.learning.clone() else {
+            return;
+        };
+        let Some(source) = state.snapshot.source.as_ref() else {
+            return;
+        };
+        let scope = format!("{}:{}", source.key(), state.snapshot.interval.label());
+        let price = state.snapshot.now.price;
+        let flow = state.snapshot.depth.features(now);
+        let mut values = [0.; INPUTS];
+        let previous = state.snapshot.bars.last().map_or(price, |b| b.close);
+        values[0] = ((price / previous).ln() * 100.).clamp(-5., 5.) as f32;
+        values[1] = flow.imbalance.unwrap_or_default() as f32;
+        values[2] =
+            (state.snapshot.now.atr.unwrap_or_default() / price * 100.).clamp(0., 5.) as f32;
+        values[3] = if flow.available { 1. } else { 0. };
+        values[4] = (flow.spread.unwrap_or_default() / price * 100.).clamp(0., 5.) as f32;
+        values[5] = (state.snapshot.now.rsi.unwrap_or(50.) / 50. - 1.) as f32;
+        values[6] = (state.snapshot.now.buy_share.unwrap_or(0.5) * 2. - 1.) as f32;
+        values[7] = if matches!(state.snapshot.feed, FeedState::Live) {
+            1.
+        } else {
+            0.
+        };
+        values[8] = (flow.microprice.unwrap_or(price) / price - 1.).clamp(-0.1, 0.1) as f32 * 100.;
+        if let Some(flow) = state.snapshot.flow_history.last() {
+            values[9] = (flow.volume_delta.unwrap_or_default().ln_1p() / 20.).clamp(0., 1.) as f32;
+            values[10] = (flow.displayed_change.unwrap_or_default().signum()
+                * (flow.displayed_change.unwrap_or_default().abs().ln_1p() / 20.))
+                .clamp(-1., 1.) as f32;
+            values[11] = if flow.volume_delta.is_some() { 1. } else { 0. };
+        }
+
+        let percepts = vec![
+            "domain: trading".into(),
+            format!("instrument: {}", source.key()),
+            format!(
+                "movement: {}",
+                if values[0] > 0.01 {
+                    "up"
+                } else if values[0] < -0.01 {
+                    "down"
+                } else {
+                    "flat"
+                }
+            ),
+            format!(
+                "liquidity: {}",
+                if !flow.available {
+                    "unknown"
+                } else if values[1] > 0.2 {
+                    "bid heavy"
+                } else if values[1] < -0.2 {
+                    "ask heavy"
+                } else {
+                    "balanced"
+                }
+            ),
+        ];
+        let evidence = serde_json::json!({"revision":state.snapshot.revision,"price":price,"depth":state.snapshot.depth,"flow":flow,"feature_version":1});
+        state.last_observed = now;
+        drop(state);
+        learning.observe(
+            Perception {
+                domain: "trading".into(),
+                scope,
+                time_ms: now,
+                values,
+                percepts,
+            },
+            evidence,
+        );
+    }
+
+    pub fn context(&self) -> serde_json::Value {
+        let snapshot = self.snapshot();
+        let now = clock::now_ms();
+        let scope = snapshot
+            .source
+            .as_ref()
+            .map(Source::key)
+            .unwrap_or_else(|| "*".into());
+        let bars = &snapshot.bars[snapshot.bars.len().saturating_sub(80)..];
+        let mut context = serde_json::json!({"revision":snapshot.revision,"as_of_ms":now,"scope":scope,
+            "source":snapshot.source,"interval":snapshot.interval.label(),"feed":format!("{:?}",snapshot.feed),
+            "tick_age_ms":snapshot.now.tick_ms.map(|t|now-t),"now":snapshot.now,"bars":bars,"forming":snapshot.forming,
+            "levels":snapshot.levels,"depth":snapshot.depth,"flow":snapshot.depth.features(now),"networks":snapshot.networks,
+            "flow_history":snapshot.flow_history,"rows":snapshot.rows,"plan":snapshot.plan,"metrics":snapshot.report.as_deref(),
+            "outcomes":snapshot.outcomes.iter().take(20).collect::<Vec<_>>(),"tallies":snapshot.tallies,
+            "trained_on":snapshot.trained_on,"feature_version":1,"notes":snapshot.notes});
+        #[cfg(feature = "desktop")]
+        if let Some(learning) = self.state().learning.clone() {
+            context["adaptive"] = serde_json::to_value(learning.reading(
+                cortex_memory::experience::Domain::Trading,
+                &format!("{scope}:{}", snapshot.interval.label()),
+            ))
+            .unwrap_or_default();
+            context["learning_problem"] = serde_json::json!(learning.problem());
+            context["recording"] = serde_json::json!(learning.recorder.counts());
+        }
+        context
+    }
+
+    #[cfg(feature = "desktop")]
+    fn model_file(&self, scope: &str, interval: Interval) -> PathBuf {
+        let hash = scope.bytes().fold(14695981039346656037u64, |h, b| {
+            (h ^ u64::from(b)).wrapping_mul(1099511628211)
+        });
+        self.inner
+            .folder
+            .join("models")
+            .join(format!("{hash:x}-{}.json", interval.label()))
+    }
+    #[cfg(feature = "desktop")]
+    fn restore_model(&self, generation: u64) {
+        let (scope, interval) = {
+            let state = self.state();
+            if state.learning.is_none() {
+                return;
+            }
+            let Some(source) = &state.snapshot.source else {
+                return;
+            };
+            (source.key(), state.snapshot.interval)
+        };
+        let file = self.model_file(&scope, interval);
+        let saved = read_json::<SavedModel>(&file)
+            .or_else(|| read_json::<SavedModel>(&file.with_extension("previous.json")));
+        let Some(saved) = saved.filter(|s| {
+            s.schema == 1 && s.scope == scope && s.interval == interval && s.forecaster.is_sound()
+        }) else {
+            return;
+        };
+        let mut state = self.state();
+        if state.generation != generation {
+            return;
+        }
+        state.forecaster = Some(saved.forecaster);
+        state.snapshot.report = Some(Arc::new(saved.report));
+        state.snapshot.trained_on = format!("{scope} {} · restored", interval.label());
+    }
+    #[cfg(feature = "desktop")]
+    fn save_model(&self, generation: u64) {
+        let saved = {
+            let state = self.state();
+            if state.learning.is_none() || state.generation != generation {
+                return;
+            }
+            let (Some(source), Some(forecaster), Some(report)) = (
+                &state.snapshot.source,
+                &state.forecaster,
+                &state.snapshot.report,
+            ) else {
+                return;
+            };
+            SavedModel {
+                schema: 1,
+                scope: source.key(),
+                interval: state.snapshot.interval,
+                forecaster: forecaster.clone(),
+                report: report.as_ref().clone(),
+            }
+        };
+        let file = self.model_file(&saved.scope, saved.interval);
+        if let Err(error) = crate::learning::checkpoint_write(&file, &saved) {
+            let mut state = self.state();
+            state.snapshot.problem = Some(format!("Model checkpoint failed: {error}"));
+            bump(&mut state);
+        }
+    }
+    #[cfg(feature = "desktop")]
+    fn remember_outcomes(&self) {
+        use cortex_memory::experience::{Domain, Experience};
+        let (learning, snapshot) = {
+            let state = self.state();
+            let Some(learning) = state.learning.clone() else {
+                return;
+            };
+            (learning, state.snapshot.clone())
+        };
+        for prediction in snapshot.outcomes.iter().take(40) {
+            let resolved = prediction.outcome.is_some();
+            let now = clock::now_ms();
+            let event = Experience {
+                id: 0,
+                key: format!(
+                    "{}:{}:{}:{}:{}",
+                    if resolved { "resolved" } else { "prediction" },
+                    prediction.instrument,
+                    prediction.interval,
+                    prediction.made_ms,
+                    format_args!("{}:{}", prediction.source, prediction.step)
+                ),
+                domain: Domain::Trading,
+                scope: prediction.instrument.clone(),
+                session: String::new(),
+                kind: if resolved { "outcome" } else { "prediction" }.into(),
+                created_ms: prediction.made_ms,
+                available_ms: now,
+                text: format!(
+                    "{} {} {} step {} forecast {:.2}, realized {:?}",
+                    prediction.source,
+                    prediction.symbol,
+                    prediction.interval,
+                    prediction.step,
+                    prediction.close,
+                    prediction.outcome
+                ),
+                evidence: serde_json::json!(prediction),
+                verified: resolved,
+            };
+            if let Err(error) = learning.memory.append(&event) {
+                let mut state = self.state();
+                state.snapshot.problem = Some(error.to_string());
+                bump(&mut state);
+            }
+        }
     }
 
     fn keep(&self) {
@@ -325,11 +742,16 @@ impl Market {
             },
             interval: Some(state.snapshot.interval),
             brain: Some(state.snapshot.brain),
+            depth_mode: Some(state.depth_mode),
         };
 
         drop(state);
 
         write_json(&self.inner.folder.join("market.json"), &kept, false);
+        #[cfg(feature = "desktop")]
+        if let Some(root) = self.inner.desktop_root.lock().unwrap().as_ref() {
+            write_json(&root.join("market.json"), &kept, false);
+        }
     }
 
     // Dhan ---------------------------------------------------------------
@@ -392,6 +814,10 @@ impl Market {
 
             if checked.is_ok() {
                 write_json(&market.inner.folder.join("dhan.json"), &credentials, true);
+                #[cfg(feature = "desktop")]
+                if let Some(root) = market.inner.desktop_root.lock().unwrap().as_ref() {
+                    write_json(&root.join("dhan.json"), &credentials, true);
+                }
 
                 market.tell();
 
@@ -583,9 +1009,16 @@ impl Market {
         if let Some(stop) = state.stop_feed.take() {
             let _ = stop.send(true);
         }
+        if let Some(stop) = state.stop_depth.take() {
+            let _ = stop.send(true);
+        }
+        state.depth_generation += 1;
+        state.snapshot.depth = DepthSnapshot::default();
+        state.snapshot.flow_history.clear();
 
         state.generation += 1;
         state.snapshot.source = Some(source);
+        state.snapshot.flow_history.clear();
         state.snapshot.bars = Arc::new(Vec::new());
         state.snapshot.forming = None;
         state.snapshot.feed = FeedState::Off;
@@ -638,6 +1071,8 @@ impl Market {
         let market = self.clone();
 
         self.inner.runtime.spawn(async move {
+            #[cfg(feature = "desktop")]
+            market.restore_model(generation);
             let dhan = Dhan::new(credentials.clone());
             let now = clock::now_ms();
             let from = now - interval.history_days() * clock::DAY_MS;
@@ -898,6 +1333,8 @@ impl Market {
                 derive(&mut state);
             }
 
+            #[cfg(feature = "desktop")]
+            market.save_model(generation);
             market.tell();
         });
     }
@@ -954,6 +1391,7 @@ impl Market {
         self.inner
             .runtime
             .spawn(feed::watch(credentials, instrument, stopped.clone(), news));
+        self.start_depth();
 
         // Closes a candle whose time is up even when no tick comes after it.
         let mut stopped = stopped;
@@ -1023,7 +1461,29 @@ impl Market {
                     false
                 }
                 FeedNews::Packet(Packet::Tick(tick)) if tick.security_id == id => {
-                    tick_in(&mut state, &tick, session, interval)
+                    #[cfg(feature = "desktop")]
+                    if let Some(learning) = &state.learning {
+                        learning.recorder.record(serde_json::json!({"received_ms":clock::now_ms(),"kind":"tick","source":state.snapshot.source,"tick":tick}));
+                    }
+
+                    if !tick.bids.is_empty()
+                        && (state.depth_mode == DepthMode::Five
+                            || state.snapshot.depth.coverage < 20)
+                    {
+                        let now = clock::now_ms();
+                        state
+                            .snapshot
+                            .depth
+                            .set_side(true, tick.bids.clone(), now, 5);
+                        state
+                            .snapshot
+                            .depth
+                            .set_side(false, tick.asks.clone(), now, 5);
+                        state.snapshot.depth.status = "Full feed · 5 levels".into();
+                    }
+                    let closed = tick_in(&mut state, &tick, session, interval);
+                    refresh_flow(&mut state.snapshot, clock::now_ms());
+                    closed
                 }
                 FeedNews::Packet(_) => false,
             }
@@ -1034,6 +1494,8 @@ impl Market {
         } else {
             self.notice();
         }
+        #[cfg(feature = "desktop")]
+        self.observe_desktop();
     }
 
     /// A candle has closed: record forecasts, mark old ones, perhaps
@@ -1058,6 +1520,14 @@ impl Market {
 
         self.tell();
 
+        #[cfg(feature = "desktop")]
+        {
+            let market = self.clone();
+            self.inner.runtime.spawn_blocking(move || {
+                market.save_model(generation);
+                market.remember_outcomes();
+            });
+        }
         if retrain {
             self.train(generation);
         }
@@ -1232,7 +1702,7 @@ fn read_json<T: for<'a> Deserialize<'a>>(file: &Path) -> Option<T> {
     serde_json::from_str(&std::fs::read_to_string(file).ok()?).ok()
 }
 
-fn write_json<T: Serialize>(file: &Path, value: &T, private: bool) {
+pub(crate) fn write_json<T: Serialize>(file: &Path, value: &T, private: bool) {
     let Ok(text) = serde_json::to_string(value) else {
         return;
     };
@@ -1630,6 +2100,10 @@ fn derive(state: &mut State) {
     if let Some(forecaster) = &state.forecaster {
         snapshot.account = forecaster.account();
         snapshot.spikes = forecaster.spikes();
+        snapshot.networks = [Net::Liquid, Net::Dendritic, Net::Spiking, Net::Ensemble]
+            .into_iter()
+            .map(|net| (net.short().to_string(), forecaster.path(net).candles))
+            .collect();
     }
 
     let session = match &snapshot.source {
@@ -1765,3 +2239,23 @@ fn rows(
 
 #[cfg(test)]
 mod tests;
+
+fn refresh_flow(snapshot: &mut Snapshot, now: i64) {
+    if snapshot
+        .flow_history
+        .last()
+        .is_some_and(|last| now - last.time_ms < 500)
+    {
+        return;
+    }
+    let sample = crate::flow::sample(
+        &snapshot.depth,
+        snapshot.now.volume,
+        snapshot.flow_history.last(),
+        now,
+    );
+    snapshot.flow_history.push(sample);
+    if snapshot.flow_history.len() > 240 {
+        snapshot.flow_history.remove(0);
+    }
+}

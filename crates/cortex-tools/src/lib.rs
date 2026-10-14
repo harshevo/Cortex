@@ -5,6 +5,8 @@
 
 mod affected_tests;
 mod brain_state;
+#[cfg(unix)]
+mod brain_chat;
 mod browser;
 mod calculate;
 mod checks;
@@ -33,6 +35,8 @@ use cortex_retrieval::{EmbeddingClient, SemanticIndex};
 
 pub use affected_tests::AffectedTests;
 pub use brain_state::BrainState;
+#[cfg(unix)]
+pub use brain_chat::{BrainChat, TeachBrain};
 pub use browser::{Browser, BrowserOptions, BrowserView};
 pub use edit_file::EditFile;
 pub use file_dependencies::FileDependencies;

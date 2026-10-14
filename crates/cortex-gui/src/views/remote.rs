@@ -20,20 +20,14 @@ pub fn show(ui: &mut Ui, mut on: bool) -> Option<bool> {
 
     caption(
         ui,
-        "Follow and drive your chats from the Cortex app on a phone. The agent, its tools and \
-         your API keys stay on this computer. The connection is encrypted end to end and \
-         needs no open port: it goes directly when the phone is on the same network and \
-         through a relay when it is not.",
+        "Encrypted end to end, no open port. The agent and your keys stay on this computer.",
     );
-
-    ui.add_space(10.0);
 
     let flipped = switch_row(
         ui,
         &mut on,
         RichText::new("Let paired phones connect"),
-        "A paired phone can send instructions, stop a run, answer the agent's questions and \
-         change models and capabilities, exactly as you can here.",
+        "A paired phone can do everything you can here.",
         true,
     );
 
@@ -43,12 +37,12 @@ pub fn show(ui: &mut Ui, mut on: bool) -> Option<bool> {
 
     match bridge.hosting() {
         Hosting::Off | Hosting::Starting => {
-            ui.add_space(10.0);
+            ui.add_space(crate::theme::space::S);
             caption(ui, "Starting…");
         }
 
         Hosting::Failed(problem) => {
-            ui.add_space(10.0);
+            ui.add_space(crate::theme::space::S);
             ui.label(RichText::new(problem).color(palette::bad()));
         }
 
@@ -67,13 +61,16 @@ fn pairing(ui: &mut Ui, bridge: &'static remote::Bridge) {
     let Some((code, left)) = bridge.code() else {
         caption(
             ui,
-            "Open Cortex on the phone, choose \"Pair with a computer\" and scan the code shown \
-             here. A code lets one phone in and works for ten minutes.",
+            "On the phone, choose \"Pair with a computer\". A code admits one phone, for ten \
+             minutes.",
         );
 
-        ui.add_space(8.0);
+        ui.add_space(crate::theme::space::S);
 
-        if ui.button("Show a pairing code").clicked() {
+        if ui
+            .add(crate::theme::secondary_button("Show a pairing code"))
+            .clicked()
+        {
             bridge.show_code();
         }
 
@@ -83,31 +80,31 @@ fn pairing(ui: &mut Ui, bridge: &'static remote::Bridge) {
     caption(
         ui,
         &format!(
-            "Scan this with the Cortex app. It works once, for another {} min.",
+            "Scan with the Cortex app. Works once, for {} more min.",
             left.as_secs() / 60 + 1
         ),
     );
 
-    ui.add_space(10.0);
+    ui.add_space(crate::theme::space::M);
 
     draw_code(ui, &code);
 
-    ui.add_space(10.0);
+    ui.add_space(crate::theme::space::M);
 
     ui.horizontal(|ui| {
         if ui
-            .button("Copy as text")
+            .add(crate::theme::secondary_button("Copy as text"))
             .on_hover_text("For a phone whose camera cannot be used: paste it into the app.")
             .clicked()
         {
             ui.ctx().copy_text(code.clone());
         }
 
-        if ui.button("New code").clicked() {
+        if ui.add(crate::theme::secondary_button("New code")).clicked() {
             bridge.show_code();
         }
 
-        if ui.button("Hide").clicked() {
+        if ui.add(crate::theme::secondary_button("Hide")).clicked() {
             bridge.hide_code();
         }
     });
@@ -174,13 +171,13 @@ fn devices(ui: &mut Ui, bridge: &'static remote::Bridge) {
     }
 
     for (device, connected) in devices {
-        ui.add_space(6.0);
+        ui.add_space(crate::theme::space::S);
 
         egui::Frame::new()
             .fill(palette::surface())
             .stroke(Stroke::new(1.0, palette::border()))
             .corner_radius(CornerRadius::same(crate::theme::radius::L))
-            .inner_margin(egui::Margin::symmetric(12, 9))
+            .inner_margin(egui::Margin::symmetric(16, 12))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     let (dot, _) = ui.allocate_exact_size(vec2(8.0, 8.0), egui::Sense::hover());
@@ -213,7 +210,7 @@ fn devices(ui: &mut Ui, bridge: &'static remote::Bridge) {
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
-                            .button("Forget")
+                            .add(crate::theme::secondary_button("Forget"))
                             .on_hover_text("Stop letting this phone connect.")
                             .clicked()
                         {

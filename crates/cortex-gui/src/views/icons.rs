@@ -9,7 +9,7 @@ use crate::theme::palette;
 const ICON_SIZE: f32 = 14.0;
 
 /// The size of the square that responds to the pointer.
-const BUTTON_SIZE: f32 = 22.0;
+const BUTTON_SIZE: f32 = crate::theme::control::SMALL;
 
 const LINE_WIDTH: f32 = 1.3;
 
@@ -30,6 +30,9 @@ pub enum Icon {
     Close,
     Minimize,
     Maximize,
+
+    /// A tick: the chosen one of a list.
+    Check,
 }
 
 pub fn activity_dot(ui: &Ui, centre: Pos2) {
@@ -261,7 +264,24 @@ pub fn paint(ui: &Ui, centre: Pos2, icon: Icon, color: Color32) {
             line(at(-0.8, 0.8), at(-0.8, 0.1));
             line(at(-0.8, 0.8), at(-0.15, 0.15));
         }
+
+        Icon::Check => {
+            line(at(-0.6, 0.0), at(-0.15, 0.45));
+            line(at(-0.15, 0.45), at(0.65, -0.45));
+        }
     }
+}
+
+/// Draws the small downward chevron of a dropdown, centred on `centre`.
+pub fn chevron(ui: &Ui, centre: Pos2, color: Color32) {
+    ui.painter().line(
+        vec![
+            centre + vec2(-3.0, -1.5),
+            centre + vec2(0.0, 1.5),
+            centre + vec2(3.0, -1.5),
+        ],
+        Stroke::new(1.2, color),
+    );
 }
 
 /// The outline of a folder: a body with a tab on its top-left corner.

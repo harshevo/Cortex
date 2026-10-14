@@ -15,6 +15,31 @@ pub struct Ridge {
 }
 
 impl Ridge {
+    pub fn fit_masked(
+        x: &[f32],
+        y: &[f32],
+        mask: &[bool],
+        inputs: usize,
+        outputs: usize,
+        penalty: f64,
+        use_row: impl Fn(usize) -> bool,
+    ) -> Self {
+        let mut weights = vec![0.; (inputs + 1) * outputs];
+        for k in 0..outputs {
+            let targets: Vec<_> = y.chunks_exact(outputs).map(|row| row[k]).collect();
+            let head = Self::fit(x, &targets, inputs, 1, penalty, |at| {
+                use_row(at) && mask.get(at * outputs + k) == Some(&true)
+            });
+            for i in 0..=inputs {
+                weights[i * outputs + k] = head.weights[i];
+            }
+        }
+        Self {
+            inputs,
+            outputs,
+            weights,
+        }
+    }
     /// Fits on the rows whose index `use_row` accepts. `x` has `inputs`
     /// numbers per row and `y` `outputs` per row.
     pub fn fit(
@@ -26,7 +51,7 @@ impl Ridge {
         use_row: impl Fn(usize) -> bool,
     ) -> Self {
         let width = inputs + 1;
-        let rows = if inputs == 0 { 0 } else { x.len() / inputs };
+        let rows = x.len().checked_div(inputs).unwrap_or_default();
 
         let mut gram = vec![0.0f64; width * width];
         let mut cross = vec![0.0f64; width * outputs];

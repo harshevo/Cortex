@@ -4,8 +4,8 @@
 use cortex_market::{Asking, Brain, Market, Snapshot, Source, Tone};
 use eframe::egui::{self, Color32, CornerRadius, RichText, Sense, Ui, vec2};
 
-use super::{PictureScale, format};
-use crate::theme::{self, palette, space};
+use super::{PictureScale, format, widgets};
+use crate::theme::{self, palette};
 
 pub fn tone_colour(tone: Tone) -> Color32 {
     match tone {
@@ -19,9 +19,9 @@ pub fn show(ui: &mut Ui, market: &Market, snapshot: &Snapshot, picture: &mut Pic
     network(ui, market, snapshot);
 
     if let Some(plan) = &snapshot.plan {
-        ui.add_space(space::S);
+        ui.add_space(12.0);
 
-        theme::card().show(ui, |ui| {
+        widgets::card().show(ui, |ui| {
             ui.set_width(ui.available_width());
 
             ui.horizontal(|ui| {
@@ -46,7 +46,7 @@ pub fn show(ui: &mut Ui, market: &Market, snapshot: &Snapshot, picture: &mut Pic
                     .color(palette::text_secondary()),
             );
 
-            ui.add_space(space::XS);
+            ui.add_space(8.0);
 
             row(ui, "Support", &format::price(plan.support), palette::good());
             row(
@@ -59,9 +59,9 @@ pub fn show(ui: &mut Ui, market: &Market, snapshot: &Snapshot, picture: &mut Pic
     }
 
     if let (Some(next), Some(last)) = (snapshot.rows.first(), snapshot.rows.last()) {
-        ui.add_space(space::S);
+        ui.add_space(12.0);
 
-        theme::card().show(ui, |ui| {
+        widgets::card().show(ui, |ui| {
             ui.set_width(ui.available_width());
 
             heading(ui, "Next candle");
@@ -93,7 +93,7 @@ pub fn show(ui: &mut Ui, market: &Market, snapshot: &Snapshot, picture: &mut Pic
                 .color(palette::text_secondary()),
             );
 
-            ui.add_space(space::XS);
+            ui.add_space(8.0);
 
             row(
                 ui,
@@ -122,9 +122,9 @@ pub fn show(ui: &mut Ui, market: &Market, snapshot: &Snapshot, picture: &mut Pic
         });
     }
 
-    ui.add_space(space::S);
+    ui.add_space(12.0);
 
-    theme::card().show(ui, |ui| {
+    widgets::card().show(ui, |ui| {
         ui.set_width(ui.available_width());
 
         heading(ui, "Now");
@@ -178,7 +178,7 @@ pub fn show(ui: &mut Ui, market: &Market, snapshot: &Snapshot, picture: &mut Pic
         }
 
         if let Some(share) = now.buy_share {
-            ui.add_space(space::XS);
+            ui.add_space(8.0);
 
             ui.horizontal(|ui| {
                 ui.label(
@@ -227,13 +227,13 @@ pub fn show(ui: &mut Ui, market: &Market, snapshot: &Snapshot, picture: &mut Pic
     });
 
     if let Some(Source::Picture { name }) = &snapshot.source {
-        ui.add_space(space::S);
+        ui.add_space(12.0);
 
         picture_scale(ui, market, name, picture);
     }
 
     if !snapshot.notes.is_empty() {
-        ui.add_space(space::S);
+        ui.add_space(12.0);
 
         for note in &snapshot.notes {
             ui.label(
@@ -248,43 +248,26 @@ pub fn show(ui: &mut Ui, market: &Market, snapshot: &Snapshot, picture: &mut Pic
 fn network(ui: &mut Ui, market: &Market, snapshot: &Snapshot) {
     let brain = snapshot.brain;
 
-    egui::Frame::new()
-        .fill(palette::accent().gamma_multiply(0.10))
-        .stroke(egui::Stroke::new(
-            1.0,
-            palette::accent().gamma_multiply(0.5),
-        ))
-        .corner_radius(CornerRadius::same(theme::radius::L))
-        .inner_margin(egui::Margin::symmetric(12, 10))
-        .show(ui, |ui| {
+    widgets::card().show(ui, |ui| {
             ui.set_width(ui.available_width());
 
-            ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.y = 4.0;
+
+            heading(ui, "Track record");
+
+            if brain == Brain::Llm {
                 ui.label(
-                    RichText::new(brain.short())
-                        .font(theme::strong(13.0))
-                        .color(palette::accent()),
+                    RichText::new(
+                        snapshot
+                            .llm
+                            .model
+                            .as_deref()
+                            .unwrap_or("No model set up"),
+                    )
+                    .font(theme::strong(13.0))
+                    .color(palette::text()),
                 );
-
-                let name = match brain {
-                    Brain::Llm => snapshot
-                        .llm
-                        .model
-                        .clone()
-                        .unwrap_or_else(|| "Language model".to_string()),
-                    _ => format!("{} network", brain.name()),
-                };
-
-                ui.label(RichText::new(name).font(theme::strong(13.0)));
-            });
-
-            ui.label(
-                RichText::new(brain.about())
-                    .font(theme::small())
-                    .color(palette::text_secondary()),
-            );
-
-            ui.add_space(space::XS);
+            }
 
             if let Some(metrics) = brain
                 .net()
@@ -355,7 +338,16 @@ fn network(ui: &mut Ui, market: &Market, snapshot: &Snapshot) {
                     );
                 }
 
-                if ui.small_button("Ask again").clicked() {
+                ui.add_space(4.0);
+
+                if widgets::button(
+                    ui,
+                    "Ask again",
+                    Some(widgets::Glyph::Refresh),
+                    widgets::Kind::Secondary,
+                )
+                .clicked()
+                {
                     market.ask_llm(true);
                 }
             }
@@ -363,7 +355,7 @@ fn network(ui: &mut Ui, market: &Market, snapshot: &Snapshot) {
 }
 
 fn picture_scale(ui: &mut Ui, market: &Market, name: &str, picture: &mut PictureScale) {
-    theme::card().show(ui, |ui| {
+    widgets::card().show(ui, |ui| {
         ui.set_width(ui.available_width());
 
         heading(ui, "Picture's price scale");
@@ -385,7 +377,7 @@ fn picture_scale(ui: &mut Ui, market: &Market, name: &str, picture: &mut Picture
             let ready =
                 matches!((top, bottom), (Some(top), Some(bottom)) if top > bottom && bottom > 0.0);
 
-            if ui.add_enabled(ready, egui::Button::new("Apply")).clicked()
+            if widgets::button_enabled(ui, ready, "Apply", None, widgets::Kind::Primary).clicked()
                 && let (Some((_, bytes)), Some(top), Some(bottom)) = (picture.picture, top, bottom)
             {
                 let _ = market.load_picture(name, bytes.clone(), Some((top, bottom)));
@@ -403,15 +395,14 @@ fn rsi_colour(rsi: Option<f64>) -> Color32 {
 }
 
 pub fn heading(ui: &mut Ui, text: &str) {
-    ui.label(
-        RichText::new(text)
-            .font(theme::strong(11.5))
-            .color(palette::text_muted()),
-    );
+    widgets::caption(ui, text);
+    ui.add_space(4.0);
 }
 
 pub fn row(ui: &mut Ui, name: &str, value: &str, colour: Color32) {
     ui.horizontal(|ui| {
+        ui.set_min_height(22.0);
+
         ui.label(
             RichText::new(name)
                 .font(theme::small())

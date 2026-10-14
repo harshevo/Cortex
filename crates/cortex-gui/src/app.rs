@@ -5,12 +5,10 @@ use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 
 use cortex_core::Image;
-use cortex_memory::WorkingMemory;
 use eframe::egui::{self, Margin, RichText, Stroke};
 
 use crate::attachment::Attachment;
 use crate::engine::{Engine, Info, Launch, PendingApproval, Update};
-use crate::memory::working;
 use crate::rehearsal::Rehearsal;
 use crate::remote;
 use crate::session::history::{self, PastSession};
@@ -20,7 +18,7 @@ use crate::theme::{self, palette};
 use crate::views::composer::{self, Mode};
 use crate::views::conversation::{self, ChatView};
 use crate::views::files::Files;
-use crate::views::memory_space::{self, MemoryView};
+use crate::views::memory_space::MemoryView;
 use crate::views::settings::Form;
 use crate::views::sidebar::{self, Shelf};
 use crate::views::stats_strip::{self, Change, Reading};
@@ -28,11 +26,11 @@ use crate::views::{Section, View, settings as settings_page, top_bar, typeset};
 
 /// Low enough that its buttons sit on a line with the window's own.
 const TOP_BAR_HEIGHT: f32 = 32.0;
-const SIDEBAR_WIDTH: f32 = 350.0;
-const SIDEBAR_MIN_WIDTH: f32 = 180.0;
-const SIDEBAR_MAX_WIDTH: f32 = 520.0;
+const SIDEBAR_WIDTH: f32 = 272.0;
+const SIDEBAR_MIN_WIDTH: f32 = 200.0;
+const SIDEBAR_MAX_WIDTH: f32 = 440.0;
 
-const FILES_WIDTH: f32 = 250.0;
+const FILES_WIDTH: f32 = 264.0;
 const FILES_WIDTH_WITH_FILE: f32 = 640.0;
 const FILES_MIN_WIDTH: f32 = 180.0;
 const FILES_MAX_WIDTH: f32 = 1100.0;
@@ -76,14 +74,6 @@ pub struct CortexApp {
     /// The project is being got ready; the button waits until it is.
     preparing: bool,
 
-    /// The engine's working memory for the current run, kept in step by
-    /// watching the same events the engine's own copy does.
-    working: WorkingMemory,
-
-    /// What the engine's working memory held when the memory space last
-    /// took its thoughts from it. `working_revision` counts its changes.
-    working_revision: u64,
-    thoughts_revision: Option<u64>,
 
     /// A past session opened from the sidebar, shown instead of `live`.
     viewing: Option<(PathBuf, Session)>,
@@ -117,6 +107,8 @@ pub struct CortexApp {
     network_stamp: Option<(u64, u64, bool)>,
 
     trading: crate::views::trading::TradingView,
+    /// The screen the trading screen's back button returns to.
+    trading_return: View,
     insights: crate::views::insights::InsightsView,
 
     /// What the mind expects to be asked next. Shown in the empty
@@ -162,15 +154,15 @@ impl CortexApp {
         });
 
         let place = open
-            .or_else(|| settings.projects.first().cloned())
+            .or_else(|| settings.projects.iter().find(|path| path.is_dir()).cloned())
             .unwrap_or_else(|| scratch.clone());
 
         let view = if rehearsal.opens_trading().is_some() {
             View::Trading
-        } else if rehearsal.opens_living() {
+        } else if rehearsal.opens_living() || rehearsal.opens_memory() {
             View::Living
-        } else if rehearsal.opens_memory() {
-            View::MemorySpace
+        } else if rehearsal.opens_insights() {
+            View::Insights
         } else {
             View::Conversation
         };
@@ -193,9 +185,6 @@ impl CortexApp {
             sidebar_open: true,
             live: Session::default(),
             preparing: false,
-            working: WorkingMemory::default(),
-            working_revision: 0,
-            thoughts_revision: None,
             viewing: None,
             chat: ChatView::default(),
             chat_shows: None,
@@ -209,6 +198,7 @@ impl CortexApp {
             living_view: Default::default(),
             network_stamp: None,
             trading: Default::default(),
+            trading_return: View::Conversation,
             insights: Default::default(),
             suggestion: None,
             attachments: Vec::new(),
@@ -266,7 +256,6 @@ impl CortexApp {
             self.show_phones(Vec::new());
 
             self.live = Session::default();
-            self.forget_working();
             self.chat.reset();
             self.viewing = None;
             self.approvals.clear();
@@ -301,21 +290,6 @@ impl CortexApp {
         }
     }
 
-    /// Empties the copy of the engine's working memory, for a session
-    /// that starts anew.
-    fn forget_working(&mut self) {
-        self.working = WorkingMemory::default();
-        self.working_revision += 1;
-    }
-
-    /// Whether the working memory has changed since this was last asked.
-    fn thoughts_changed(&mut self) -> bool {
-        let changed = self.thoughts_revision != Some(self.working_revision);
-
-        self.thoughts_revision = Some(self.working_revision);
-
-        changed
-    }
 
     fn refresh_sessions(&mut self) {
         self.history_revision += 1;
@@ -332,7 +306,6 @@ impl CortexApp {
 
         for update in updates {
             match update {
-                Update::BrainInspection(states) => self.memory.inspected(states),
                 Update::ServiceStarting(text) => self.live.notice(&text, Tone::Muted),
                 Update::Ready(info) => self.agent_ready(info),
 
@@ -348,12 +321,7 @@ impl CortexApp {
                 }
 
                 Update::Event(event) => {
-                    if let cortex_core::Event::BrainObserved { source, detail, .. } = &event {
-                        self.memory.observe_brain(source, detail);
-                    }
                     self.heard(&event);
-                    self.working.observe(&event);
-                    self.working_revision += 1;
                     self.live.apply(&event);
 
                     crate::session::slim_after(&mut self.live, &event);
@@ -416,10 +384,6 @@ impl CortexApp {
 
                 Update::Memory(remembered) => {
                     self.memory.load(remembered);
-
-                    if self.rehearsal.selects_newest() {
-                        self.memory.select_newest();
-                    }
                 }
 
                 Update::MemoryFailed(problem) => self.memory.problem = Some(problem),
@@ -460,6 +424,10 @@ impl CortexApp {
     /// Takes off the queue what `event` shows the model has now read.
     fn heard(&mut self, event: &cortex_core::Event) {
         match event {
+            cortex_core::Event::BrainObserved { source, detail, .. }
+                if source == "snn+dann conversation" && detail["kind"] == "user" => {
+                if let Some(text) = detail["text"].as_str() { self.queued.retain(|queued| queued != text); }
+            }
             cortex_core::Event::UserInterjected { text, .. } => {
                 if let Some(position) = self.queued.iter().position(|queued| queued == text) {
                     self.queued.remove(position);
@@ -520,7 +488,6 @@ impl CortexApp {
 
         self.viewing = None;
         self.live = Session::default();
-        self.forget_working();
         self.chat.reset();
         self.live_log = None;
 
@@ -598,17 +565,6 @@ impl CortexApp {
             self.engine.open(path.clone());
         }
 
-        self.forget_working();
-        self.memory.activity = crate::brain::activity::ActivityView::default();
-
-        for event in &events {
-            self.working.observe(event);
-
-            if let cortex_core::Event::BrainObserved { source, detail, .. } = event {
-                self.memory.observe_brain(source, detail);
-            }
-        }
-
         self.show_phones(events);
 
         self.live = session;
@@ -678,7 +634,8 @@ impl CortexApp {
             // The conversation, not the settings, changes.
             Change::Compact => {
                 if self.viewing.is_none() && matches!(self.status, Status::Ready(_)) {
-                    self.live.notice("Writing a summary of the conversation so far…", Tone::Muted);
+                    self.live
+                        .notice("Writing a summary of the conversation so far…", Tone::Muted);
                     self.engine.compact();
                 } else {
                     self.live
@@ -920,6 +877,12 @@ impl CortexApp {
             egui::containers::panel::PanelState::load(ui.ctx(), ui.id().with(id))
                 .map_or(width + 16.0, |state| state.size().x)
         });
+        // On the trading screen, the right-hand side is its chat.
+        let files_width = if self.view == View::Trading {
+            self.trading.docked_chat_width()
+        } else {
+            files_width
+        };
 
         // The bar is not a strip of its own: it is the top of whatever is
         // under it, so it takes the chat's colour.
@@ -936,9 +899,23 @@ impl CortexApp {
             project: project.as_deref(),
             demo: self.demo,
             busy: self.live.running || self.preparing || matches!(self.status, Status::Starting),
+            // The trading chat reads as running the window's full height:
+            // the bar leaves its part empty, in its colour.
+            covered_right: if self.view == View::Trading {
+                self.trading.docked_chat_width().unwrap_or(0.0)
+            } else {
+                0.0
+            },
         };
 
-        egui::Panel::top(ui.id().with("top bar"))
+        let panel_view = self.view;
+        let mut navigation = self.sidebar_visible();
+        let mut right = if self.view == View::Trading {
+            self.trading.chat_open()
+        } else {
+            self.files.visible
+        };
+        let result = egui::Panel::top(ui.id().with("top bar"))
             .exact_size(TOP_BAR_HEIGHT)
             .show_separator_line(false)
             .frame(frame)
@@ -947,7 +924,7 @@ impl CortexApp {
                 // takes theirs.
                 let bar = ui.max_rect().expand2(egui::vec2(8.0, 0.0));
 
-                if self.sidebar_open {
+                if self.sidebar_visible() {
                     ui.painter().rect_filled(
                         bar.with_max_x(bar.left() + sidebar_width),
                         0.0,
@@ -968,14 +945,22 @@ impl CortexApp {
                     &place,
                     &mut self.view,
                     &mut self.section,
-                    &mut self.sidebar_open,
-                    &mut self.files.visible,
+                    &mut navigation,
+                    &mut right,
                     sidebar_width,
                     steps,
                     workspace_menu,
                 )
             })
-            .inner
+            .inner;
+        if panel_view == View::Trading {
+            self.trading.set_navigation(navigation);
+            self.trading.set_chat(right);
+        } else {
+            self.sidebar_open = navigation;
+            self.files.visible = right;
+        }
+        result
     }
 
     /// Gets the project ready ahead of any task.
@@ -1004,6 +989,12 @@ impl CortexApp {
 
     /// The files of the project, on the right, while they are switched on.
     pub(crate) fn files_panel(&mut self, ui: &mut egui::Ui) {
+        if self.view == View::Trading {
+            if ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::E)) {
+                self.trading.toggle_chat();
+            }
+            return;
+        }
         if ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::E)) {
             self.files.visible = !self.files.visible;
         }
@@ -1014,7 +1005,7 @@ impl CortexApp {
 
         let frame = egui::Frame::new()
             .fill(palette::sidebar())
-            .inner_margin(Margin::symmetric(8, 6));
+            .inner_margin(Margin::symmetric(12, 8));
 
         let (id, width) = self.files_panel_id();
 
@@ -1040,7 +1031,12 @@ impl CortexApp {
     pub(crate) fn sidebar_with_activity(&mut self, ui: &mut egui::Ui, running: &[PathBuf]) {
         let frame = egui::Frame::new()
             .fill(palette::sidebar())
-            .inner_margin(Margin::symmetric(8, 6));
+            .inner_margin(Margin {
+                left: 12,
+                right: 12,
+                top: 8,
+                bottom: 12,
+            });
 
         let shelf = Shelf {
             section: self.section,
@@ -1090,7 +1086,12 @@ impl CortexApp {
     fn footer(&mut self, ui: &mut egui::Ui) {
         let frame = egui::Frame::new()
             .fill(palette::background())
-            .inner_margin(Margin::symmetric(24, 10));
+            .inner_margin(Margin {
+                left: 24,
+                right: 24,
+                top: 8,
+                bottom: 16,
+            });
 
         let mode = self.composer_mode();
         let max_steps = self.max_steps();
@@ -1112,7 +1113,7 @@ impl CortexApp {
 
                     ui.vertical(|ui| {
                         ui.set_width(width);
-                        ui.spacing_mut().item_spacing.y = 4.0;
+                        ui.spacing_mut().item_spacing.y = theme::space::S;
 
                         let can_continue = self.viewing.is_none() && self.live.can_continue;
 
@@ -1200,13 +1201,25 @@ impl CortexApp {
             .fill(palette::background())
             .stroke(Stroke::NONE);
 
+        if self.view != View::Trading {
+            self.trading_return = self.view;
+        }
+
         egui::CentralPanel::default()
             .frame(frame)
             .show(ui, |ui| match self.view {
                 View::Conversation => self.conversation(ui),
-                View::MemorySpace => self.memory_space(ui),
                 View::Living => self.living_space(ui),
-                View::Trading => crate::views::trading::show(ui, &mut self.trading, &self.settings),
+                View::Trading => {
+                    if let Some(crate::views::trading::Action::Back) = crate::views::trading::show(
+                        ui,
+                        &mut self.trading,
+                        &self.settings,
+                        &self.place,
+                    ) {
+                        self.view = self.trading_return;
+                    }
+                }
                 View::Insights => crate::views::insights::show(ui, &mut self.insights),
                 View::Settings => self.settings_page(ui),
             });
@@ -1231,7 +1244,6 @@ impl CortexApp {
                 self.apply_settings(*settings);
             }
             Some(settings_page::Action::Back) => self.show_chat(),
-            Some(settings_page::Action::OpenMemory) => self.view = View::MemorySpace,
             Some(settings_page::Action::OpenLiving) => self.view = View::Living,
 
             // Only what the window draws changes: the agent is left alone.
@@ -1281,14 +1293,18 @@ impl CortexApp {
     fn living_space(&mut self, ui: &mut egui::Ui) {
         self.look_at_network();
 
-        let Some(snapshot) = &self.memory.activity.network else {
-            ui.add_space(40.0);
+        let Some(snapshot) = &self.memory.network else {
+            ui.add_space(ui.available_height() * 0.3);
             ui.vertical_centered(|ui| {
-                ui.label("The dendritic network is switched off.");
+                ui.label(
+                    egui::RichText::new("Waking the brain…")
+                        .font(theme::strong(theme::size::TITLE)),
+                );
+                ui.add_space(theme::space::XS);
                 ui.label(
                     egui::RichText::new(
-                        "Turn on Brain (it advises) or Living (it only watches) under \
-                         Settings → Capabilities.",
+                        "It connects to its background service once a model is set up in \
+                         Settings. The service keeps running after Cortex closes.",
                     )
                     .color(palette::text_muted()),
                 );
@@ -1297,38 +1313,12 @@ impl CortexApp {
             return;
         };
 
-        crate::views::living::show(ui, &mut self.living_view, snapshot);
-    }
-
-    fn memory_space(&mut self, ui: &mut egui::Ui) {
-        let decision = self.approvals.front().and_then(|approval| {
-            ui.label("The agent is waiting for your approval.");
-
-            conversation::approval_card(ui, &approval.request)
-        });
-
-        if let Some(decision) = decision
-            && let Some(approval) = self.approvals.pop_front()
-        {
-            approval.answer(decision);
-        }
-
-        self.look_at_network();
-
-        // The thoughts are built from the working memory only when it
-        // has changed, not on every frame the brain is drawn.
-        if self.thoughts_changed() {
-            self.memory.set_thoughts(working::thoughts(&self.working));
-        }
-
-        memory_space::show(
+        crate::views::living::show(
             ui,
-            &mut self.memory,
-            self.live.running && self.approvals.is_empty(),
+            &mut self.living_view,
+            snapshot,
+            &self.memory.performance,
         );
-        if let Some(query) = self.memory.activity.request.take() {
-            self.engine.inspect_brain(query);
-        }
     }
 
     fn conversation(&mut self, ui: &mut egui::Ui) {
@@ -1420,7 +1410,7 @@ impl eframe::App for CortexApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.tick(ui);
         self.top_bar(ui);
-        if self.sidebar_open {
+        if self.sidebar_visible() {
             self.sidebar(ui);
         }
         self.files_panel(ui);
@@ -1527,10 +1517,18 @@ impl CortexApp {
         self.refresh_sessions();
     }
     pub(crate) fn toggle_sidebar(&mut self) {
-        self.sidebar_open = !self.sidebar_open;
+        if self.view == View::Trading {
+            self.trading.set_navigation(!self.trading.navigation_open());
+        } else {
+            self.sidebar_open = !self.sidebar_open;
+        }
     }
     pub(crate) fn sidebar_visible(&self) -> bool {
-        self.sidebar_open
+        if self.view == View::Trading {
+            self.trading.navigation_open()
+        } else {
+            self.sidebar_open
+        }
     }
     pub(crate) fn running(&self) -> bool {
         self.live.running

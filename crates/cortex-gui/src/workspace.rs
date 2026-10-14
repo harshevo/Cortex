@@ -3,10 +3,15 @@ use eframe::egui::{self, CornerRadius, Layout, Sense, Stroke, UiBuilder};
 use crate::app::CortexApp;
 use crate::theme::palette;
 use crate::views::icons::{self, Icon};
+use crate::views::menu;
 use crate::views::top_bar::{Step, Steps};
 
 /// The height of the strip that holds the minimized chats.
 const TRAY_HEIGHT: f32 = 34.0;
+
+/// Narrower than this, the window puts the sidebar away so the chat
+/// keeps room to be read. It can still be brought back with ⌘B.
+const NARROW_WINDOW: f32 = 760.0;
 
 /// The height of the row of buttons above each pane of a split.
 const PANE_BAR_HEIGHT: f32 = 28.0;
@@ -49,6 +54,13 @@ pub struct Workspace {
 
     /// When paired phones were last told the state, in the window's time.
     told_phones: f64,
+
+    /// The window was narrow on the frame before.
+    narrow: bool,
+
+    /// The sidebar was put away because the window became narrow, not
+    /// by the person: it comes back when there is room again.
+    stepped_aside: bool,
 }
 
 impl Workspace {
@@ -65,6 +77,8 @@ impl Workspace {
             visited: vec![1],
             position: 0,
             told_phones: f64::NEG_INFINITY,
+            narrow: false,
+            stepped_aside: false,
         };
         if split {
             workspace.choose_split(Split::Columns);
@@ -411,6 +425,20 @@ impl eframe::App for Workspace {
         if ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::B)) {
             self.chats[active].1.toggle_sidebar();
         }
+        // On becoming narrow the sidebar steps aside, once; it can be
+        // brought back, and comes back by itself with the room.
+        let narrow = ui.available_width() < NARROW_WINDOW;
+        let visible = self.chats[active].1.sidebar_visible();
+        if narrow && !self.narrow && visible {
+            self.chats[active].1.toggle_sidebar();
+            self.stepped_aside = true;
+        } else if !narrow && self.narrow && self.stepped_aside && !visible {
+            self.chats[active].1.toggle_sidebar();
+        }
+        if !narrow {
+            self.stepped_aside = false;
+        }
+        self.narrow = narrow;
         let mut selected = None;
         let mut closed = None;
         let mut added = false;
@@ -426,37 +454,34 @@ impl eframe::App for Workspace {
             forward: self.step_target(Step::Forward).is_some(),
         };
         let step = self.chats[active].1.top_bar_with_menu(ui, steps, |ui| {
-            if ui.button("New chat    ⌘N").clicked() {
+            if menu::item(ui, Some(Icon::Plus), "New chat", "⌘N", false).clicked() {
                 added = true;
-                ui.close();
             }
             if chats.len() > 1 {
-                ui.separator();
+                menu::separator(ui);
+                menu::title(ui, "Open chats");
                 for (id, label, running, agent_id) in &chats {
                     let label = format!("{}{}", if *running { "● " } else { "" }, label);
-                    if ui
-                        .selectable_label(*id == active_id, label)
+                    if menu::item(ui, None, &label, "", *id == active_id)
                         .on_hover_text(agent_id)
                         .clicked()
                     {
                         selected = Some(*id);
-                        ui.close();
                     }
                 }
-                if ui.button("Close current chat").clicked() {
+                if menu::danger_item(ui, Some(Icon::Close), "Close current chat").clicked() {
                     closed = Some(active_id);
-                    ui.close();
                 }
             }
-            ui.separator();
+            menu::separator(ui);
+            menu::title(ui, "Layout");
             for (value, label) in [
                 (Split::Off, "Single pane"),
                 (Split::Columns, "Side by side"),
                 (Split::Rows, "Top and bottom"),
             ] {
-                if ui.selectable_label(split == value, label).clicked() {
+                if menu::item(ui, None, label, "", split == value).clicked() {
                     split = value;
-                    ui.close();
                 }
             }
         });

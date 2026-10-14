@@ -9,7 +9,7 @@ use eframe::egui::{self, Ui};
 use super::rows::{self, FIELD_WIDTH, Filter};
 use super::{Action, Form, Saved};
 use crate::settings::{Provider, secrets};
-use crate::theme::space;
+use crate::views::menu::{self, Opens};
 
 /// How long what was read about the ChatGPT sign-in is believed.
 const SIGN_IN_FRESH: Duration = Duration::from_secs(2);
@@ -17,28 +17,24 @@ const SIGN_IN_FRESH: Duration = Duration::from_secs(2);
 pub fn show(ui: &mut Ui, form: &mut Form, filter: &Filter) -> Option<Action> {
     let before = form.draft.provider;
 
-    rows::block(
-        ui,
-        filter,
-        "Model provider",
-        "",
-        |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(space::XS, space::XS);
+    rows::row(ui, filter, "Model provider", "", |ui| {
+        let current = form.draft.provider;
 
-                for provider in Provider::ALL {
-                    let selected = form.draft.provider == provider;
+        let (_, chosen) = menu::dropdown(ui, None, current.label(), false, Opens::DownLeft, |ui| {
+            Provider::ALL.into_iter().find(|provider| {
+                menu::item(ui, None, provider.label(), "", *provider == current).clicked()
+            })
+        });
 
-                    if rows::choice(ui, provider.label(), selected).clicked() && !selected {
-                        // What was typed for the one being left is kept.
-                        form.read_models();
+        if let Some(Some(provider)) = chosen
+            && provider != current
+        {
+            // What was typed for the one being left is kept.
+            form.read_models();
 
-                        form.draft.provider = provider;
-                    }
-                }
-            });
-        },
-    );
+            form.draft.provider = provider;
+        }
+    });
 
     let provider = form.draft.provider;
 

@@ -176,8 +176,7 @@ pub fn mirror(chat: &str, update: &Update) {
             summary: approval.request.summary.clone(),
         },
 
-        Update::BrainInspection(_)
-        | Update::Ready(_)
+        Update::Ready(_)
         | Update::Unavailable(_)
         | Update::Logging(_)
         | Update::Living(_)

@@ -16,24 +16,13 @@ pub fn show(
     let opened = rows::row(
         ui,
         filter,
-        "Memory space",
+        "Brain network",
         &format!(
-            "What Cortex remembers, drawn as a brain: {} earlier tasks so far.",
+            "The one brain shared by chat, code and trading, drawn live: neurons, dendrites, \
+             synapses, taught memories and what it is curious about. The agent also \
+             remembers {} earlier tasks.",
             workspace.memories
         ),
-        |ui| ui.button("Open").clicked(),
-    );
-
-    if opened == Some(true) {
-        action = Some(Action::OpenMemory);
-    }
-
-    let opened = rows::row(
-        ui,
-        filter,
-        "Living network",
-        "The dendritic network drawn as it is, growing and rewiring as it watches runs. \
-         Needs the Dendritic network or the Living network capability.",
         |ui| ui.button("Open").clicked(),
     );
 

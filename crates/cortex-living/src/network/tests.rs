@@ -483,3 +483,71 @@ fn a_network_saved_before_dendrites_keeps_what_it_learned() {
 
     assert!(!saved.contains("\"out\""));
 }
+
+#[test]
+fn dreaming_rehearses_taught_memories_and_grows_cells_with_the_vocabulary() {
+    let mut network = Network::new();
+    let lesson = Lesson {
+        text: "Say hello when you meet someone.".into(),
+        examples: vec![crate::tutoring::Example {
+            question: "How do you greet someone?".into(),
+            answer: "Hello!".into(),
+        }],
+    };
+    network.teach("lesson-1", "teacher", &lesson, "test").unwrap();
+    let before = network.snapshot();
+    assert_eq!(before.cells.len(), 64);
+    assert_eq!(before.memories.len(), 1);
+
+    assert!(network.dream().is_some());
+    assert_eq!(network.snapshot().language.dreams, 1);
+
+    // A large vocabulary needs more cells to tell its words apart.
+    let words: Vec<String> = (0..400).map(|at| format!("word{at}")).collect();
+    for chunk in words.chunks(50) {
+        network.hear_text("user", &chunk.join(" "));
+    }
+    network.dream();
+    let grown = network.snapshot();
+    assert!(grown.cells.len() > 64, "{}", grown.cells.len());
+    assert_eq!(grown.language.cells_grown as usize, grown.cells.len() - 64);
+    assert!(network.is_sound());
+
+    let restored: Network = serde_json::from_value(serde_json::to_value(&network).unwrap()).unwrap();
+    assert_eq!(restored.snapshot().cells.len(), grown.cells.len());
+    assert!(restored.is_sound());
+}
+
+#[test]
+fn unused_word_connections_fade_and_a_word_neuron_left_unconnected_is_removed() {
+    let mut network = Network::new();
+    network.hear_text("user", "zebras gallop");
+    assert!(network.knows("language word: zebras"));
+    let wired = network.meters().synapses;
+    assert!(wired > 0);
+
+    // Nothing rehearses them: no episodes or memories to dream of.
+    network.language = Language::default();
+    for _ in 0..6_000 {
+        network.fade_words(WORD_FADING);
+        network.moment += 1;
+    }
+    network.count();
+
+    assert!(!network.knows("language word: zebras"));
+    assert!(!network.knows("language word: gallop"));
+    assert!(network.meters().removed >= 2);
+    assert!(network.meters().disconnected >= wired as u64);
+}
+
+#[test]
+fn it_is_curious_about_what_it_could_not_answer_and_words_it_keeps_meeting() {
+    let mut network = Network::new();
+    network.answer("me", "What is a quokka?", false);
+    for _ in 0..3 {
+        network.hear_text("user", "the telescope shows planets");
+    }
+    let curious = network.snapshot().curious;
+    assert_eq!(curious[0], "What is a quokka?");
+    assert!(curious.iter().any(|c| c.contains("telescope")), "{curious:?}");
+}

@@ -6,6 +6,7 @@
 //! APIs, and lasts a day. The data endpoints also need Dhan's data plan
 //! on the account; without it they answer with error 806.
 
+pub mod depth;
 pub mod feed;
 pub mod instruments;
 
@@ -200,7 +201,12 @@ fn refusal(status: u16, body: &str) -> DhanError {
     let text = match code.as_deref().and_then(explain) {
         Some(explained) => explained.to_string(),
         None => match (status, message) {
-            (401 | 403, _) => "Dhan refused the client ID or access token.".to_string(),
+            (401 | 403, Some(message)) => {
+                format!("Dhan refused the client ID or access token: {message}")
+            }
+            (401 | 403, None) => format!(
+                "Dhan refused the client ID or access token ({status}). Make a new token on web.dhan.co."
+            ),
             (_, Some(message)) => format!("Dhan said: {message}"),
             _ => format!("Dhan answered {status}."),
         },

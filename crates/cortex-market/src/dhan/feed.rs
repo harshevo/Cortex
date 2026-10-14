@@ -19,6 +19,13 @@ use crate::clock;
 const SUBSCRIBE_FULL: u8 = 21;
 const SUBSCRIBE_TICKER: u8 = 15;
 const DISCONNECT: u8 = 12;
+pub(crate) fn connection_budget() -> std::sync::Arc<tokio::sync::Semaphore> {
+    static BUDGET: std::sync::OnceLock<std::sync::Arc<tokio::sync::Semaphore>> =
+        std::sync::OnceLock::new();
+    BUDGET
+        .get_or_init(|| std::sync::Arc::new(tokio::sync::Semaphore::new(5)))
+        .clone()
+}
 
 /// One trade or change, as the feed sent it.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -213,6 +220,7 @@ pub async fn watch(
     mut stop: watch::Receiver<bool>,
     news: impl Fn(FeedNews) + Send + Sync,
 ) {
+    let _permit = tokio::select! {permit=connection_budget().acquire_owned()=>permit.ok(),_=stop.changed()=>return};
     let mut wait = 2u64;
 
     loop {

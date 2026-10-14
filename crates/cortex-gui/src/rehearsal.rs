@@ -48,6 +48,10 @@ impl Rehearsal {
         self.args.open_memory
     }
 
+    pub fn opens_insights(&self) -> bool {
+        self.args.open_insights
+    }
+
     pub fn opens_living(&self) -> bool {
         self.args.open_living
     }
@@ -63,10 +67,6 @@ impl Rehearsal {
 
     pub fn opens_remote(&self) -> bool {
         self.args.open_remote
-    }
-
-    pub fn selects_newest(&self) -> bool {
-        self.args.select_newest
     }
 
     /// The instruction to send on opening. Yields it once.

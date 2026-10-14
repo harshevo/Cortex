@@ -6,20 +6,23 @@ use cortex_market::market::time_label;
 use cortex_market::{Brain, Market, Snapshot, Source, Tally, Tone, clock};
 use eframe::egui::{self, Align, Color32, CornerRadius, Layout, RichText, Sense, Ui, vec2};
 
-use super::format;
+use super::{format, widgets};
 use super::panel::tone_colour;
-use crate::theme::{self, palette, space};
+use crate::theme::{self, palette};
 
-const ROW: f32 = 26.0;
+const ROW: f32 = 32.0;
+
+/// Each column is at least this wide; narrower, the table scrolls.
+const MIN_COLUMN: f32 = 72.0;
 
 /// One cell: its text and colour.
-struct Cell {
+pub struct Cell {
     text: String,
     colour: Color32,
     strong: bool,
 }
 
-fn cell(text: impl Into<String>) -> Cell {
+pub fn cell(text: impl Into<String>) -> Cell {
     Cell {
         text: text.into(),
         colour: palette::text(),
@@ -27,7 +30,7 @@ fn cell(text: impl Into<String>) -> Cell {
     }
 }
 
-fn tinted(text: impl Into<String>, colour: Color32) -> Cell {
+pub fn tinted(text: impl Into<String>, colour: Color32) -> Cell {
     Cell {
         text: text.into(),
         colour,
@@ -35,7 +38,7 @@ fn tinted(text: impl Into<String>, colour: Color32) -> Cell {
     }
 }
 
-fn strong(text: impl Into<String>, colour: Color32) -> Cell {
+pub fn strong(text: impl Into<String>, colour: Color32) -> Cell {
     Cell {
         text: text.into(),
         colour,
@@ -45,7 +48,7 @@ fn strong(text: impl Into<String>, colour: Color32) -> Cell {
 
 /// A table whose columns share the width by the given weights. The first
 /// column is aligned left, the rest right, as numbers are.
-fn table(ui: &mut Ui, weights: &[f32], header: &[&str], rows: Vec<Vec<Cell>>) {
+pub fn table(ui: &mut Ui, weights: &[f32], header: &[&str], rows: Vec<Vec<Cell>>) {
     table_with_text(ui, weights, header, rows, 1);
 }
 
@@ -57,86 +60,128 @@ fn table_with_text(
     rows: Vec<Vec<Cell>>,
     words: usize,
 ) {
-    let width = ui.available_width();
+    let width = (ui.available_width() - 2.0).max(weights.len() as f32 * MIN_COLUMN + 32.0);
     let total: f32 = weights.iter().sum();
     let widths: Vec<f32> = weights
         .iter()
-        .map(|weight| weight / total * (width - 16.0))
+        .map(|weight| weight / total * (width - 32.0))
         .collect();
 
-    let draw = |ui: &mut Ui, cells: &[Cell], header: bool, stripe: bool| {
-        let (rect, _) = ui.allocate_exact_size(vec2(width, ROW), Sense::hover());
+    let draw = |ui: &mut Ui, cells: &[Cell], header: bool, last: bool| {
+        let galleys: Vec<_> = cells
+            .iter()
+            .enumerate()
+            .map(|(at, cell)| {
+                let column = widths.get(at).copied().unwrap_or(60.0);
+                let font = if header {
+                    theme::strong(11.5)
+                } else if cell.strong {
+                    theme::strong(13.0)
+                } else {
+                    egui::FontId::proportional(13.0)
+                };
+                let colour = if header {
+                    palette::text_muted()
+                } else {
+                    cell.colour
+                };
 
-        if stripe {
+                ui.painter()
+                    .layout(cell.text.clone(), font, colour, column - 12.0)
+            })
+            .collect();
+
+        let tallest = galleys
+            .iter()
+            .map(|galley| galley.size().y)
+            .fold(0.0, f32::max);
+        let (rect, response) =
+            ui.allocate_exact_size(vec2(width, ROW.max(tallest + 16.0)), Sense::hover());
+
+        if !header && response.hovered() {
             ui.painter().rect_filled(
-                rect,
-                CornerRadius::same(theme::radius::S),
-                palette::surface().gamma_multiply(0.7),
+                rect.shrink2(vec2(4.0, 0.0)),
+                CornerRadius::same(theme::radius::M),
+                palette::raised().gamma_multiply(0.6),
             );
         }
 
-        let mut left = rect.left() + 8.0;
+        if !last {
+            ui.painter().hline(
+                rect.x_range().shrink(8.0),
+                rect.bottom(),
+                egui::Stroke::new(
+                    1.0,
+                    palette::border().gamma_multiply(if header { 1.0 } else { 0.5 }),
+                ),
+            );
+        }
 
-        for (at, cell) in cells.iter().enumerate() {
+        let mut left = rect.left() + 16.0;
+
+        for (at, galley) in galleys.into_iter().enumerate() {
             let column = widths.get(at).copied().unwrap_or(60.0);
-            let font = if header {
-                theme::strong(11.5)
-            } else if cell.strong {
-                theme::strong(12.5)
-            } else {
-                egui::FontId::proportional(12.5)
-            };
-
-            let colour = if header {
-                palette::text_muted()
-            } else {
-                cell.colour
-            };
-            let galley = ui
-                .painter()
-                .layout(cell.text.clone(), font, colour, column - 8.0);
-
             let x = if at < words {
                 left
             } else {
-                left + column - galley.size().x - 4.0
+                left + column - galley.size().x - 8.0
             };
 
             ui.painter().galley(
                 egui::pos2(x, rect.center().y - galley.size().y / 2.0),
                 galley,
-                colour,
+                palette::text(),
             );
 
             left += column;
         }
     };
 
-    let header_cells: Vec<Cell> = header.iter().map(|name| cell(*name)).collect();
+    let header_cells: Vec<Cell> = header.iter().map(|name| cell(name.to_uppercase())).collect();
 
-    draw(ui, &header_cells, true, false);
+    egui::Frame::new()
+        .fill(palette::surface())
+        .stroke(egui::Stroke::new(1.0, palette::border()))
+        .corner_radius(CornerRadius::same(12))
+        .inner_margin(egui::Margin::symmetric(0, 4))
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            ui.set_width(width);
 
-    for (at, row) in rows.iter().enumerate() {
-        draw(ui, row, false, at % 2 == 0);
-    }
+            draw(ui, &header_cells, true, rows.is_empty());
+
+            for (at, row) in rows.iter().enumerate() {
+                draw(ui, row, false, at + 1 == rows.len());
+            }
+        });
 }
 
-fn title(ui: &mut Ui, text: &str, detail: &str) {
-    ui.add_space(space::M);
+pub fn title(ui: &mut Ui, text: &str, detail: &str) -> egui::Response {
+    ui.add_space(24.0);
 
-    ui.horizontal(|ui| {
-        ui.label(RichText::new(text).font(theme::strong(15.0)));
+    let response = ui
+        .horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 12.0;
+            ui.label(RichText::new(text).font(theme::strong(16.0)));
 
-        if !detail.is_empty() {
-            ui.label(
-                RichText::new(detail)
-                    .font(theme::small())
-                    .color(palette::text_muted()),
-            );
-        }
-    });
+            if !detail.is_empty() {
+                ui.label(
+                    RichText::new(detail)
+                        .font(theme::small())
+                        .color(palette::text_muted()),
+                );
+            }
+        })
+        .response;
 
-    ui.add_space(space::XS);
+    ui.add_space(12.0);
+
+    response
+}
+
+/// A quiet line for an empty state.
+fn quiet(ui: &mut Ui, text: &str) {
+    ui.label(RichText::new(text).color(palette::text_muted()));
 }
 
 fn up_down(change: f64) -> Color32 {
@@ -153,23 +198,15 @@ pub fn forecast(ui: &mut Ui, snapshot: &Snapshot) {
     let intraday = snapshot.interval.is_intraday();
     let brain = snapshot.brain;
 
-    let using = match brain {
-        Brain::Llm => format!(
-            "LLM · {}",
-            snapshot.llm.model.as_deref().unwrap_or("not set up")
-        ),
-        _ => format!("{} · {} network", brain.short(), brain.name()),
-    };
-
-    title(ui, "Next 10 candles", &using);
+    title(ui, "Next 10 candles", "");
 
     if snapshot.rows.is_empty() {
-        ui.label(
-            RichText::new(match brain {
+        quiet(
+            ui,
+            match brain {
                 Brain::Llm => "Ask the model from the Chart tab.",
                 _ => "The networks are training, or there are too few candles.",
-            })
-            .color(palette::text_muted()),
+            },
         );
     } else {
         let has_volume = snapshot.rows.iter().any(|row| row.volume > 0.0);
@@ -242,7 +279,7 @@ pub fn forecast(ui: &mut Ui, snapshot: &Snapshot) {
         return;
     };
 
-    title(ui, "Plan", "");
+    title(ui, "Plan", "Rules on the forecast and levels · not advice");
 
     ui.horizontal(|ui| {
         egui::Frame::new()
@@ -264,7 +301,7 @@ pub fn forecast(ui: &mut Ui, snapshot: &Snapshot) {
         );
     });
 
-    ui.add_space(space::XS);
+    ui.add_space(8.0);
 
     let rows = plan
         .scenarios
@@ -298,13 +335,6 @@ pub fn forecast(ui: &mut Ui, snapshot: &Snapshot) {
         rows,
         3,
     );
-
-    ui.add_space(space::S);
-    ui.label(
-        RichText::new("Rules applied to the forecast and levels. Not advice; see Outcomes for how forecasts have done.")
-            .font(theme::small())
-            .color(palette::text_muted()),
-    );
 }
 
 /// The share right as text, with how many.
@@ -327,13 +357,10 @@ fn record_text(tally: Option<&Tally>) -> (String, Color32) {
 pub fn outcomes(ui: &mut Ui, market: &Market, snapshot: &Snapshot) {
     let live = snapshot.source.as_ref().is_some_and(Source::is_live);
 
-    title(ui, "How the forecasts came out", "");
+    title(ui, "By network", "");
 
     if !live {
-        ui.label(
-            RichText::new("Outcomes are recorded for live Dhan instruments: each closed candle's forecasts are checked when their candles close.")
-                .color(palette::text_muted()),
-        );
+        quiet(ui, "Outcomes are recorded for live Dhan instruments only.");
 
         return;
     }
@@ -395,10 +422,7 @@ pub fn outcomes(ui: &mut Ui, market: &Market, snapshot: &Snapshot) {
     }
 
     if rows.is_empty() {
-        ui.label(
-            RichText::new("Nothing recorded yet: forecasts are written down as candles close.")
-                .color(palette::text_muted()),
-        );
+        quiet(ui, "Nothing recorded yet: forecasts are checked as candles close.");
 
         return;
     }
@@ -418,7 +442,35 @@ pub fn outcomes(ui: &mut Ui, market: &Market, snapshot: &Snapshot) {
         rows,
     );
 
-    title(ui, "Each forecast", "newest first");
+    ui.add_space(24.0);
+
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 12.0;
+        ui.label(RichText::new("Each forecast").font(theme::strong(16.0)));
+        ui.label(
+            RichText::new("newest first")
+                .font(theme::small())
+                .color(palette::text_muted()),
+        );
+
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.add_space(4.0);
+
+            if widgets::button(
+                ui,
+                "Clear record",
+                Some(widgets::Glyph::App(crate::views::icons::Icon::Trash)),
+                widgets::Kind::Ghost,
+            )
+            .on_hover_text("Clear this instrument's record of forecasts")
+            .clicked()
+            {
+                market.clear_outcomes(false);
+            }
+        });
+    });
+
+    ui.add_space(12.0);
 
     let intraday = snapshot.interval.is_intraday();
 
@@ -484,22 +536,13 @@ pub fn outcomes(ui: &mut Ui, market: &Market, snapshot: &Snapshot) {
         rows,
     );
 
-    ui.add_space(space::M);
-
-    if ui.small_button("Clear this instrument's record").clicked() {
-        market.clear_outcomes(false);
-    }
-
     let _ = clock::now_ms;
 }
 
 pub fn metrics(ui: &mut Ui, market: &Market, snapshot: &Snapshot) {
     let Some(report) = &snapshot.report else {
-        title(ui, "Metrics", "");
-        ui.label(
-            RichText::new("The networks have not been trained on this series yet.")
-                .color(palette::text_muted()),
-        );
+        title(ui, "Held-out metrics", "");
+        quiet(ui, "The networks have not been trained on this series yet.");
 
         return;
     };
@@ -514,7 +557,8 @@ pub fn metrics(ui: &mut Ui, market: &Market, snapshot: &Snapshot) {
             report.bars - report.train_bars,
             report.total_ms
         ),
-    );
+    )
+    .on_hover_text("Direction: share called right, with its 99% range — green only when the whole range is above 50%. Skill above 0 beats predicting no change. A calibrated band holds about 80%.");
 
     // Direction called right on held-out candles, per network and horizon.
     let score_text = |score: Option<&StepScore>| -> (String, Color32) {
@@ -604,22 +648,18 @@ pub fn metrics(ui: &mut Ui, market: &Market, snapshot: &Snapshot) {
         rows,
     );
 
-    ui.label(
-        RichText::new("Direction: share called right, with its 99% range — green only when the whole range is above 50%. Skill above 0 beats predicting no change. A calibrated band holds about 80%.")
-            .font(theme::small())
-            .color(palette::text_muted()),
-    );
-
     title(ui, "Each network", "");
 
     let width = ui.available_width();
     let columns = if width > 1100.0 { 4 } else { 2 };
-    let card_width = (width - space::M * (columns - 1) as f32) / columns as f32;
+    let card_width = (width - 16.0 * (columns - 1) as f32) / columns as f32;
 
     let cards: Vec<&NetMetrics> = report.metrics.iter().collect();
 
     for chunk in cards.chunks(columns) {
         ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = 16.0;
+
             for metrics in chunk {
                 ui.allocate_ui_with_layout(
                     vec2(card_width, 0.0),
@@ -631,13 +671,13 @@ pub fn metrics(ui: &mut Ui, market: &Market, snapshot: &Snapshot) {
             }
         });
 
-        ui.add_space(space::M);
+        ui.add_space(16.0);
     }
 
     // The language model has no held-out record: only live outcomes.
     let llm = &snapshot.llm;
 
-    theme::card().show(ui, |ui| {
+    widgets::card().show(ui, |ui| {
         ui.set_width(ui.available_width());
 
         ui.horizontal(|ui| {
@@ -669,18 +709,15 @@ pub fn metrics(ui: &mut Ui, market: &Market, snapshot: &Snapshot) {
             palette::text(),
         );
 
-        ui.label(
-            RichText::new("Too slow and costly to score on thousands of held-out candles; judged on live outcomes only.")
-                .font(theme::small())
-                .color(palette::text_muted()),
-        );
-    });
+    })
+    .response
+    .on_hover_text("Too slow and costly to score on thousands of held-out candles; judged on live outcomes only.");
 }
 
 fn network_card(ui: &mut Ui, metrics: &NetMetrics, snapshot: &Snapshot) {
     let brain = Brain::of(metrics.net);
 
-    theme::card().show(ui, |ui| {
+    widgets::card().show(ui, |ui| {
         ui.set_width(ui.available_width());
 
         ui.horizontal(|ui| {
@@ -689,22 +726,18 @@ fn network_card(ui: &mut Ui, metrics: &NetMetrics, snapshot: &Snapshot) {
                     .font(theme::strong(13.0))
                     .color(palette::accent()),
             );
-            ui.label(RichText::new(brain.name()).font(theme::strong(13.0)));
+            ui.label(RichText::new(brain.name()).font(theme::strong(13.0)))
+                .on_hover_text(brain.about());
         });
 
-        ui.label(
-            RichText::new(brain.about())
-                .font(theme::small())
-                .color(palette::text_muted()),
-        );
-        ui.add_space(space::XS);
+        ui.add_space(8.0);
 
         // Direction right at each horizon, as a bar from 30% to 70%.
         for score in &metrics.steps {
             accuracy_bar(ui, score);
         }
 
-        ui.add_space(space::XS);
+        ui.add_space(8.0);
 
         let row = super::panel::row;
 
@@ -750,7 +783,7 @@ fn network_card(ui: &mut Ui, metrics: &NetMetrics, snapshot: &Snapshot) {
         }
 
         if metrics.losses.len() > 1 {
-            ui.add_space(space::XS);
+            ui.add_space(8.0);
             loss_curve(ui, &metrics.losses);
         }
     });

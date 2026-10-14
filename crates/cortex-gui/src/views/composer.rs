@@ -7,10 +7,11 @@ use eframe::egui::{
 use cortex_core::Image;
 
 use super::icons::{self, Icon};
+use super::menu::{self, Opens};
 use crate::attachment::{self, Attachment};
 use crate::theme::{self, palette};
 
-const BUTTON_SIZE: f32 = 34.0;
+const BUTTON_SIZE: f32 = crate::theme::control::LARGE;
 
 /// Room kept for the "Continue" button when it is shown.
 const CONTINUE_WIDTH: f32 = 84.0;
@@ -106,7 +107,7 @@ pub fn show(
 
     for message in queued {
         ui.horizontal(|ui| {
-            ui.add_space(14.0);
+            ui.add_space(crate::theme::space::L);
 
             ui.label(
                 RichText::new("Queued")
@@ -135,7 +136,7 @@ pub fn show(
 
             ui.horizontal(|ui| {
                 if takes_pictures
-                    && icons::button(ui, Icon::Plus, "Attach pictures", false).clicked()
+                    && icons::button(ui, Icon::Plus, "Attach pictures, or drop them here", false).clicked()
                 {
                     let chosen = rfd::FileDialog::new()
                         .set_title("Attach pictures")
@@ -327,9 +328,8 @@ pub enum PlaceAction {
     AddProject,
 }
 
-/// The row above the box: where the agent runs, the folder it works in
-/// (which opens the list of projects to switch to), and a button that
-/// adds a project.
+/// The row above the box: the folder the agent works in. It opens, upward,
+/// the projects to switch to and the way to add one.
 pub fn place_row(
     ui: &mut Ui,
     place: &std::path::Path,
@@ -350,97 +350,43 @@ pub fn place_row(
     };
 
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 6.0;
+        let (project, _) = menu::dropdown(
+            ui,
+            Some(Icon::Folder),
+            &name(place),
+            true,
+            Opens::Up,
+            |ui| {
+                menu::title(ui, "Work in");
 
-        chip(ui, Some(Icon::Laptop), "Local", false)
-            .on_hover_text("Cortex reads, edits and runs commands on this machine.");
+                for folder in projects
+                    .iter()
+                    .map(std::path::PathBuf::as_path)
+                    .chain([scratch])
+                {
+                    let selected = folder == place;
 
-        let project = chip(ui, Some(Icon::Folder), &name(place), true)
-            .on_hover_text(place.display().to_string());
-
-        egui::Popup::menu(&project).show(|ui| {
-            ui.set_min_width(200.0);
-
-            for folder in projects
-                .iter()
-                .map(std::path::PathBuf::as_path)
-                .chain([scratch])
-            {
-                let selected = folder == place;
-
-                if ui.selectable_label(selected, name(folder)).clicked() && !selected {
-                    action = Some(PlaceAction::Open(folder.to_path_buf()));
+                    if menu::item(ui, Some(Icon::Folder), &name(folder), "", selected).clicked()
+                        && !selected
+                    {
+                        action = Some(PlaceAction::Open(folder.to_path_buf()));
+                    }
                 }
-            }
-        });
 
-        if chip(ui, Some(Icon::FolderPlus), "", true)
-            .on_hover_text("Add a project folder")
-            .clicked()
-        {
-            action = Some(PlaceAction::AddProject);
-        }
+                menu::separator(ui);
+
+                if menu::item(ui, Some(Icon::FolderPlus), "Add project folder…", "", false)
+                    .clicked()
+                {
+                    action = Some(PlaceAction::AddProject);
+                }
+            },
+        );
+
+        project.on_hover_text(format!("Runs on this machine, in {}", place.display()));
     });
 
-    ui.add_space(2.0);
-
     action
-}
-
-/// A small rounded button with an icon and, if it is not empty, a label.
-/// One that is not `clickable` only says something.
-fn chip(ui: &mut Ui, icon: Option<Icon>, label: &str, clickable: bool) -> egui::Response {
-    const HEIGHT: f32 = 26.0;
-
-    let text = ui.painter().layout_no_wrap(
-        label.to_string(),
-        egui::FontId::proportional(12.5),
-        palette::text_secondary(),
-    );
-
-    let icon_width = if icon.is_some() { 16.0 } else { 0.0 };
-    let gap = if icon.is_some() && !label.is_empty() {
-        6.0
-    } else {
-        0.0
-    };
-    let width = 9.0 + icon_width + gap + text.size().x + 9.0;
-
-    let sense = if clickable {
-        Sense::click()
-    } else {
-        Sense::hover()
-    };
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, HEIGHT), sense);
-
-    let fill = if clickable && response.hovered() {
-        palette::raised()
-    } else {
-        palette::surface()
-    };
-
-    ui.painter()
-        .rect_filled(rect, CornerRadius::same(crate::theme::radius::M), fill);
-
-    if let Some(icon) = icon {
-        icons::paint(
-            ui,
-            egui::pos2(rect.left() + 9.0 + icon_width / 2.0, rect.center().y),
-            icon,
-            palette::text_secondary(),
-        );
-    }
-
-    ui.painter().galley(
-        egui::pos2(
-            rect.left() + 9.0 + icon_width + gap,
-            rect.center().y - text.size().y / 2.0,
-        ),
-        text,
-        palette::text_secondary(),
-    );
-
-    response
 }
 
 /// Reads the pictures in `paths` into `attachments`. Returns what to tell

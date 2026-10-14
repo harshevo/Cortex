@@ -8,8 +8,10 @@ use eframe::egui::{self, Color32, CornerRadius, FontId, Margin, Stroke, TextStyl
 /// Corner radius of cards and bubbles.
 pub const CARD_RADIUS: u8 = radius::L;
 
-/// The steps every gap and padding is taken from, in points. Keeping to
-/// them is what makes rows, cards and columns line up across views.
+/// The steps every gap and padding is taken from, in points: an 8-point
+/// grid, with 2 and 4 for hairlines and the insides of small controls.
+/// Keeping to them is what makes rows, cards and columns line up across
+/// views.
 pub mod space {
     pub const XXS: f32 = 2.0;
     pub const XS: f32 = 4.0;
@@ -17,6 +19,20 @@ pub mod space {
     pub const M: f32 = 12.0;
     pub const L: f32 = 16.0;
     pub const XL: f32 = 24.0;
+    pub const XXL: f32 = 32.0;
+}
+
+/// Heights of the things that are pressed, so that a row of controls
+/// shares one centre line.
+pub mod control {
+    /// Small icon buttons and the chips in bars.
+    pub const SMALL: f32 = 24.0;
+
+    /// Ordinary buttons, fields and menu rows.
+    pub const MEDIUM: f32 = 28.0;
+
+    /// The main action of a page.
+    pub const LARGE: f32 = 36.0;
 }
 
 /// Corner radii, smallest to largest: marks, chips, rows and buttons,
@@ -89,8 +105,10 @@ pub fn restyle(context: &egui::Context) {
         .into();
 
         style.spacing.item_spacing = egui::vec2(space::S, space::S);
-        style.spacing.button_padding = egui::vec2(10.0, 5.0);
-        style.spacing.menu_margin = Margin::same(6);
+        style.spacing.button_padding = egui::vec2(space::M, space::XS + 1.0);
+        style.spacing.interact_size.y = control::SMALL;
+        style.spacing.menu_margin = Margin::same(space::XS as i8 + 2);
+        style.spacing.menu_spacing = space::XS;
         style.spacing.scroll.bar_width = 6.0;
         style.spacing.scroll.floating = true;
         style.interaction.selectable_labels = false;
@@ -128,7 +146,7 @@ pub fn restyle(context: &egui::Context) {
         // Buttons and fields get a quiet outline, so they read as things
         // to press and type in against the dark surface.
         visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, palette::border());
-        visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, palette::text_muted());
+        visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, palette::border());
 
         // egui draws a widget that holds the keyboard as "active", so
         // this is the focus ring of every button and switch.
@@ -136,6 +154,17 @@ pub fn restyle(context: &egui::Context) {
 
         visuals.window_corner_radius = CornerRadius::same(radius::L);
         visuals.menu_corner_radius = CornerRadius::same(radius::L);
+
+        // Menus and floating windows lift off the page with a soft
+        // shadow rather than a hard edge.
+        let shadow = egui::Shadow {
+            offset: [0, 6],
+            blur: 18,
+            spread: 0,
+            color: Color32::from_black_alpha(if dark { 90 } else { 28 }),
+        };
+        visuals.popup_shadow = shadow;
+        visuals.window_shadow = shadow;
 
         visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, palette::border());
         visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, palette::text_secondary());
@@ -148,7 +177,33 @@ pub fn card() -> egui::Frame {
         .fill(palette::surface())
         .stroke(Stroke::new(1.0, palette::border()))
         .corner_radius(CornerRadius::same(CARD_RADIUS))
-        .inner_margin(Margin::symmetric(12, 9))
+        .inner_margin(Margin::symmetric(space::M as i8, space::S as i8 + 2))
+}
+
+/// The page's main action: filled with the accent.
+pub fn primary_button(label: &str) -> egui::Button<'static> {
+    egui::Button::new(
+        egui::RichText::new(label.to_string())
+            .font(strong(size::UI))
+            .color(palette::sunken()),
+    )
+    .fill(palette::accent())
+    .stroke(Stroke::NONE)
+    .corner_radius(CornerRadius::same(radius::M))
+    .min_size(egui::vec2(0.0, control::MEDIUM))
+}
+
+/// A quiet bordered button for everything that is not the main action.
+pub fn secondary_button(label: &str) -> egui::Button<'static> {
+    egui::Button::new(
+        egui::RichText::new(label.to_string())
+            .font(ui())
+            .color(palette::text()),
+    )
+    .fill(palette::surface())
+    .stroke(Stroke::new(1.0, palette::border()))
+    .corner_radius(CornerRadius::same(radius::M))
+    .min_size(egui::vec2(0.0, control::MEDIUM))
 }
 
 /// The outline of whatever holds the keyboard.

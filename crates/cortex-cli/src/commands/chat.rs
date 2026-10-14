@@ -10,13 +10,15 @@ use crate::commands::skills;
 use crate::session;
 
 pub async fn execute(args: ChatArgs) -> Result<ExitCode> {
-    let agent = session::build_agent(&args.session).await?;
+    let mut agent = None;
+    #[cfg(unix)]
+    let mut brain = crate::brain_commands::Chat::default();
 
     let mut conversation = Vec::new();
 
     println!(
         "Cortex. Type an instruction, `/skills` to list skills, `/compact` to shorten a long \
-         conversation, or `exit` to leave."
+         conversation, `/teach snn+dann` to teach, `/brain` to talk to the learner, or `exit` to leave."
     );
 
     loop {
@@ -34,6 +36,16 @@ pub async fn execute(args: ChatArgs) -> Result<ExitCode> {
             break;
         }
 
+        #[cfg(unix)]
+        match brain.handle(instruction, &args.session.model, "terminal-brain-chat").await {
+            Ok(Some(reply)) => {
+                println!("{}", reply.text);
+                continue;
+            }
+            Err(error) => { eprintln!("error: {error}"); continue; }
+            Ok(None) => {}
+        }
+
         if matches!(instruction, "/skills" | "/help") {
             print!("{}", skills::list(&args.session.dir));
 
@@ -41,14 +53,20 @@ pub async fn execute(args: ChatArgs) -> Result<ExitCode> {
         }
 
         if instruction == "/compact" {
-            compact(&agent, &mut conversation).await;
+            if let Some(agent) = &agent { compact(agent, &mut conversation).await; }
 
             continue;
         }
 
         // A failed request should not end the session; show it and let the
         // user try again.
-        if let Err(error) = agent.run(&mut conversation, instruction).await {
+        if agent.is_none() {
+            match session::build_agent(&args.session).await {
+                Ok(built) => agent = Some(built),
+                Err(error) => { eprintln!("error: {error}"); continue; }
+            }
+        }
+        if let Err(error) = agent.as_ref().unwrap().run(&mut conversation, instruction).await {
             eprintln!("error: {error}");
         }
     }

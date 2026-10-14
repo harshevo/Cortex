@@ -5,6 +5,8 @@
 //! with `--with` behaves identically in both.
 
 pub mod approver;
+#[cfg(unix)]
+pub mod brain_commands;
 pub mod args;
 pub mod commands;
 pub mod console;

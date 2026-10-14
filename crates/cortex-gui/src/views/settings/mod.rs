@@ -84,20 +84,6 @@ impl Section {
             Self::About => "About",
         }
     }
-
-    /// One line under the section's title.
-    fn summary(self) -> &'static str {
-        match self {
-            Self::Provider => "Where the model runs, and how Cortex signs in to it.",
-            Self::Models => "The models offered under the message box.",
-            Self::Appearance => "The colours of the app, and what the conversation shows.",
-            Self::Permissions => "What the agent may do without asking, and for how long.",
-            Self::Capabilities => "The tools and ways of working your agents can use.",
-            Self::Workspace => "Memory, and getting a project ready.",
-            Self::Remote => "Follow and drive your chats from a phone.",
-            Self::About => "This copy of Cortex, and its keys.",
-        }
-    }
 }
 
 /// Whether a key is saved for a provider.
@@ -207,7 +193,6 @@ pub enum Action {
     Back,
 
     /// Show the memory space.
-    OpenMemory,
     OpenLiving,
 
     /// Use this colour theme, from now on.
@@ -361,10 +346,10 @@ fn sections(ui: &mut Ui, form: &mut Form) {
         egui::TextEdit::singleline(&mut form.query)
             .hint_text("Search settings")
             .desired_width(ui.available_width())
-            .margin(egui::Margin::symmetric(8, 5)),
+            .margin(egui::Margin::symmetric(10, 6)),
     );
 
-    ui.add_space(space::S);
+    ui.add_space(space::M);
 
     let searching = !form.query.trim().is_empty();
 
@@ -471,9 +456,7 @@ fn content(ui: &mut Ui, form: &mut Form, workspace: &Workspace) -> Option<Action
         ui.add_space(space::XS);
         ui.label(RichText::new(section.title()).font(theme::strong(size::TITLE)));
 
-        caption(ui, section.summary());
-
-        ui.add_space(space::S);
+        ui.add_space(space::XS);
 
         return draw(ui, form, workspace, section, &filter);
     }
@@ -523,9 +506,7 @@ fn draw(
 /// pressed.
 fn apply_row(ui: &mut Ui, form: &mut Form) -> bool {
     ui.horizontal(|ui| {
-        let apply = egui::Button::new(RichText::new("Apply settings").color(palette::sunken()))
-            .min_size(vec2(120.0, 32.0))
-            .fill(palette::accent());
+        let apply = theme::primary_button("Apply settings").min_size(vec2(128.0, 32.0));
 
         let pressed = ui.add(apply).clicked();
 
@@ -653,10 +634,10 @@ mod tests {
 
             assert_eq!(form.section, section);
 
-            // Its one-line summary heads the rows.
+            // Its title heads the rows.
             let (_, output) = frame(&context, &mut form, size, Vec::new());
 
-            assert!(visible(&output, section.summary()).is_some(), "{section:?}");
+            assert!(visible(&output, section.title()).is_some(), "{section:?}");
         }
     }
 
@@ -674,7 +655,7 @@ mod tests {
             let (_, output) = frame(&context, &mut form, size, Vec::new());
 
             assert!(visible(&output, "Apply settings").is_some(), "{section:?}");
-            assert!(visible(&output, section.summary()).is_some(), "{section:?}");
+            assert!(visible(&output, section.title()).is_some(), "{section:?}");
         }
 
         // Narrower still, the list becomes a menu above the rows, and

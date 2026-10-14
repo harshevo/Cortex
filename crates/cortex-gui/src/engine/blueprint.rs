@@ -81,7 +81,19 @@ impl Blueprint {
         let memory_file = location.path.clone();
         let scope = location.scope.clone();
 
-        let setup = features::setup(&model, location).await?;
+        let mut setup = features::setup(&model, location).await?;
+        if demo_project.is_none() {
+            match cortex_market::learning::Learning::shared(
+                &cortex_market::learning::desktop_folder(),
+            ) {
+                Ok(learning) => {
+                    let scoped = learning.scoped(&workspace.root().to_string_lossy());
+                    setup.sinks.push(scoped.clone());
+                    setup.context_sources.push(scoped);
+                }
+                Err(error) => eprintln!("warning: shared experience unavailable: {error}"),
+            }
+        }
 
         model.memory_db = Some(memory_file.clone());
 
@@ -143,7 +155,10 @@ async fn provider_key(launch: &Launch) -> Option<String> {
         .flatten()
 }
 
-pub(crate) fn build_provider(settings: &Settings, api_key: Option<&str>) -> Result<Arc<dyn ModelProvider>> {
+pub(crate) fn build_provider(
+    settings: &Settings,
+    api_key: Option<&str>,
+) -> Result<Arc<dyn ModelProvider>> {
     let current = settings.current();
 
     if current.model.trim().is_empty() {

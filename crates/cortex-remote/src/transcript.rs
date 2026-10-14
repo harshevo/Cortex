@@ -177,7 +177,17 @@ pub struct Session {
 impl Session {
     pub fn apply(&mut self, event: &Event) {
         match event {
-            Event::BrainObserved { .. } => {}
+            Event::BrainObserved { source, detail, .. } => {
+                if source == "snn+dann conversation"
+                    && let Some(text) = detail["text"].as_str()
+                {
+                    if detail["kind"] == "user" {
+                        self.items.push(Item::User { text:text.into(), images:Vec::new() });
+                    } else {
+                        self.items.push(Item::Notice { text:text.into(), tone:Tone::Muted });
+                    }
+                }
+            }
 
             Event::ImagesAttached { images } => {
                 if let Some(Item::User { images: shown, .. }) = self.items.last_mut() {

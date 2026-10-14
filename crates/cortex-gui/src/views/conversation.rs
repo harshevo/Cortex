@@ -1338,22 +1338,11 @@ fn empty_state(ui: &mut Ui) {
                 .font(theme::strong(size::DISPLAY - 2.0)),
         );
 
-        ui.add_space(space::XXS);
+        ui.add_space(space::S);
 
         ui.label(
             RichText::new("Ask a question, explore your code, or give an agent a task.")
                 .color(palette::text_muted()),
-        );
-
-        ui.add_space(space::L);
-
-        ui.label(
-            RichText::new(
-                "Return sends  ·  Shift+Return starts a new line  ·  Up brings back your last \
-                 message  ·  drop pictures to attach them",
-            )
-            .font(theme::small())
-            .color(palette::text_muted()),
         );
     });
 }

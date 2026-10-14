@@ -511,6 +511,25 @@ fn read_out(
 }
 
 impl Forecaster {
+    pub fn is_sound(&self) -> bool {
+        self.cell.is_sound()
+            && self.cell_state.len() == self.cell.shape().units
+            && self.reservoir.is_sound()
+            && self.reservoir.fits(&self.activity)
+            && self.spiking.is_sound()
+            && self.spiking.inputs == self.reservoir.neurons
+            && self.spiking.outputs == OUTPUTS
+            && self.dendritic.is_sound()
+            && self.dendritic.outputs == OUTPUTS
+            && self.scale.mean.len() == OUTPUTS
+            && self.scale.spread.len() == OUTPUTS
+            && self.scale.spread.iter().all(|s| s.is_finite() && *s > 0.)
+            && self.bands.len() == 4
+            && self.bands.iter().all(|b| b.len() == STEPS)
+            && self.latest.iter().all(|v| v.len() == OUTPUTS)
+            && self.gap_ms.is_finite()
+            && self.gap_ms > 0.
+    }
     /// Trains the three networks on the first part of `bars` and measures
     /// them on the rest. `progress` is told a fraction from 0 to 1.
     pub fn train(

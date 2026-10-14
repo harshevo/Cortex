@@ -43,6 +43,7 @@ const SKILL_FILE: &str = "SKILL.md";
 const ARGUMENTS_PLACEHOLDER: &str = "$ARGUMENTS";
 
 const BUILT_IN: &[(&str, &str)] = &[
+    ("teach", include_str!("../skills/teach/SKILL.md")),
     ("browser", include_str!("../skills/browser/SKILL.md")),
     (
         "code-review",

@@ -12,8 +12,8 @@ use crate::format;
 use crate::session::history::PastSession;
 use crate::theme::{self, palette};
 
-const ROW_HEIGHT: f32 = 28.0;
-const FOOTER_HEIGHT: f32 = 40.0;
+const ROW_HEIGHT: f32 = theme::control::MEDIUM + 2.0;
+const FOOTER_HEIGHT: f32 = 44.0;
 
 /// Radius of the mark in front of a session's title.
 const MARK_RADIUS: f32 = 2.0;
@@ -76,16 +76,16 @@ pub fn show(ui: &mut Ui, shelf: &Shelf<'_>, confirming: &mut Option<PathBuf>) ->
     let mut query = ui
         .data(|data| data.get_temp::<String>(search_id))
         .unwrap_or_default();
-    ui.add_space(4.0);
+    ui.add_space(theme::space::XS);
     ui.add(
         egui::TextEdit::singleline(&mut query)
-            .font(egui::FontId::proportional(12.5))
-            .hint_text("Search chats and projects")
+            .font(theme::ui())
+            .hint_text("Search")
             .desired_width(ui.available_width())
-            .margin(egui::vec2(8.0, 5.0)),
+            .margin(egui::vec2(theme::space::M - 2.0, 6.0)),
     );
     ui.data_mut(|data| data.insert_temp(search_id, query.clone()));
-    ui.add_space(8.0);
+    ui.add_space(theme::space::L);
     let query = query.trim().to_lowercase();
     let list_height = (ui.available_height() - FOOTER_HEIGHT).max(0.0);
 
@@ -93,7 +93,7 @@ pub fn show(ui: &mut Ui, shelf: &Shelf<'_>, confirming: &mut Option<PathBuf>) ->
         .auto_shrink(false)
         .max_height(list_height)
         .show(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = 1.0;
+            ui.spacing_mut().item_spacing.y = theme::space::XXS;
 
             action = match shelf.section {
                 Section::Chats => chats(ui, shelf, confirming, &query),
@@ -134,7 +134,7 @@ fn chats(
         .filter(|session| matches_query(&session.title, query))
         .collect();
     if !sessions.is_empty() && matches.is_empty() {
-        hint(ui, "No chats match your search.");
+        hint(ui, "No matches");
     }
     for session in matches {
         action = session_row(ui, shelf, session, 0.0, confirming).or(action.take());
@@ -188,11 +188,11 @@ fn projects(
                 if project_matches { "" } else { query },
             )
             .or(action.take());
-            ui.add_space(6.0);
+            ui.add_space(theme::space::S);
         }
     }
     if !shelf.projects.is_empty() && !found {
-        hint(ui, "No projects or chats match your search.");
+        hint(ui, "No matches");
     }
 
     action
@@ -202,9 +202,10 @@ fn projects(
 /// the button was clicked.
 fn heading(ui: &mut Ui, title: &str, icon: Icon, tooltip: &str) -> bool {
     ui.horizontal(|ui| {
+        ui.add_space(theme::space::S);
         ui.label(
             RichText::new(title)
-                .font(theme::strong(11.5))
+                .font(theme::strong(theme::size::CAPTION))
                 .color(palette::text_muted()),
         );
 
@@ -217,11 +218,15 @@ fn heading(ui: &mut Ui, title: &str, icon: Icon, tooltip: &str) -> bool {
 }
 
 fn hint(ui: &mut Ui, text: &str) {
-    ui.label(
-        RichText::new(text)
-            .font(theme::small())
-            .color(palette::text_muted()),
-    );
+    ui.add_space(theme::space::XS);
+    ui.horizontal(|ui| {
+        ui.add_space(theme::space::S);
+        ui.label(
+            RichText::new(text)
+                .font(theme::small())
+                .color(palette::text_muted()),
+        );
+    });
 }
 
 /// One project and its sessions.

@@ -188,31 +188,30 @@ pub fn show(ui: &mut Ui, view: &mut InsightsView) {
         .request_repaint_after(std::time::Duration::from_secs_f64(FRESH_FOR));
 
     ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-        ui.add_space(18.0);
+        ui.add_space(theme::space::XXL);
 
         let width = ui.available_width().min(980.0);
-        let margin = ((ui.available_width() - width) / 2.0).max(16.0);
+        let margin = ((ui.available_width() - width) / 2.0).max(theme::space::L);
 
         ui.horizontal(|ui| {
             ui.add_space(margin);
 
             ui.vertical(|ui| {
-                ui.set_width(width - 32.0);
+                ui.set_width(width - 2.0 * theme::space::L);
 
+                // The top bar already says this is Insights; the page
+                // starts with its two parts.
                 ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new("Insights")
-                            .font(theme::voice(26.0))
-                            .color(palette::text()),
-                    );
+                    ui.spacing_mut().item_spacing.x = theme::space::XS;
 
-                    ui.add_space(16.0);
-
-                    ui.selectable_value(&mut view.tab, Tab::Usage, "Tokens");
-                    ui.selectable_value(&mut view.tab, Tab::Effect, "Does it help?");
+                    for (tab, name) in [(Tab::Usage, "Tokens"), (Tab::Effect, "Does it help?")] {
+                        if tab_button(ui, name, view.tab == tab).clicked() {
+                            view.tab = tab;
+                        }
+                    }
                 });
 
-                ui.add_space(10.0);
+                ui.add_space(theme::space::L);
 
                 let Some(read) = &view.read else {
                     ui.label(RichText::new("Reading the records…").color(palette::text_muted()));
@@ -277,9 +276,13 @@ fn usage(ui: &mut Ui, view: &mut InsightsView, report: &MonthReport, streak: u32
     ui.add_space(10.0);
 
     // The figures that answer "how much".
-    ui.horizontal_wrapped(|ui| {
-        tile(
-            ui,
+    let mut tiles: Vec<[String; 3]> = Vec::new();
+
+    {
+        let figures = &mut tiles;
+
+        figure(
+            figures,
             "Tokens",
             &count(summary.totals.tokens()),
             &format!(
@@ -289,36 +292,36 @@ fn usage(ui: &mut Ui, view: &mut InsightsView, report: &MonthReport, streak: u32
             ),
         );
 
-        tile(
-            ui,
+        figure(
+            figures,
             "Cost",
             &cost_text(&summary.cost),
             &cost_note(&summary.cost),
         );
 
-        tile(
-            ui,
+        figure(
+            figures,
             "Sessions",
             &summary.session_count.to_string(),
             &format!("{} model calls", summary.totals.calls),
         );
 
-        tile(
-            ui,
+        figure(
+            figures,
             "Streak",
             &format!("{streak} {}", if streak == 1 { "day" } else { "days" }),
-            "days in a row with use",
+            "",
         );
 
-        tile(
-            ui,
+        figure(
+            figures,
             "Favourite model",
             summary.favourite_model.as_deref().unwrap_or("—"),
-            "most tokens went to it",
+            "",
         );
 
-        tile(
-            ui,
+        figure(
+            figures,
             "Peak day",
             &summary
                 .peak_day
@@ -329,24 +332,26 @@ fn usage(ui: &mut Ui, view: &mut InsightsView, report: &MonthReport, streak: u32
             }),
         );
 
-        tile(
-            ui,
+        figure(
+            figures,
             "Peak hour",
             &summary
                 .peak_hour
                 .map_or("—".to_string(), |hour| format!("{:02}:00", hour.hour)),
-            "of the day, local",
+            "",
         );
 
-        tile(
-            ui,
+        figure(
+            figures,
             "From the cache",
             &summary
                 .cache_hit_share
                 .map_or("—".to_string(), |share| format!("{:.0}%", share * 100.0)),
-            "of input, billed cheaper",
+            "of input",
         );
-    });
+    }
+
+    tiles_in_rows(ui, &tiles);
 
     section(ui, "By day");
     calendar(ui, view, report);
@@ -425,12 +430,15 @@ fn usage(ui: &mut Ui, view: &mut InsightsView, report: &MonthReport, streak: u32
 
     ui.add_space(8.0);
 
-    muted(
-        ui,
-        "Costs use the prices in ~/.cortex/prices.json and the few built in; a model without a \
-         known price is counted but not costed, and ChatGPT sign-in sessions are covered by the \
-         subscription. Every model call of every session on this machine is recorded in \
-         ~/.cortex/usage.",
+    ui.label(
+        RichText::new("Prices from ~/.cortex/prices.json · records in ~/.cortex/usage")
+            .font(theme::small())
+            .color(palette::text_muted()),
+    )
+    .on_hover_text(
+        "A model without a known price is counted but not costed, and ChatGPT sign-in \
+         sessions are covered by the subscription. Every model call of every session on this \
+         machine is recorded.",
     );
 }
 
@@ -645,23 +653,26 @@ fn session_row(ui: &mut Ui, session: &SessionUse) {
 }
 
 fn effect_tab(ui: &mut Ui, view: &mut InsightsView, report: &EffectReport) {
-    muted(
-        ui,
-        &format!(
-            "In about a quarter of runs each adviser is held out at random: it still watches \
-             and learns, but the model is not shown what it says. Runs it spoke in are compared \
-             with runs it was held out of. {} runs recorded, {} of them part of the experiment. \
-             A verdict needs {} runs on each side.",
+    ui.label(
+        RichText::new(format!(
+            "{} runs · {} in the experiment · a verdict needs {} a side",
             report.runs, report.runs_in_experiment, report.min_per_arm
-        ),
+        ))
+        .font(theme::small())
+        .color(palette::text_secondary()),
+    )
+    .on_hover_text(
+        "In about a quarter of runs each adviser is held out at random: it still watches and \
+         learns, but the model is not shown what it says. Runs it spoke in are compared with \
+         runs it was held out of.",
     );
 
     if report.comparisons > 0 {
         muted(
             ui,
             &format!(
-                "{} comparisons have enough runs. At 95% about one in twenty shows a difference \
-                 by chance alone, so one isolated \"helps\" or \"hurts\" proves little.",
+                "{} comparisons have enough runs. At 95% about one in twenty differs by chance, \
+                 so one isolated \"helps\" or \"hurts\" proves little.",
                 report.comparisons
             ),
         );
@@ -684,9 +695,8 @@ fn effect_tab(ui: &mut Ui, view: &mut InsightsView, report: &EffectReport) {
         ui.add_space(8.0);
         muted(
             ui,
-            "No adviser has spoken in a recorded run yet. Turn on Intuition, Brain (the dendritic \
-             network), the decision controller or the mind under Settings → Capabilities, and \
-             use the agent: the comparison fills as runs finish.",
+            "No adviser has spoken in a recorded run yet. Turn one on in Settings → Capabilities; \
+             the comparison fills as runs finish.",
         );
 
         return;
@@ -911,28 +921,79 @@ fn weeks(ui: &mut Ui, of: &SourceEffect) {
     );
 }
 
-fn tile(ui: &mut Ui, name: &str, value: &str, note: &str) {
-    theme::card().show(ui, |ui| {
-        ui.set_width(200.0);
+/// One of the page's two parts, as a pill that is filled while chosen.
+fn tab_button(ui: &mut Ui, name: &str, chosen: bool) -> egui::Response {
+    let button = egui::Button::new(RichText::new(name).font(theme::ui()).color(if chosen {
+        palette::text()
+    } else {
+        palette::text_secondary()
+    }))
+    .fill(if chosen {
+        palette::raised()
+    } else {
+        egui::Color32::TRANSPARENT
+    })
+    .stroke(egui::Stroke::NONE)
+    .corner_radius(egui::CornerRadius::same(theme::radius::M))
+    .min_size(vec2(0.0, theme::control::MEDIUM));
 
-        ui.label(
-            RichText::new(name.to_uppercase())
-                .font(theme::small())
-                .color(palette::text_muted()),
-        );
-        ui.add(
-            egui::Label::new(
-                RichText::new(value)
-                    .font(theme::strong(18.0))
-                    .color(palette::text()),
-            )
-            .truncate(),
-        );
-        ui.label(
-            RichText::new(note)
-                .font(theme::small())
-                .color(palette::text_secondary()),
-        );
+    ui.add(button)
+}
+
+/// The width of each figure, so that they fill whole rows of up to four.
+fn figure(figures: &mut Vec<[String; 3]>, name: &str, value: &str, note: &str) {
+    figures.push([name.to_string(), value.to_string(), note.to_string()]);
+}
+
+/// The figures as cards in whole rows of up to four, as many to a row as
+/// the page has room for.
+fn tiles_in_rows(ui: &mut Ui, figures: &[[String; 3]]) {
+    let gap = theme::space::M;
+    let room = ui.available_width();
+    let columns = ((room + gap) / (180.0 + gap)).floor().clamp(1.0, 4.0);
+
+    // Less the card's own margins and outline.
+    let width = (room - gap * (columns - 1.0)) / columns - 2.0 * theme::space::M - 2.0;
+
+    ui.spacing_mut().item_spacing.y = gap;
+
+    for row in figures.chunks(columns as usize) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = gap;
+
+            for [name, value, note] in row {
+                tile(ui, width, name, value, note);
+            }
+        });
+    }
+}
+
+fn tile(ui: &mut Ui, width: f32, name: &str, value: &str, note: &str) {
+    theme::card().show(ui, |ui| {
+        ui.set_width(width);
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = theme::space::XS;
+
+            ui.label(
+                RichText::new(name.to_uppercase())
+                    .font(theme::small())
+                    .color(palette::text_muted()),
+            );
+            ui.add(
+                egui::Label::new(
+                    RichText::new(value)
+                        .font(theme::strong(18.0))
+                        .color(palette::text()),
+                )
+                .truncate(),
+            );
+            // An empty note still takes its line, so the tiles stay level.
+            ui.label(
+                RichText::new(if note.is_empty() { " " } else { note })
+                    .font(theme::small())
+                    .color(palette::text_secondary()),
+            );
+        });
     });
 }
 
@@ -1007,13 +1068,13 @@ fn count(tokens: u64) -> String {
 }
 
 fn section(ui: &mut Ui, text: &str) {
-    ui.add_space(16.0);
+    ui.add_space(theme::space::XL);
     ui.label(
         RichText::new(text.to_uppercase())
             .font(theme::small())
             .color(palette::text_muted()),
     );
-    ui.add_space(4.0);
+    ui.add_space(theme::space::S);
 }
 
 fn muted(ui: &mut Ui, text: &str) {

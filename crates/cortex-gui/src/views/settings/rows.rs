@@ -6,7 +6,7 @@ use std::cell::Cell;
 
 use eframe::egui::{self, Align, Layout, RichText, Sense, Stroke, Ui, vec2};
 
-use crate::theme::{self, palette, radius, size, space};
+use crate::theme::{self, palette, size, space};
 
 /// Widest a text field in a row grows.
 pub const FIELD_WIDTH: f32 = 300.0;
@@ -277,29 +277,5 @@ pub fn text_field(ui: &mut Ui, value: &mut String, hint: &str) -> egui::Response
             .hint_text(hint)
             .desired_width(ui.available_width().min(FIELD_WIDTH))
             .margin(egui::Margin::symmetric(8, 5)),
-    )
-}
-
-/// One option of a row of choices, of which one is selected.
-pub fn choice(ui: &mut Ui, label: &str, selected: bool) -> egui::Response {
-    let (fill, text, stroke) = if selected {
-        (
-            palette::raised(),
-            palette::text(),
-            Stroke::new(1.0, palette::accent()),
-        )
-    } else {
-        (
-            egui::Color32::TRANSPARENT,
-            palette::text_secondary(),
-            Stroke::new(1.0, palette::border()),
-        )
-    };
-
-    ui.add(
-        egui::Button::new(RichText::new(label).font(theme::ui()).color(text))
-            .fill(fill)
-            .stroke(stroke)
-            .corner_radius(egui::CornerRadius::same(radius::M)),
     )
 }

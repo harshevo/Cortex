@@ -13,16 +13,25 @@
 //! Nothing here places orders or gives advice: the forecasts and plans
 //! are shown beside a measured record of how such forecasts did.
 
+#[cfg(feature = "desktop")]
+pub mod chat;
 pub mod clock;
+#[cfg(feature = "desktop")]
+pub mod desktop;
 pub mod dhan;
+pub mod flow;
 pub mod indicators;
 pub mod kinds;
+#[cfg(feature = "desktop")]
+pub mod learning;
 pub mod llm;
 pub mod market;
 pub mod oracle;
 pub mod outcomes;
 pub mod picture;
 pub mod plan;
+#[cfg(feature = "desktop")]
+pub mod recorder;
 pub mod standin;
 
 pub use dhan::{Credentials, Instrument, Profile, Quote, Segment};
