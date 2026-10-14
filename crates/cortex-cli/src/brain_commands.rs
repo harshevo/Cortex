@@ -14,6 +14,32 @@ pub enum Command {
     BrainMode,
     AgentMode,
     Feedback(bool, String),
+    /// Asks the brain's mind for a thought, dream, imagining, chain of
+    /// reasoning, hunch or look at itself.
+    Mind(Mind),
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Mind {
+    Think,
+    Dream,
+    Reflect,
+    Imagine(String),
+    Intuit(String),
+    Reason(String, String),
+}
+
+impl Mind {
+    fn request(self) -> Request {
+        match self {
+            Mind::Think => Request::NeuralThink,
+            Mind::Dream => Request::NeuralDream,
+            Mind::Reflect => Request::NeuralReflect,
+            Mind::Imagine(seed) => Request::NeuralImagine { seed },
+            Mind::Intuit(cue) => Request::NeuralIntuit { cue },
+            Mind::Reason(from, to) => Request::NeuralReason { from, to },
+        }
+    }
 }
 
 pub fn parse(text: &str) -> Option<Command> {
@@ -24,9 +50,14 @@ pub fn parse(text: &str) -> Option<Command> {
         "/brain" => return Some(Command::BrainMode),
         "/agent" => return Some(Command::AgentMode),
         "/brain-feedback correct" => return Some(Command::Feedback(true, String::new())),
+        "/think" => return Some(Command::Mind(Mind::Think)),
+        "/dream" => return Some(Command::Mind(Mind::Dream)),
+        "/reflect" => return Some(Command::Mind(Mind::Reflect)),
+        "/imagine" => return Some(Command::Mind(Mind::Imagine(String::new()))),
+        "/intuit" => return Some(Command::Mind(Mind::Intuit(String::new()))),
         _ => {}
     }
-    for prefix in ["/teach snn+dann", "teach snn+dann", "/teach-snn-dann"] {
+    for prefix in ["/teach snn+dann", "teach snn+dann", "/teach-snn-dann", "/teach snn+dnn", "/teach snn + dann"] {
         if let Some(tail) = text.strip_prefix(prefix)
             && (tail.is_empty() || tail.starts_with(char::is_whitespace))
         {
@@ -38,6 +69,16 @@ pub fn parse(text: &str) -> Option<Command> {
     }
     if let Some(cue) = text.strip_prefix("/recall ") {
         return Some(Command::Recall(cue.trim().into()));
+    }
+    if let Some(seed) = text.strip_prefix("/imagine ") {
+        return Some(Command::Mind(Mind::Imagine(seed.trim().into())));
+    }
+    if let Some(cue) = text.strip_prefix("/intuit ") {
+        return Some(Command::Mind(Mind::Intuit(cue.trim().into())));
+    }
+    if let Some(question) = text.strip_prefix("/reason ") {
+        let (from, to) = question.split_once("->").or_else(|| question.split_once(" to "))?;
+        return Some(Command::Mind(Mind::Reason(from.trim().into(), to.trim().into())));
     }
     text.strip_prefix("/brain-feedback wrong ")
         .map(|answer| Command::Feedback(false, answer.trim().into()))
@@ -131,6 +172,17 @@ impl Chat {
                     service::request(&file, &Request::NeuralLearn { text:format!("<user> {said_to} <brain> {answer}"), source:"human feedback".into(), correction:!correct })?;
                     (if correct { "The brain learned that its answer was right." } else { "The brain learned the better answer." }.into(), false)
                 }
+                Command::Mind(mind) => {
+                    let thought: cortex_living::neural::Thought = serde_json::from_value(service::request(&file, &mind.request())?)?;
+                    let text = if thought.text.is_empty() { "…" } else { &thought.text };
+                    let mut line = format!("Brain ({}): {text}", thought.kind);
+                    if thought.novel { line.push_str("  [a sentence it was never taught]"); }
+                    if thought.kind == "reason" && !thought.path.is_empty() {
+                        let links: Vec<String> = thought.path.iter().map(|(word, share)| format!("{word} {:.0}%", share * 100.0)).collect();
+                        line.push_str(&format!("\nLinks: {}", links.join(" → ")));
+                    }
+                    (format!("{line}\n[{}]", thought.why), false)
+                }
                 _ => unreachable!(),
             };
             Ok((Reply { text, monitor_teacher }, attempt))
@@ -156,6 +208,9 @@ mod tests {
         assert_eq!(parse("/teach stop"), Some(Command::Stop));
         assert_eq!(parse("/brain hello"), Some(Command::Ask("hello".into())));
         assert_eq!(parse("/recall the cat"), Some(Command::Recall("the cat".into())));
+        assert_eq!(parse("/reason the dog -> park"), Some(Command::Mind(Mind::Reason("the dog".into(), "park".into()))));
+        assert_eq!(parse("/imagine a cat"), Some(Command::Mind(Mind::Imagine("a cat".into()))));
+        assert_eq!(parse("/dream"), Some(Command::Mind(Mind::Dream)));
         assert_eq!(parse("teach snn+dannish"), None);
         assert_eq!(parse("Explain how to teach snn+dann"), None);
     }

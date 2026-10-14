@@ -10,11 +10,6 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Engrams kept; the weakest are forgotten first.
-pub const ENGRAMS: usize = 1000;
-
-/// Steps of one engram kept.
-pub const STEPS: usize = 160;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Engram {

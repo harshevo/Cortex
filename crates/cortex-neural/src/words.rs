@@ -8,17 +8,14 @@ use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
 
-/// Columns in the cortex.
-pub const COLUMNS: usize = 2048;
+/// Columns the cortex starts with. It grows more as its vocabulary grows.
+pub const START_COLUMNS: usize = 2048;
 
 /// Columns each word fires.
 pub const ACTIVE: usize = 40;
 
 /// Of those, the ones that are the word's identity and never drift.
 const IDENTITY: usize = 24;
-
-/// Most words it keeps codes for.
-pub const VOCABULARY: usize = 20_000;
 
 /// Context votes kept per word.
 const VOTES: usize = 96;
@@ -32,12 +29,12 @@ pub const STORY: &str = "<story>";
 pub struct Word {
     /// Sorted, `ACTIVE` long; the first `IDENTITY` (before sorting) are kept
     /// apart in `identity`.
-    pub columns: Vec<u16>,
-    identity: Vec<u16>,
+    pub columns: Vec<u32>,
+    identity: Vec<u32>,
     pub seen: u64,
 
     /// Columns of the words met next to it, and how often.
-    votes: HashMap<u16, f32>,
+    votes: HashMap<u32, f32>,
 
     /// How surprised the cortex was when it arrived, on average, now and
     /// as it was a while ago: their difference is learning progress.
@@ -104,19 +101,19 @@ impl Words {
         self.words.is_empty()
     }
 
-    /// The columns of `token`, giving it a code if it is new. `None` when
-    /// the vocabulary is full and the word is unknown.
-    pub fn columns(&mut self, token: &str) -> Option<Vec<u16>> {
+    /// The columns of `token`, giving a new word a code spread over the
+    /// cortex's `area` as it is now. `None` only for an empty token.
+    pub fn columns(&mut self, token: &str, area: usize) -> Option<Vec<u32>> {
         if let Some(word) = self.words.get(token) {
             return Some(word.columns.clone());
         }
-        if self.words.len() >= VOCABULARY {
+        if token.is_empty() || area < ACTIVE {
             return None;
         }
         let mut columns = Vec::with_capacity(ACTIVE);
         let mut salt = 0;
         while columns.len() < ACTIVE {
-            let column = (hash(token, salt) % COLUMNS as u64) as u16;
+            let column = (hash(token, salt) % area as u64) as u32;
             if !columns.contains(&column) {
                 columns.push(column);
             }
@@ -141,7 +138,7 @@ impl Words {
 
     /// Counts a word as met, beside these neighbours, with this surprise.
     pub fn met(&mut self, token: &str, neighbours: &[&str], surprise: f32) {
-        let columns: Vec<Vec<u16>> = neighbours
+        let columns: Vec<Vec<u32>> = neighbours
             .iter()
             .filter(|n| **n != token)
             .filter_map(|n| self.words.get(*n).map(|w| w.columns.clone()))
@@ -156,7 +153,7 @@ impl Words {
             *word.votes.entry(*column).or_default() += 1.0;
         }
         if word.votes.len() > VOTES * 2 {
-            let mut votes: Vec<(u16, f32)> = word.votes.drain().collect();
+            let mut votes: Vec<(u32, f32)> = word.votes.drain().collect();
             votes.sort_by(|a, b| b.1.total_cmp(&a.1));
             votes.truncate(VOTES);
             word.votes = votes.into_iter().collect();
@@ -212,7 +209,7 @@ impl Words {
 
     /// Words scored by how much of their code lies in `predicted` (a count
     /// of predicted cells per column), best first.
-    pub fn read(&self, predicted: &HashMap<u16, u32>, most: usize) -> Vec<(String, f32, usize)> {
+    pub fn read(&self, predicted: &HashMap<u32, u32>, most: usize) -> Vec<(String, f32, usize)> {
         if predicted.is_empty() {
             return Vec::new();
         }
@@ -253,11 +250,11 @@ mod tests {
     #[test]
     fn every_word_fires_its_own_columns_and_alike_words_come_to_share() {
         let mut words = Words::default();
-        let cat = words.columns("cat").unwrap();
+        let cat = words.columns("cat", START_COLUMNS).unwrap();
         assert_eq!(cat.len(), ACTIVE);
-        assert_eq!(words.columns("cat").unwrap(), cat);
+        assert_eq!(words.columns("cat", START_COLUMNS).unwrap(), cat);
         for token in ["the", "sat", "dog", "ran"] {
-            words.columns(token);
+            words.columns(token, START_COLUMNS);
         }
         let before = words.shared("cat", "dog");
         for _ in 0..40 {

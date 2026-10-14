@@ -19,15 +19,21 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::words::COLUMNS;
+use crate::words::START_COLUMNS;
 
+/// Cells a column is born with. It grows more whenever its cells are full:
+/// there is no upper limit but the brain's memory budget.
 pub const START_CELLS: usize = 4;
-pub const MAX_CELLS: usize = 32;
 
-/// Branches a cell may hold before its column grows another cell.
+/// Branches a cell holds before its column grows another cell rather than
+/// load it further.
 const FULL: usize = 12;
-const MAX_SEGMENTS: usize = 48;
-const MAX_SYNAPSES: usize = 32;
+
+/// Branches one cell can hold, and synapses one branch: what keeps a
+/// branch about one context. Capacity grows through more cells and
+/// columns, not through larger branches.
+const MAX_SEGMENTS: usize = 128;
+const MAX_SYNAPSES: usize = 64;
 
 /// Strong synapses from just-spiked cells a branch needs to prime its
 /// cell, and any synapses at all for it to count as nearly matching. A
@@ -72,7 +78,7 @@ pub struct Segment {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Cell {
-    pub column: u16,
+    pub column: u32,
     pub segments: Vec<u32>,
     pub born: u64,
     pub last_spike: u64,
@@ -84,7 +90,7 @@ pub struct Cell {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct BranchFire {
     pub cell: u32,
-    pub column: u16,
+    pub column: u32,
     pub segment: u32,
     /// Strong synapses from cells that just spiked, of all its synapses.
     pub matched: u32,
@@ -114,6 +120,15 @@ pub struct Activation {
     pub changes: Changes,
 }
 
+/// The cortex's activity at one moment, without its synapses.
+#[derive(Debug, Clone, Default)]
+pub struct State {
+    active: Vec<u32>,
+    winners: Vec<u32>,
+    primed: Vec<(u32, u32)>,
+    matching: Vec<(u32, u32)>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Totals {
@@ -141,6 +156,12 @@ pub struct Cortex {
     pub totals: Totals,
     random: u64,
 
+    /// For each cell, the branches with a synapse from it: a step looks
+    /// only at the branches that hear the cells now spiking.
+    #[serde(skip)]
+    targets: Vec<Vec<u32>>,
+    #[serde(skip)]
+    indexed: bool,
     #[serde(skip)]
     active: Vec<u32>,
     #[serde(skip)]
@@ -156,7 +177,7 @@ pub struct Cortex {
 impl Default for Cortex {
     fn default() -> Self {
         let mut cortex = Self {
-            columns: vec![Vec::new(); COLUMNS],
+            columns: vec![Vec::new(); START_COLUMNS],
             cells: Vec::new(),
             segments: Vec::new(),
             free_cells: Vec::new(),
@@ -164,14 +185,16 @@ impl Default for Cortex {
             clock: 0,
             totals: Totals::default(),
             random: 0x2545_F491_4F6C_DD1D,
+            targets: Vec::new(),
+            indexed: true,
             active: Vec::new(),
             winners: Vec::new(),
             primed: Vec::new(),
             matching: Vec::new(),
         };
-        for column in 0..COLUMNS {
+        for column in 0..START_COLUMNS {
             for _ in 0..START_CELLS {
-                cortex.new_cell(column as u16);
+                cortex.new_cell(column as u32);
             }
         }
         cortex.totals.cells_grown = 0;
@@ -187,7 +210,62 @@ impl Cortex {
         self.random
     }
 
-    fn new_cell(&mut self, column: u16) -> u32 {
+    /// Columns in the cortex now.
+    pub fn area(&self) -> usize {
+        self.columns.len()
+    }
+
+    /// Grows `count` new columns, each with its first cells. New words are
+    /// given codes over the whole, larger area.
+    pub fn grow_columns(&mut self, count: usize) {
+        for _ in 0..count {
+            self.columns.push(Vec::new());
+            let column = (self.columns.len() - 1) as u32;
+            for _ in 0..START_CELLS {
+                self.new_cell(column);
+            }
+        }
+    }
+
+    /// Builds the index of which branches hear which cell, after loading.
+    fn index(&mut self) {
+        if self.indexed {
+            return;
+        }
+        self.indexed = true;
+        self.targets = vec![Vec::new(); self.cells.len()];
+        for (id, segment) in self.segments.iter().enumerate() {
+            let Some(segment) = segment else { continue };
+            for synapse in &segment.synapses {
+                if let Some(list) = self.targets.get_mut(synapse.from as usize) {
+                    list.push(id as u32);
+                }
+            }
+        }
+    }
+
+    fn listen(&mut self, from: u32, segment: u32) {
+        if self.targets.len() <= from as usize {
+            self.targets.resize(from as usize + 1, Vec::new());
+        }
+        self.targets[from as usize].push(segment);
+    }
+
+    fn unlisten(&mut self, from: u32, segment: u32) {
+        if let Some(list) = self.targets.get_mut(from as usize)
+            && let Some(at) = list.iter().position(|s| *s == segment)
+        {
+            list.swap_remove(at);
+        }
+    }
+
+    /// Roughly how many bytes it holds.
+    pub fn footprint(&self) -> u64 {
+        let (synapses, _) = self.synapse_counts();
+        (self.cells.len() * 64 + self.segments.len() * 72 + synapses * 12) as u64
+    }
+
+    fn new_cell(&mut self, column: u32) -> u32 {
         let cell = Cell {
             column,
             segments: Vec::new(),
@@ -243,7 +321,7 @@ impl Cortex {
         self.segments.get(id as usize).and_then(Option::as_ref)
     }
 
-    pub fn column_cells(&self, column: u16) -> &[u32] {
+    pub fn column_cells(&self, column: u32) -> &[u32] {
         &self.columns[column as usize]
     }
 
@@ -295,7 +373,7 @@ impl Cortex {
     }
 
     /// Predicted cells per column, for reading out the next word.
-    pub fn primed_columns(&self) -> HashMap<u16, u32> {
+    pub fn primed_columns(&self) -> HashMap<u32, u32> {
         let mut columns = HashMap::new();
         for cell in self.primed_cells() {
             if let Some(c) = self.cell(cell) {
@@ -328,6 +406,45 @@ impl Cortex {
         fires
     }
 
+    /// What is spiking and primed now, to come back to: reasoning tries
+    /// several continuations from the same point.
+    pub fn state(&self) -> State {
+        State {
+            active: self.active.clone(),
+            winners: self.winners.clone(),
+            primed: self.primed.clone(),
+            matching: self.matching.clone(),
+        }
+    }
+
+    pub fn restore(&mut self, state: &State) {
+        self.active.clone_from(&state.active);
+        self.winners.clone_from(&state.winners);
+        self.primed.clone_from(&state.primed);
+        self.matching.clone_from(&state.matching);
+    }
+
+    /// Every live synapse: from cell, to cell, connected.
+    pub fn wiring(&self) -> Vec<(u32, u32, bool)> {
+        self.segments
+            .iter()
+            .flatten()
+            .flat_map(|s| {
+                s.synapses
+                    .iter()
+                    .map(move |x| (x.from, s.cell, x.permanence >= CONNECTED))
+            })
+            .collect()
+    }
+
+    /// The column of each cell id, `u32::MAX` for a dead one.
+    pub fn cell_columns(&self) -> Vec<u32> {
+        self.cells
+            .iter()
+            .map(|c| c.as_ref().map_or(u32::MAX, |c| c.column))
+            .collect()
+    }
+
     /// Forgets the context: the next word starts a new sequence.
     pub fn reset(&mut self) {
         self.active.clear();
@@ -351,14 +468,14 @@ impl Cortex {
 
     /// One word arrives as its columns. With `learn`, synapses change and
     /// the network may grow.
-    pub fn step(&mut self, columns: &[u16], learn: bool) -> Activation {
+    pub fn step(&mut self, columns: &[u32], learn: bool) -> Activation {
         self.clock += 1;
         self.totals.steps += 1;
         let previous_active: HashSet<u32> = self.active.iter().copied().collect();
         let previous_winners = self.winners.clone();
-        let firing: HashSet<u16> = columns.iter().copied().collect();
+        let firing: HashSet<u32> = columns.iter().copied().collect();
 
-        let mut primed_by_column: HashMap<u16, Vec<u32>> = HashMap::new();
+        let mut primed_by_column: HashMap<u32, Vec<u32>> = HashMap::new();
         for (segment, _) in &self.primed {
             if let Some(s) = self.segment(*segment)
                 && let Some(c) = self.cell(s.cell)
@@ -366,7 +483,7 @@ impl Cortex {
                 primed_by_column.entry(c.column).or_default().push(*segment);
             }
         }
-        let mut matching_by_column: HashMap<u16, Vec<(u32, u32)>> = HashMap::new();
+        let mut matching_by_column: HashMap<u32, Vec<(u32, u32)>> = HashMap::new();
         for (segment, potential) in &self.matching {
             if let Some(s) = self.segment(*segment)
                 && let Some(c) = self.cell(s.cell)
@@ -485,18 +602,29 @@ impl Cortex {
         activation
     }
 
-    /// Works out which branches the cells now spiking prime.
+    /// Works out which branches the cells now spiking prime. Only the
+    /// branches that hear one of them are looked at.
     fn predict(&mut self) {
+        self.index();
         let mut spiking = vec![false; self.cells.len()];
         for cell in &self.active {
             if let Some(flag) = spiking.get_mut(*cell as usize) {
                 *flag = true;
             }
         }
+        let mut heard: Vec<u32> = self
+            .active
+            .iter()
+            .filter_map(|cell| self.targets.get(*cell as usize))
+            .flatten()
+            .copied()
+            .collect();
+        heard.sort_unstable();
+        heard.dedup();
         self.primed.clear();
         self.matching.clear();
-        for (id, segment) in self.segments.iter().enumerate() {
-            let Some(segment) = segment else { continue };
+        for id in heard {
+            let Some(segment) = self.segment(id) else { continue };
             let mut connected = 0;
             let mut potential = 0;
             for synapse in &segment.synapses {
@@ -508,10 +636,10 @@ impl Cortex {
                 }
             }
             if connected >= ACTIVATION {
-                self.primed.push((id as u32, connected));
+                self.primed.push((id, connected));
             }
             if potential >= MATCHING {
-                self.matching.push((id as u32, potential));
+                self.matching.push((id, potential));
             }
         }
         let clock = self.clock;
@@ -572,10 +700,11 @@ impl Cortex {
             let at = (self.draw() % candidates.len() as u64) as usize;
             chosen.push(candidates.swap_remove(at));
         }
-        let Some(s) = self.segments[segment as usize].as_mut() else {
-            return;
-        };
         for from in chosen {
+            let Some(s) = self.segments[segment as usize].as_mut() else {
+                return;
+            };
+            let mut dropped = None;
             if s.synapses.len() >= MAX_SYNAPSES {
                 // The weakest gives way.
                 if let Some(at) = s
@@ -585,20 +714,24 @@ impl Cortex {
                     .min_by(|a, b| a.1.permanence.total_cmp(&b.1.permanence))
                     .map(|(at, _)| at)
                 {
-                    s.synapses.swap_remove(at);
+                    dropped = Some(s.synapses.swap_remove(at).from);
                 }
             }
             s.synapses.push(Synapse {
                 from,
                 permanence: INITIAL,
             });
+            if let Some(old) = dropped {
+                self.unlisten(old, segment);
+            }
+            self.listen(from, segment);
             changes.synapses_grown += 1;
         }
     }
 
     /// The cell in a column with the fewest branches; a new one when all
     /// are full and the column has room.
-    fn least_used(&mut self, column: u16, learn: bool, changes: &mut Changes) -> u32 {
+    fn least_used(&mut self, column: u32, learn: bool, changes: &mut Changes) -> u32 {
         // Ties are broken at random, so that different contexts do not all
         // fall on the same cell and become indistinguishable.
         let cells = self.columns[column as usize].clone();
@@ -620,7 +753,7 @@ impl Cortex {
         let full = fewest
             .and_then(|id| self.cell(id))
             .is_none_or(|c| c.segments.len() >= FULL);
-        if learn && full && cells.len() < MAX_CELLS {
+        if learn && full {
             changes.cells_grown += 1;
             return self.new_cell(column);
         }
@@ -646,6 +779,9 @@ impl Cortex {
         let Some(s) = self.segments[segment as usize].take() else {
             return;
         };
+        for synapse in &s.synapses {
+            self.unlisten(synapse.from, segment);
+        }
         self.totals.synapses_pruned += s.synapses.len() as u64;
         self.totals.segments_pruned += 1;
         if let Some(c) = self.cells[s.cell as usize].as_mut() {
@@ -689,8 +825,11 @@ impl Cortex {
             .flatten()
             .flat_map(|s| s.synapses.iter().map(|x| x.from))
             .collect();
+        // Synapses were dropped above without telling the index.
+        self.indexed = false;
+        self.index();
         let mut died = 0;
-        for column in 0..COLUMNS {
+        for column in 0..self.columns.len() {
             let cells = self.columns[column].clone();
             for (at, id) in cells.iter().enumerate() {
                 if at < START_CELLS {
@@ -718,8 +857,8 @@ impl Cortex {
     }
 
     /// Every cell's column, spikes and branches, for drawing.
-    pub fn columns_view(&self) -> Vec<(u16, u32, u32, u64)> {
-        (0..COLUMNS)
+    pub fn columns_view(&self) -> Vec<(u32, u32, u32, u64)> {
+        (0..self.columns.len())
             .map(|column| {
                 let cells = &self.columns[column];
                 let branches = cells
@@ -728,16 +867,15 @@ impl Cortex {
                     .map(|c| c.segments.len() as u32)
                     .sum();
                 let spikes = cells.iter().filter_map(|id| self.cell(*id)).map(|c| c.spikes).sum();
-                (column as u16, cells.len() as u32, branches, spikes)
+                (column as u32, cells.len() as u32, branches, spikes)
             })
             .collect()
     }
 
     pub fn is_sound(&self) -> bool {
-        self.columns.len() == COLUMNS
+        self.columns.len() >= START_COLUMNS
             && self.columns.iter().all(|cells| {
-                cells.len() <= MAX_CELLS
-                    && cells.iter().all(|id| self.cell(*id).is_some())
+                cells.iter().all(|id| self.cell(*id).is_some())
             })
             && self.segments.iter().flatten().all(|s| {
                 self.cell(s.cell).is_some()

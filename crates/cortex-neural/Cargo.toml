@@ -10,3 +10,4 @@ serde.workspace = true
 serde_json.workspace = true
 postcard = { version = "1", features = ["use-std"] }
 tempfile.workspace = true
+base64 = "0.22"

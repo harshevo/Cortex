@@ -104,6 +104,11 @@ pub struct CortexApp {
     /// was last copied for drawing.
     living: Option<std::sync::Arc<cortex_living::Living>>,
     living_view: crate::views::living::LivingView,
+
+    /// The standalone brain's tabs, and the brain as last fetched.
+    brain_view: crate::views::brain::BrainView,
+    neural: Option<cortex_living::neural::NeuralSnapshot>,
+    neural_fetched: Option<std::time::Instant>,
     network_stamp: Option<(u64, u64, bool)>,
 
     trading: crate::views::trading::TradingView,
@@ -196,6 +201,9 @@ impl CortexApp {
             draft: String::new(),
             living: None,
             living_view: Default::default(),
+            brain_view: Default::default(),
+            neural: None,
+            neural_fetched: None,
             network_stamp: None,
             trading: Default::default(),
             trading_return: View::Conversation,
@@ -1291,34 +1299,48 @@ impl CortexApp {
     }
 
     fn living_space(&mut self, ui: &mut egui::Ui) {
+        use crate::views::brain::{self, Tab};
+
         self.look_at_network();
 
-        let Some(snapshot) = &self.memory.network else {
-            ui.add_space(ui.available_height() * 0.3);
-            ui.vertical_centered(|ui| {
-                ui.label(
-                    egui::RichText::new("Waking the brain…")
-                        .font(theme::strong(theme::size::TITLE)),
-                );
-                ui.add_space(theme::space::XS);
-                ui.label(
-                    egui::RichText::new(
-                        "It connects to its background service once a model is set up in \
-                         Settings. The service keeps running after Cortex closes.",
-                    )
-                    .color(palette::text_muted()),
-                );
-            });
+        // The brain is copied twice a second at most: it changes every step.
+        if self
+            .neural_fetched
+            .is_none_or(|at| at.elapsed() >= std::time::Duration::from_millis(500))
+        {
+            self.neural_fetched = Some(std::time::Instant::now());
+            if let Some(neural) = self.living.as_ref().and_then(|living| living.neural()) {
+                self.neural = Some(neural);
+            }
+        }
 
-            return;
-        };
-
-        crate::views::living::show(
-            ui,
-            &mut self.living_view,
-            snapshot,
-            &self.memory.performance,
-        );
+        match brain::tabs(ui, &mut self.brain_view) {
+            Tab::Brain => match &self.neural {
+                Some(neural) => {
+                    let teaching = self
+                        .memory
+                        .network
+                        .as_ref()
+                        .map(|network| network.teaching.clone())
+                        .unwrap_or_default();
+                    brain::show_brain(ui, &mut self.brain_view, neural, &teaching, self.living.as_ref())
+                }
+                None => brain::waiting(ui),
+            },
+            Tab::Metrics => match &self.neural {
+                Some(neural) => brain::show_metrics(ui, &mut self.brain_view, neural),
+                None => brain::waiting(ui),
+            },
+            Tab::Habits => match &self.memory.network {
+                Some(snapshot) => crate::views::living::show(
+                    ui,
+                    &mut self.living_view,
+                    snapshot,
+                    &self.memory.performance,
+                ),
+                None => brain::waiting(ui),
+            },
+        }
     }
 
     fn conversation(&mut self, ui: &mut egui::Ui) {

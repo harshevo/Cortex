@@ -16,13 +16,13 @@ use eframe::egui::{
 };
 
 use crate::theme::{self, palette};
+use crate::views::brain_map;
 
 const PANEL_WIDTH: f32 = 310.0;
 
-/// Neurons and synapses drawn at most. The network may hold more; the
-/// ones in use are the ones worth seeing.
-const NEURONS_DRAWN: usize = 300;
-const SYNAPSES_DRAWN: usize = 1_600;
+/// Beyond this distance neurons no longer push each other apart, so that
+/// the layout of every neuron costs in proportion to their number.
+const REPULSION_REACH: f32 = 160.0;
 
 /// How long a new neuron takes to arrive on screen, in seconds.
 const ARRIVAL: f64 = 0.9;
@@ -107,8 +107,8 @@ pub fn show(ui: &mut Ui, view: &mut LivingView, snapshot: &Snapshot, remembered:
         .copied()
         .collect();
 
-    synapses.sort_by(|left, right| right.2.total_cmp(&left.2));
-    synapses.truncate(SYNAPSES_DRAWN);
+    // Weakest first, so that the strong are drawn on top.
+    synapses.sort_by(|left, right| left.2.total_cmp(&right.2));
 
     view.arrange(&drawn, &synapses, now);
 
@@ -116,6 +116,21 @@ pub fn show(ui: &mut Ui, view: &mut LivingView, snapshot: &Snapshot, remembered:
     let on_screen = |at: Vec2| rect.center() + at * scale;
 
     let by_id: HashMap<Id, &NeuronView> = drawn.iter().map(|neuron| (neuron.id, *neuron)).collect();
+
+    // What each neuron is part of now, beyond firing: what it expects,
+    // what it imagines, the steps it would take towards its goal.
+    let expected: HashSet<&str> = snapshot.expecting.iter().map(String::as_str).collect();
+    let imagined: HashSet<&str> = snapshot
+        .imagined
+        .iter()
+        .flat_map(|thought| thought.labels.iter().map(String::as_str))
+        .collect();
+    let planned: HashSet<&str> = snapshot.plan.iter().flatten().map(String::as_str).collect();
+    let hunch: HashSet<&str> = snapshot
+        .hunch
+        .iter()
+        .flat_map(|h| std::iter::once(h.label.as_str()).chain(h.with.iter().map(String::as_str)))
+        .collect();
 
     for (from, to, weight) in &synapses {
         let (Some(source), Some(target)) = (view.places.get(from), view.places.get(to)) else {
@@ -125,7 +140,12 @@ pub fn show(ui: &mut Ui, view: &mut LivingView, snapshot: &Snapshot, remembered:
         let live = by_id[from].glow > 0.5 && by_id[to].glow > 0.5;
 
         let stroke = if live {
-            Stroke::new(1.0 + weight, palette::accent().gamma_multiply(0.75))
+            let process = if snapshot.resting { "replay" } else { "learn" };
+            Stroke::new(1.0 + weight, brain_map::colour(process).gamma_multiply(0.8))
+        } else if imagined.contains(by_id[from].label.as_str()) && imagined.contains(by_id[to].label.as_str()) {
+            Stroke::new(1.0 + weight, brain_map::colour("imagine").gamma_multiply(0.6))
+        } else if planned.contains(by_id[from].label.as_str()) && planned.contains(by_id[to].label.as_str()) {
+            Stroke::new(1.0 + weight, brain_map::colour("reason").gamma_multiply(0.6))
         } else {
             Stroke::new(
                 0.6 + weight * 0.8,
@@ -148,21 +168,43 @@ pub fn show(ui: &mut Ui, view: &mut LivingView, snapshot: &Snapshot, remembered:
         let age = ((now - place.arrived) / ARRIVAL).clamp(0.0, 1.0) as f32;
 
         let radius = (3.0 + (1.0 + neuron.fired as f32).ln().min(6.0)) * ease(age);
-        let colour = colour_of(neuron.kind).gamma_multiply(0.4 + 0.6 * neuron.glow);
+        let colour = role_colour(neuron).gamma_multiply(0.4 + 0.6 * neuron.glow);
+
+        // Firing now: a halo in the colour of what is driving it, replay
+        // while it rests.
+        if neuron.glow > 0.0 {
+            let process = if snapshot.resting { "replay" } else { "learn" };
+            painter.circle_filled(
+                centre,
+                radius * (1.6 + neuron.glow),
+                brain_map::colour(process).gamma_multiply(0.22 * neuron.glow),
+            );
+        }
+        let label_text = neuron.label.as_str();
+        for (part, process, gap) in [
+            (expected.contains(label_text), "intuit", 2.5),
+            (imagined.contains(label_text), "imagine", 5.0),
+            (planned.contains(label_text), "reason", 7.5),
+            (hunch.contains(label_text), "decide", 10.0),
+        ] {
+            if part {
+                painter.circle_stroke(centre, radius + gap, Stroke::new(1.1, brain_map::colour(process)));
+            }
+        }
 
         // A ring spreads from a neuron as it is created.
         if age < 1.0 {
             painter.circle_stroke(
                 centre,
                 radius + 22.0 * age,
-                Stroke::new(1.5, colour_of(neuron.kind).gamma_multiply(1.0 - age)),
+                Stroke::new(1.5, role_colour(neuron).gamma_multiply(1.0 - age)),
             );
         }
 
         painter.circle_filled(centre, radius, colour);
 
         if neuron.in_workspace {
-            painter.circle_stroke(centre, radius + 4.5, Stroke::new(1.4, palette::text()));
+            painter.circle_stroke(centre, radius + 4.5, Stroke::new(1.4, brain_map::colour("aware")));
 
             label(
                 &painter,
@@ -212,19 +254,18 @@ pub fn show(ui: &mut Ui, view: &mut LivingView, snapshot: &Snapshot, remembered:
         view.selected = None;
     }
 
-    if drawn.len() < snapshot.neurons.len() {
-        painter.text(
-            rect.left_bottom() + vec2(14.0, -12.0),
-            Align2::LEFT_BOTTOM,
-            format!(
-                "Showing the {} neurons most in use, of {}",
-                drawn.len(),
-                snapshot.neurons.len()
-            ),
-            theme::small(),
-            palette::text_muted(),
-        );
-    }
+    painter.text(
+        rect.left_top() + vec2(14.0, 10.0),
+        Align2::LEFT_TOP,
+        format!(
+            "Every neuron and synapse drawn: {} neurons, {} connections",
+            drawn.len(),
+            synapses.len()
+        ),
+        theme::small(),
+        palette::text_muted(),
+    );
+    legend(ui, Rect::from_min_max(rect.left_bottom() - vec2(-14.0, 44.0), rect.right_bottom() - vec2(14.0, 4.0)));
 
     view.shown = true;
 
@@ -234,8 +275,8 @@ pub fn show(ui: &mut Ui, view: &mut LivingView, snapshot: &Snapshot, remembered:
         .request_repaint_after(std::time::Duration::from_millis(33));
 }
 
-/// The neurons worth drawing: what the workspace holds, what fired
-/// lately, then what has fired most.
+/// Every neuron, in drawing order: what the workspace holds, what fired
+/// lately and what has fired most come last, on top.
 fn choose(snapshot: &Snapshot) -> Vec<&NeuronView> {
     let mut neurons: Vec<&NeuronView> = snapshot.neurons.iter().collect();
 
@@ -246,11 +287,10 @@ fn choose(snapshot: &Snapshot) -> Vec<&NeuronView> {
     };
 
     neurons.sort_by(|left, right| {
-        worth(right)
-            .total_cmp(&worth(left))
+        worth(left)
+            .total_cmp(&worth(right))
             .then(left.id.cmp(&right.id))
     });
-    neurons.truncate(NEURONS_DRAWN);
 
     neurons
 }
@@ -303,25 +343,36 @@ impl LivingView {
         let ids: Vec<Id> = self.places.keys().copied().collect();
         let mut push: HashMap<Id, Vec2> = ids.iter().map(|id| (*id, Vec2::ZERO)).collect();
 
-        for (position, one) in ids.iter().enumerate() {
-            let here = self.places[one].at;
+        // Neurons push apart only within reach, found through a grid, so
+        // that every neuron can be laid out each frame.
+        let key = |at: Vec2| ((at.x / REPULSION_REACH).floor() as i32, (at.y / REPULSION_REACH).floor() as i32);
+        let mut grid: HashMap<(i32, i32), Vec<Id>> = HashMap::new();
+        for id in &ids {
+            grid.entry(key(self.places[id].at)).or_default().push(*id);
+        }
 
-            if let Some(push) = push.get_mut(one) {
-                *push -= here * GRAVITY;
+        for one in &ids {
+            let here = self.places[one].at;
+            let mut force = -here * GRAVITY;
+            let (gx, gy) = key(here);
+
+            for dx in -1..=1 {
+                for dy in -1..=1 {
+                    for other in grid.get(&(gx + dx, gy + dy)).into_iter().flatten() {
+                        if other == one {
+                            continue;
+                        }
+                        let apart = here - self.places[other].at;
+                        let distance = apart.length().max(4.0);
+                        if distance < REPULSION_REACH {
+                            force += apart / distance * (REPULSION / (distance * distance));
+                        }
+                    }
+                }
             }
 
-            for other in &ids[position + 1..] {
-                let apart = here - self.places[other].at;
-                let distance = apart.length().max(4.0);
-                let force = apart / distance * (REPULSION / (distance * distance));
-
-                if let Some(push) = push.get_mut(one) {
-                    *push += force;
-                }
-
-                if let Some(push) = push.get_mut(other) {
-                    *push -= force;
-                }
+            if let Some(push) = push.get_mut(one) {
+                *push += force;
             }
         }
 
@@ -499,6 +550,68 @@ fn label(painter: &egui::Painter, rect: Rect, centre: Pos2, off: f32, text: &str
         FontId::proportional(11.5),
         colour,
     );
+}
+
+/// What a neuron stands for, by its label: a word, the person, a tool
+/// call, a file, an outcome, or one of the network's own states.
+fn role(neuron: &NeuronView) -> &'static str {
+    if neuron.kind == Kind::Own {
+        return "own state";
+    }
+    if neuron.kind == Kind::Assembly {
+        return "assembly";
+    }
+    let prefix = neuron.label.split(':').next().unwrap_or("");
+    match prefix {
+        "language word" | "word" => "word",
+        "person" | "asks" => "person",
+        "does" | "did" | "runs" | "run" | "shell" | "model" => "action",
+        "file" => "file",
+        "result" | "checks" | "warning" | "exit code" => "outcome",
+        _ => "other",
+    }
+}
+
+const ROLES: [&str; 8] = ["word", "person", "action", "file", "outcome", "assembly", "own state", "other"];
+
+fn role_colour_of(role: &str) -> Color32 {
+    match role {
+        "word" => Color32::from_rgb(96, 165, 250),
+        "person" => Color32::from_rgb(45, 212, 191),
+        "action" => Color32::from_rgb(74, 222, 128),
+        "file" => Color32::from_rgb(250, 204, 21),
+        "outcome" => Color32::from_rgb(251, 146, 60),
+        "assembly" => Color32::from_rgb(196, 181, 253),
+        "own state" => Color32::from_rgb(244, 114, 182),
+        _ => Color32::from_rgb(148, 163, 184),
+    }
+}
+
+fn role_colour(neuron: &NeuronView) -> Color32 {
+    role_colour_of(role(neuron))
+}
+
+/// The colour key: roles fill a neuron, rings and halos say what it is
+/// part of now.
+fn legend(ui: &mut Ui, rect: Rect) {
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+    child.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = vec2(10.0, 3.0);
+        for role in ROLES {
+            ui.label(RichText::new(format!("● {role}")).font(theme::small()).color(role_colour_of(role)));
+        }
+        for (name, process) in [
+            ("halo: firing", "learn"),
+            ("halo: replay at rest", "replay"),
+            ("ring: in the workspace", "aware"),
+            ("ring: expected next", "intuit"),
+            ("ring: imagined", "imagine"),
+            ("ring: on the way to its goal", "reason"),
+            ("ring: in its hunch", "decide"),
+        ] {
+            ui.label(RichText::new(name).font(theme::small()).color(brain_map::colour(process)));
+        }
+    });
 }
 
 fn colour_of(kind: Kind) -> Color32 {
@@ -769,7 +882,7 @@ fn panel(ui: &mut Ui, view: &mut LivingView, snapshot: &Snapshot, remembered: &s
 }
 
 /// What the LLM teacher is doing, with its latest rounds.
-fn teacher(ui: &mut Ui, teaching: &serde_json::Value) {
+pub(crate) fn teacher(ui: &mut Ui, teaching: &serde_json::Value) {
     heading(ui, "Teacher");
 
     if teaching.is_null() {
@@ -821,7 +934,9 @@ fn teacher(ui: &mut Ui, teaching: &serde_json::Value) {
     for event in events.iter().rev().take(6) {
         let kind = event["kind"].as_str().unwrap_or_default();
         let name = match kind {
-            "lesson" => "Teacher",
+            "lesson" => "Story",
+            "dialogue" => "Conversation",
+            "brain_says" => "Brain says",
             "quiz" => "Quiz",
             "brain_answer" => "Brain",
             "feedback" => "Judged",
@@ -832,7 +947,7 @@ fn teacher(ui: &mut Ui, teaching: &serde_json::Value) {
         let colour = match (kind, event["correct"].as_bool()) {
             ("feedback", Some(true)) => palette::good(),
             ("feedback", Some(false)) | ("error", _) => palette::bad(),
-            ("brain_answer" | "curious", _) => palette::accent(),
+            ("brain_answer" | "curious" | "brain_says", _) => palette::accent(),
             _ => palette::text_secondary(),
         };
 

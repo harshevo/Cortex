@@ -73,6 +73,26 @@ pub enum Request {
     },
     NeuralSnapshot,
     NeuralProgress,
+    /// The brain's mind, on request: a thought, an imagining (from a seed,
+    /// or two memories spliced when it is empty), a dream, a chain of
+    /// reasoning from one thing to another, a hunch, a look at itself.
+    NeuralThink,
+    NeuralImagine {
+        #[serde(default)]
+        seed: String,
+    },
+    NeuralDream,
+    NeuralReason {
+        from: String,
+        to: String,
+    },
+    NeuralIntuit {
+        #[serde(default)]
+        cue: String,
+    },
+    NeuralReflect,
+    /// Every cell and synapse, for drawing the whole cortex.
+    NeuralWiring,
     Snapshot,
     Flush,
     Suggestion,
@@ -102,6 +122,15 @@ struct Reply {
     error: Option<String>,
 }
 
+/// What the mind is asked about, at most 1,024 bytes of it.
+fn cap(text: &str) -> String {
+    let mut end = text.len().min(1024);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_string()
+}
+
 fn directory(file: &Path) -> &Path {
     file.parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -125,10 +154,10 @@ fn private_directory(path: &Path) -> io::Result<()> {
     fs::set_permissions(path, fs::Permissions::from_mode(0o700))
 }
 
-/// Nobody must have used the brain for this long before it sleeps, and
-/// then it sleeps a cycle this often.
+/// Nobody must have used the brain for this long before its mind runs on
+/// its own, and then it has a thought or sleeps a cycle this often.
 const NEURAL_QUIET: Duration = Duration::from_secs(5);
-const NEURAL_SLEEP: Duration = Duration::from_secs(10);
+const NEURAL_IDLE: Duration = Duration::from_secs(3);
 
 /// Where the standalone brain is kept, beside the network.
 pub fn neural_file(file: &Path) -> PathBuf {
@@ -606,10 +635,10 @@ pub fn run(file: &Path) -> io::Result<()> {
             }
             dirty |= living.cycle(count, problem);
             last_cycle = Instant::now();
-            // The brain sleeps when nobody has used it for a while: it
-            // replays a memory, and now and then tests a recall and prunes.
-            if brain_used.elapsed() >= NEURAL_QUIET && brain_slept.elapsed() >= NEURAL_SLEEP {
-                brain.sleep();
+            // Left alone, the brain's mind wanders, and once drowsy it
+            // sleeps: replays memories, prunes, and dreams.
+            if brain_used.elapsed() >= NEURAL_QUIET && brain_slept.elapsed() >= NEURAL_IDLE {
+                brain.idle();
                 brain_slept = Instant::now();
                 brain_dirty = true;
             }
@@ -745,6 +774,26 @@ pub fn run(file: &Path) -> io::Result<()> {
                         serde_json::to_value(brain.snapshot()).map_err(io::Error::from)
                     }
                     Request::NeuralProgress => Ok(brain.progress()),
+                    request @ (Request::NeuralThink
+                    | Request::NeuralImagine { .. }
+                    | Request::NeuralDream
+                    | Request::NeuralReason { .. }
+                    | Request::NeuralIntuit { .. }
+                    | Request::NeuralReflect) => {
+                        brain_used = Instant::now();
+                        let thought = match request {
+                            Request::NeuralImagine { seed } => brain.imagine(&cap(&seed)),
+                            Request::NeuralDream => brain.dream(),
+                            Request::NeuralReason { from, to } => brain.reason(&cap(&from), &cap(&to)),
+                            Request::NeuralIntuit { cue } => brain.intuit(&cap(&cue)),
+                            Request::NeuralReflect => brain.reflect(),
+                            _ => brain.think(),
+                        };
+                        serde_json::to_value(thought).map_err(io::Error::from)
+                    }
+                    Request::NeuralWiring => {
+                        serde_json::to_value(brain.wiring()).map_err(io::Error::from)
+                    }
                     Request::Snapshot => {
                         let mut snapshot = living.snapshot();
                         snapshot.teaching = teacher.summary();

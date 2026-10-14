@@ -1,6 +1,8 @@
 //! The parts of the window. Each view draws itself from state it is handed
 //! and reports what the person did; none of them talks to the agent.
 
+pub mod brain;
+pub mod brain_map;
 pub mod composer;
 pub mod conversation;
 pub mod files;

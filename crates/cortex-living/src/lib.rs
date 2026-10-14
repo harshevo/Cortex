@@ -364,6 +364,17 @@ impl Living {
         None
     }
 
+    /// Asks the standalone brain in the background service something: a
+    /// thought, a dream, its wiring. An error without a service.
+    pub fn neural_request(&self, request: &service::Request) -> std::io::Result<serde_json::Value> {
+        #[cfg(unix)]
+        if let Some(remote) = &self.remote {
+            return remote.request(request);
+        }
+        let _ = request;
+        Err(std::io::Error::other("The brain lives in the background service, which is not running"))
+    }
+
     pub fn language(&self, query: &serde_json::Value) -> serde_json::Value {
         #[cfg(unix)]
         if let Some(remote) = &self.remote {
