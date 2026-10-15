@@ -1041,10 +1041,19 @@ name = "cortex-brain"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "cortex-core",
+ "cortex-providers",
+ "cortex-retrieval",
+ "keyring",
+ "postcard",
+ "regex",
+ "reqwest 0.12.28",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror 2.0.21",
  "tokio",
 ]
 
@@ -1059,14 +1068,13 @@ dependencies = [
  "cortex-core",
  "cortex-eval",
  "cortex-index",
- "cortex-living",
- "cortex-memory",
  "cortex-providers",
  "cortex-retrieval",
  "cortex-router",
  "cortex-skills",
  "cortex-tools",
  "cortex-verify",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",
@@ -1094,8 +1102,6 @@ dependencies = [
  "cortex-brain",
  "cortex-core",
  "cortex-index",
- "cortex-living",
- "cortex-memory",
  "cortex-providers",
  "cortex-tools",
  "cortex-verify",
@@ -1119,9 +1125,7 @@ dependencies = [
  "cortex-cli",
  "cortex-core",
  "cortex-liquid",
- "cortex-living",
  "cortex-market",
- "cortex-memory",
  "cortex-providers",
  "cortex-remote",
  "cortex-retrieval",
@@ -1158,33 +1162,10 @@ dependencies = [
 name = "cortex-liquid"
 version = "0.1.0"
 dependencies = [
- "cortex-living",
+ "cortex-brain",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
-]
-
-[[package]]
-name = "cortex-living"
-version = "0.1.0"
-dependencies = [
- "cortex-core",
- "cortex-neural",
- "cortex-providers",
- "keyring",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
-]
-
-[[package]]
-name = "cortex-living-service"
-version = "0.1.0"
-dependencies = [
- "cortex-core",
- "cortex-living",
- "serde_json",
 ]
 
 [[package]]
@@ -1193,9 +1174,9 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
+ "cortex-brain",
  "cortex-core",
  "cortex-liquid",
- "cortex-memory",
  "flate2",
  "futures-util",
  "image",
@@ -1206,22 +1187,6 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tokio-tungstenite",
-]
-
-[[package]]
-name = "cortex-memory"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "cortex-core",
- "cortex-retrieval",
- "reqwest 0.12.28",
- "rusqlite",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.21",
- "tokio",
 ]
 
 [[package]]
@@ -1236,9 +1201,7 @@ dependencies = [
  "cortex-cli",
  "cortex-core",
  "cortex-liquid",
- "cortex-living",
  "cortex-market",
- "cortex-memory",
  "cortex-providers",
  "cortex-remote",
  "serde",
@@ -1246,17 +1209,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "uniffi",
-]
-
-[[package]]
-name = "cortex-neural"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "postcard",
- "serde",
- "serde_json",
- "tempfile",
 ]
 
 [[package]]
@@ -1308,9 +1260,9 @@ name = "cortex-router"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "cortex-brain",
  "cortex-core",
  "cortex-index",
- "cortex-memory",
  "cortex-retrieval",
  "cortex-tools",
  "serde",
@@ -1337,10 +1289,9 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
+ "cortex-brain",
  "cortex-core",
  "cortex-index",
- "cortex-living",
- "cortex-memory",
  "cortex-retrieval",
  "cortex-verify",
  "globset",

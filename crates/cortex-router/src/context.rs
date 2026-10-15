@@ -4,9 +4,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use cortex_brain::memory::MemorySystem;
 use cortex_core::{Briefing, ContextSource, Verifier, Workspace};
 use cortex_index::{CodeGraph, walk};
-use cortex_memory::MemorySystem;
 use cortex_retrieval::SemanticIndex;
 use cortex_tools::find_references;
 use serde_json::{Value, json};

@@ -1,47 +1,47 @@
-//! A decision controller and an associative network.
+//! The one brain.
 //!
-//! The language model decides every step by itself: inspect, edit, run
-//! something, or stop. A controller watches the run and learns, from runs
-//! whose result was checked, which next action tends to lead to passing
-//! checks soonest from a given situation. When it is confident it says so
-//! in one line after the step's tool results. It advises; it never acts.
+//! A contextual neural sequence learner, explicit grounded skills,
+//! source-linked knowledge and memory, replay, and internal monitoring.
+//! Chats, the coding agent and the trading desk reach the same background
+//! service. Built-in arithmetic and symbolic inference are identified
+//! separately from learning in neural connections.
 //!
-//! The controller feeds the situation's features straight to the learner.
-//! A second controller, which first passed them through a spiking network
-//! with the size and sparsity of the fruit fly brain, was removed: replayed
-//! over saved runs it predicted no better than this one, at 250 MB and
-//! milliseconds a step. The network that advises alongside this one now is
-//! the dendritic one in `cortex-living`, which is fed events, not features.
+//! - [`brain`]: the brain itself. Its cortex learns what comes next, from
+//!   words and from what happens alike; it keeps memories as the cells
+//!   that held them; it speaks, recalls, thinks, imagines, reasons,
+//!   follows hunches, reflects, lives streams of experience with value
+//!   and attention, advises, and sleeps, replaying, pruning and dreaming.
+//! - [`circuit`]: an isolated membrane/dendrite simulator and experimental
+//!   circuit-trained operation selector. It uses no pretrained language model.
+//! - [`senses`]: how the coding agent's work and a market's bars reach
+//!   it, as percepts.
+//! - [`memory`]: its explicit memory of past tasks in each repository
+//!   (working, episodic and long-term facts), recalled into the agent's
+//!   context before a task. This is kept in words, not in weights.
+//! - [`link`]: the handle everything else holds: to the brain in the
+//!   background service, or to one in this process.
+//! - [`protocol`]: what can be asked of it, answered the same way by
+//!   either.
+//! - [`service`]: the background service that owns the brain, keeps it
+//!   learning, sleeping and dreaming while nothing else runs, and the LLM
+//!   teacher that teaches it to talk.
 //!
-//! Beside the controller sits a second, different brain, [`intuition`]:
-//! an associative network that learns which files, commands and errors
-//! went together in passing runs and brings them to mind when a run
-//! reaches a similar place. The controller says what kind of step to take
-//! next; the intuition says where.
-//!
-//! - [`situation`] turns a run's events into features and actions.
-//! - [`learner`] learns action values from reward prediction errors.
-//! - [`accumulator`] makes actions compete for the decision.
-//! - [`controller`] ties them together behind the core traits.
-//! - [`intuition`] is the associative network.
-//! - [`calibration`] sets how sure a hunch must be, from how hunches have
-//!   turned out.
-//! - [`bandit`] learns which strategies to give a run's extra attempts.
-//! - [`mind`] connects the learning brain served from the `brain` project.
+//! It never acts. It advises, and only where its own record says it is
+//! usually right. None of what it measures of itself is evidence of
+//! experience.
 
-pub mod accumulator;
-pub mod bandit;
-pub mod calibration;
-pub mod controller;
-pub mod intuition;
-pub mod learner;
-pub mod mind;
-mod persistence;
-pub mod situation;
+pub mod brain;
+pub mod circuit;
+pub mod link;
+pub mod memory;
+pub mod protocol;
+pub mod senses;
+#[cfg(unix)]
+pub mod service;
 
-pub use bandit::StrategyBandit;
-pub use calibration::Calibration;
-pub use controller::{Controller, DirectEncoder, Encoder};
-pub use intuition::Intuition;
-pub use mind::Mind;
-pub use situation::{Action, Situation};
+pub use brain::{
+    Brain, Engram, Hunch, HunchKind, Imagined, Moment, NeuralSnapshot, Outlook, Recall, Step,
+    Thought, Utterance,
+};
+pub use link::{Counsel, LearningSink, Link};
+pub use protocol::Request;

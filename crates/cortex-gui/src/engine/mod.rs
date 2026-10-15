@@ -147,11 +147,10 @@ pub enum Update {
     /// The agent is ready for the next instruction.
     Idle,
 
-    /// The experimental growing network the agent feeds, for drawing.
-    /// `None` when the capability is off.
-    Living(Option<Arc<cortex_living::Living>>),
+    /// The brain, for drawing. `None` when it cannot be reached.
+    Brain(Option<Arc<cortex_brain::Link>>),
 
-    /// What the mind expects the person to ask for next, now that a run
+    /// What the brain expects the person to ask for next, now that a run
     /// has ended. `None` when it has no clear guess.
     Suggestion(Option<String>),
 

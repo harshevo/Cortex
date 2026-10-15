@@ -249,109 +249,103 @@ fn network(ui: &mut Ui, market: &Market, snapshot: &Snapshot) {
     let brain = snapshot.brain;
 
     widgets::card().show(ui, |ui| {
-            ui.set_width(ui.available_width());
+        ui.set_width(ui.available_width());
 
-            ui.spacing_mut().item_spacing.y = 4.0;
+        ui.spacing_mut().item_spacing.y = 4.0;
 
-            heading(ui, "Track record");
+        heading(ui, "Track record");
 
-            if brain == Brain::Llm {
-                ui.label(
-                    RichText::new(
-                        snapshot
-                            .llm
-                            .model
-                            .as_deref()
-                            .unwrap_or("No model set up"),
-                    )
+        if brain == Brain::Llm {
+            ui.label(
+                RichText::new(snapshot.llm.model.as_deref().unwrap_or("No model set up"))
                     .font(theme::strong(13.0))
                     .color(palette::text()),
-                );
-            }
+            );
+        }
 
-            if let Some(metrics) = brain
-                .net()
-                .and_then(|net| snapshot.report.as_ref()?.of(net).cloned())
-            {
-                let at = |step: usize| {
-                    metrics
-                        .at(step)
-                        .and_then(|score| score.accuracy)
-                        .map_or("—".to_string(), format::share)
-                };
+        if let Some(metrics) = brain
+            .net()
+            .and_then(|net| snapshot.report.as_ref()?.of(net).cloned())
+        {
+            let at = |step: usize| {
+                metrics
+                    .at(step)
+                    .and_then(|score| score.accuracy)
+                    .map_or("—".to_string(), format::share)
+            };
 
-                row(
-                    ui,
-                    "Held out",
-                    &format!("+1 {}  ·  +5 {}  ·  +10 {}", at(1), at(5), at(10)),
-                    palette::text(),
-                );
-            }
+            row(
+                ui,
+                "Held out",
+                &format!("+1 {}  ·  +5 {}  ·  +10 {}", at(1), at(5), at(10)),
+                palette::text(),
+            );
+        }
 
-            let live: Vec<_> = snapshot
-                .tallies
-                .iter()
-                .filter(|tally| tally.source == brain.short() && tally.judged > 0)
-                .collect();
+        let live: Vec<_> = snapshot
+            .tallies
+            .iter()
+            .filter(|tally| tally.source == brain.short() && tally.judged > 0)
+            .collect();
 
-            if !live.is_empty() {
-                let right: usize = live.iter().map(|tally| tally.right).sum();
-                let judged: usize = live.iter().map(|tally| tally.judged).sum();
+        if !live.is_empty() {
+            let right: usize = live.iter().map(|tally| tally.right).sum();
+            let judged: usize = live.iter().map(|tally| tally.judged).sum();
 
-                row(
-                    ui,
-                    "Live",
-                    &format!(
-                        "{right} of {judged} right ({})",
-                        format::share(right as f64 / judged as f64)
-                    ),
-                    palette::text(),
-                );
-            }
+            row(
+                ui,
+                "Live",
+                &format!(
+                    "{right} of {judged} right ({})",
+                    format::share(right as f64 / judged as f64)
+                ),
+                palette::text(),
+            );
+        }
 
-            if brain == Brain::Llm {
-                let llm = &snapshot.llm;
+        if brain == Brain::Llm {
+            let llm = &snapshot.llm;
 
-                match &llm.asking {
-                    Asking::Asking => {
-                        ui.label(
-                            RichText::new("Asking…")
-                                .font(theme::small())
-                                .color(palette::text_muted()),
-                        );
-                    }
-                    Asking::Failed(reason) => {
-                        ui.label(
-                            RichText::new(reason)
-                                .font(theme::small())
-                                .color(palette::bad()),
-                        );
-                    }
-                    Asking::Idle => {}
-                }
-
-                if !llm.reason.is_empty() {
+            match &llm.asking {
+                Asking::Asking => {
                     ui.label(
-                        RichText::new(&llm.reason)
+                        RichText::new("Asking…")
                             .font(theme::small())
-                            .color(palette::text()),
+                            .color(palette::text_muted()),
                     );
                 }
-
-                ui.add_space(4.0);
-
-                if widgets::button(
-                    ui,
-                    "Ask again",
-                    Some(widgets::Glyph::Refresh),
-                    widgets::Kind::Secondary,
-                )
-                .clicked()
-                {
-                    market.ask_llm(true);
+                Asking::Failed(reason) => {
+                    ui.label(
+                        RichText::new(reason)
+                            .font(theme::small())
+                            .color(palette::bad()),
+                    );
                 }
+                Asking::Idle => {}
             }
-        });
+
+            if !llm.reason.is_empty() {
+                ui.label(
+                    RichText::new(&llm.reason)
+                        .font(theme::small())
+                        .color(palette::text()),
+                );
+            }
+
+            ui.add_space(4.0);
+
+            if widgets::button(
+                ui,
+                "Ask again",
+                Some(widgets::Glyph::Refresh),
+                widgets::Kind::Secondary,
+            )
+            .clicked()
+            {
+                market.ask_llm(true);
+            }
+        }
+    });
 }
 
 fn picture_scale(ui: &mut Ui, market: &Market, name: &str, picture: &mut PictureScale) {

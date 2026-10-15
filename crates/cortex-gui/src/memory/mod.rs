@@ -1,6 +1,6 @@
 //! The agent's memory, as the app shows it.
 //!
-//! The memory itself belongs to the engine (`cortex-memory`): it records
+//! The memory itself belongs to the engine (`cortex_brain::memory`): it records
 //! each run, consolidates it into an episode, and promotes what episodes
 //! have in common to long-term facts. This module only reads that memory
 //! and arranges it for drawing:

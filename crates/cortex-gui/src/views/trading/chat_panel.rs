@@ -3,8 +3,8 @@
 
 use std::sync::Arc;
 
+use cortex_brain::memory::experience::Domain;
 use cortex_market::{Snapshot, Source, chat::TradingChat};
-use cortex_memory::experience::Domain;
 use eframe::egui::{self, Align, CornerRadius, Layout, RichText, Stroke, Ui, vec2};
 
 use super::widgets::{self, Glyph, Kind};
@@ -172,8 +172,11 @@ pub fn show(
 
 fn separator(ui: &mut Ui) {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), egui::Sense::hover());
-    ui.painter()
-        .hline(rect.x_range(), rect.center().y, Stroke::new(1.0, palette::border()));
+    ui.painter().hline(
+        rect.x_range(),
+        rect.center().y,
+        Stroke::new(1.0, palette::border()),
+    );
 }
 
 /// What the networks currently read, for the one watched.
@@ -231,7 +234,10 @@ fn readings(ui: &mut Ui, chat: &Arc<TradingChat>, snapshot: &Snapshot) {
             row(
                 ui,
                 "SNN",
-                format!("{} neurons · {} spikes", reading.snn_neurons, reading.spikes),
+                format!(
+                    "{} neurons · {} spikes",
+                    reading.snn_neurons, reading.spikes
+                ),
             );
             row(
                 ui,
@@ -263,7 +269,11 @@ fn readings(ui: &mut Ui, chat: &Arc<TradingChat>, snapshot: &Snapshot) {
             }
 
             for (label, confidence) in &reading.expectations {
-                row(ui, "Expects", format!("{label} · {:.0}%", confidence * 100.0));
+                row(
+                    ui,
+                    "Expects",
+                    format!("{label} · {:.0}%", confidence * 100.0),
+                );
             }
 
             if !reading.imagined.is_empty() {
@@ -282,7 +292,11 @@ fn readings(ui: &mut Ui, chat: &Arc<TradingChat>, snapshot: &Snapshot) {
             }
 
             if let Some(problem) = chat.learning.problem() {
-                ui.label(RichText::new(problem).font(theme::small()).color(palette::bad()));
+                ui.label(
+                    RichText::new(problem)
+                        .font(theme::small())
+                        .color(palette::bad()),
+                );
             }
         });
 }
@@ -306,9 +320,11 @@ fn conversation(
                 ui.add_space((height * 0.35).max(16.0));
                 ui.vertical_centered(|ui| {
                     ui.label(
-                        RichText::new("Ask about the chart, order flow, signals, or past experience.")
-                            .font(theme::ui())
-                            .color(palette::text_muted()),
+                        RichText::new(
+                            "Ask about the chart, order flow, signals, or past experience.",
+                        )
+                        .font(theme::ui())
+                        .color(palette::text_muted()),
                     );
                 });
 
@@ -390,7 +406,9 @@ fn bubble(ui: &mut Ui, text: &str) {
                 ui.with_layout(Layout::top_down(Align::Min), |ui| {
                     ui.add(
                         egui::Label::new(
-                            RichText::new(text).font(theme::body()).color(palette::text()),
+                            RichText::new(text)
+                                .font(theme::body())
+                                .color(palette::text()),
                         )
                         .wrap(),
                     );
@@ -534,7 +552,11 @@ fn composer(
         ui.label(
             RichText::new(format!(
                 "Answer context {age}s old{}",
-                if advanced { " · screen has moved on" } else { "" }
+                if advanced {
+                    " · screen has moved on"
+                } else {
+                    ""
+                }
             ))
             .font(theme::small())
             .color(if advanced {

@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
-use cortex_brain::Mind;
+use cortex_brain::Link;
 use cortex_cli::args::ModelArgs;
 use cortex_cli::commands::prepare;
 use cortex_core::agent::close_unanswered_calls;
@@ -46,11 +46,9 @@ struct Running {
     /// `None` for the stand-in model, which cannot describe a project.
     describer: Option<Arc<dyn ModelProvider>>,
 
-    /// Guesses what the person will ask for next, when the mind is on.
-    mind: Option<Arc<Mind>>,
-
-    /// The dendritic network, which guesses it too when the mind is off.
-    living: Option<Arc<cortex_living::Living>>,
+    /// The brain, when it is on. It guesses what the person will ask for
+    /// next.
+    brain: Option<Arc<Link>>,
 
     /// The record of how runs went, told when the person stops one.
     effect: Option<Arc<cortex_core::effect::EffectSink>>,
@@ -86,7 +84,9 @@ pub async fn run(
         };
         match command {
             Command::Launch(launch) => {
-                if let Some(monitor) = teacher_monitor.take() { monitor.abort(); }
+                if let Some(monitor) = teacher_monitor.take() {
+                    monitor.abort();
+                }
                 if launch.fresh {
                     member.clear();
                     conversation.clear();
@@ -105,7 +105,10 @@ pub async fn run(
                 .await
                 {
                     Ok(built) => {
-                        teacher_monitor = Some(tokio::spawn(monitor_teaching(built.log.clone(), outbox.clone())));
+                        teacher_monitor = Some(tokio::spawn(monitor_teaching(
+                            built.log.clone(),
+                            outbox.clone(),
+                        )));
                         if let Some(log) = &launch.open {
                             conversation = take_up(&built, log);
                             interrupted = None;
@@ -150,7 +153,10 @@ pub async fn run(
                 let mut finished;
 
                 loop {
-                    match brain_chat.handle(&instruction, &running.model, "desktop-brain-chat").await {
+                    match brain_chat
+                        .handle(&instruction, &running.model, &running.log.brain_session())
+                        .await
+                    {
                         Ok(Some(reply)) => {
                             brain_message(&running.log, &outbox, "user", &instruction);
                             brain_message(&running.log, &outbox, "reply", &reply.text);
@@ -162,7 +168,12 @@ pub async fn run(
                         }
                         Err(error) => {
                             brain_message(&running.log, &outbox, "user", &instruction);
-                            brain_message(&running.log, &outbox, "reply", &format!("Brain command failed: {error}"));
+                            brain_message(
+                                &running.log,
+                                &outbox,
+                                "reply",
+                                &format!("Brain command failed: {error}"),
+                            );
                             finished = false;
                             break;
                         }
@@ -256,8 +267,6 @@ pub async fn run(
                 if let Some(running) = &running {
                     conversation = take_up(running, &log);
                     interrupted = None;
-
-                    turn_away(running);
                 }
             }
 
@@ -269,8 +278,6 @@ pub async fn run(
 
                 if let Some(running) = &running {
                     running.log.start_new_session();
-
-                    turn_away(running);
                 }
             }
 
@@ -298,7 +305,9 @@ pub async fn run(
             }
         }
     }
-    if let Some(monitor) = teacher_monitor { monitor.abort(); }
+    if let Some(monitor) = teacher_monitor {
+        monitor.abort();
+    }
 }
 
 fn brain_message(log: &SessionLog, outbox: &Outbox, kind: &str, text: &str) {
@@ -317,28 +326,44 @@ async fn monitor_teaching(log: Arc<SessionLog>, outbox: Outbox) {
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         let cursor = after;
         let result = tokio::task::spawn_blocking(move || {
-            let file = cortex_living::service::default_file()?;
-            cortex_living::service::request(&file, &cortex_living::service::Request::TeachStatus { after:cursor })
-        }).await;
+            let file = cortex_brain::service::default_file()?;
+            cortex_brain::service::request(
+                &file,
+                &cortex_brain::Request::TeachStatus { after: cursor },
+            )
+        })
+        .await;
         if let Ok(Ok(status)) = result {
             if let Some(events) = status["events"].as_array() {
                 for event in events {
                     let sequence = event["sequence"].as_u64().unwrap_or(0);
-                    if sequence <= after { continue; }
+                    if sequence <= after {
+                        continue;
+                    }
                     let kind = event["kind"].as_str().unwrap_or("activity");
                     let text = event["text"].as_str().unwrap_or_default();
                     let mut shown = format!("Teacher round {} · {kind}\n{text}", event["round"]);
                     if kind == "lesson" {
                         if let Some(examples) = event["detail"]["examples"].as_array() {
                             for example in examples {
-                                shown.push_str(&format!("\nQ: {}\nA: {}", example["question"].as_str().unwrap_or_default(), example["answer"].as_str().unwrap_or_default()));
+                                shown.push_str(&format!(
+                                    "\nQ: {}\nA: {}",
+                                    example["question"].as_str().unwrap_or_default(),
+                                    example["answer"].as_str().unwrap_or_default()
+                                ));
                             }
                         }
                     }
                     if let Some(correct) = event["detail"]["correct"].as_bool() {
-                        shown.push_str(if correct { "\nTeacher judgment: correct." } else { "\nTeacher judgment: wrong." });
+                        shown.push_str(if correct {
+                            "\nTeacher judgment: correct."
+                        } else {
+                            "\nTeacher judgment: wrong."
+                        });
                     }
-                    if let Some(correction) = event["detail"]["correction"].as_str() { shown.push_str(&format!("\nCorrection: {correction}")); }
+                    if let Some(correction) = event["detail"]["correction"].as_str() {
+                        shown.push_str(&format!("\nCorrection: {correction}"));
+                    }
                     brain_message(&log, &outbox, "teacher", &shown);
                     after = sequence;
                 }
@@ -370,21 +395,20 @@ async fn build(
     if !launch.demo {
         let model = launch.settings.model_args()?;
 
-        #[cfg(unix)]
+        // Tests leave the brain in the home folder alone.
+        #[cfg(all(unix, not(test)))]
         {
-            let _ = &model;
             let connected = tokio::task::spawn_blocking(|| {
-                cortex_living::service::default_file()
-                    .and_then(|file| cortex_living::Living::connect(&file))
+                cortex_brain::service::default_file().and_then(|file| Link::connect(&file))
             })
             .await;
             match connected {
-                Ok(Ok(living)) => outbox.send(Update::Living(Some(living))),
+                Ok(Ok(brain)) => outbox.send(Update::Brain(Some(brain))),
                 Ok(Err(error)) => outbox.send(Update::ServiceStarting(format!(
-                    "Living service unavailable: {error}"
+                    "Brain service unavailable: {error}"
                 ))),
                 Err(error) => outbox.send(Update::ServiceStarting(format!(
-                    "Living service startup failed: {error}"
+                    "Brain service startup failed: {error}"
                 ))),
             }
         }
@@ -438,18 +462,17 @@ async fn build(
     }
 
     let workspace = blueprint.workspace.clone();
-    let mind = blueprint.setup.mind.clone();
+    let brain = blueprint.setup.brain.clone();
 
-    outbox.send(Update::Living(blueprint.setup.living.clone()));
-
-    if let Some(living) = &blueprint.setup.living {
-        tokio::spawn(let_rest(Arc::downgrade(living), outbox.clone()));
+    // With the brain off, the one reached above is still drawn.
+    if let Some(brain) = &brain {
+        outbox.send(Update::Brain(Some(brain.clone())));
+        tokio::spawn(let_rest(Arc::downgrade(brain), outbox.clone()));
     }
 
     let model = blueprint.model.clone();
     let describer = (!blueprint.info.demo).then(|| blueprint.provider.clone());
 
-    let living = blueprint.setup.living.clone();
     let effect = blueprint.setup.effect.clone();
 
     {
@@ -478,8 +501,7 @@ async fn build(
         workspace,
         model,
         describer,
-        mind,
-        living,
+        brain,
         effect,
     })
 }
@@ -572,43 +594,38 @@ fn create_demo_project(launch: &Launch) -> Result<TempDir> {
     Ok(project)
 }
 
-/// Asks the mind what the person is likely to want now, and tells the
-/// window. Only after a run that reached its end: one that was stopped
-/// or failed is usually followed by sending the same thing again. With
-/// the mind off, the dendritic network says a short instruction it has
-/// seen follow this kind of run more than once, if there is one.
+/// Asks the brain what the person is likely to want now, and tells the
+/// window: a short instruction it has seen follow this kind of run, when
+/// it is sure enough. Only after a run that reached its end: one that was
+/// stopped or failed is usually followed by sending the same thing again.
 fn suggest_next(running: &Running, finished: bool, outbox: &Outbox) {
     if !finished {
         return;
     }
 
-    let Some(mind) = running.mind.clone() else {
-        if let Some(living) = &running.living {
-            outbox.send(Update::Suggestion(living.suggestion()));
-        }
-
+    let Some(brain) = running.brain.clone() else {
         return;
     };
 
     let outbox = outbox.clone();
 
-    // The mind answers over a blocking connection.
-    tokio::task::spawn_blocking(move || outbox.send(Update::Suggestion(mind.suggest())));
+    // The service answers over a blocking connection.
+    tokio::task::spawn_blocking(move || outbox.send(Update::Suggestion(brain.suggestion())));
 }
 
-/// Lets the growing network go over recent moments whenever nothing is
-/// happening, for as long as anything still holds it.
-async fn let_rest(living: std::sync::Weak<cortex_living::Living>, outbox: Outbox) {
+/// Lets the brain think and sleep whenever nothing is happening, for as
+/// long as anything still holds it. The service does this itself.
+async fn let_rest(brain: std::sync::Weak<Link>, outbox: Outbox) {
     let mut stamp = None;
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
-        let Some(living) = living.upgrade() else {
+        let Some(brain) = brain.upgrade() else {
             return;
         };
 
-        let rested = living.rest();
-        let current = living.stamp();
+        let rested = brain.rest();
+        let current = brain.stamp();
         if rested || stamp != Some(current) {
             outbox.wake();
         }
@@ -640,14 +657,6 @@ async fn compact(running: &Running, conversation: &mut Vec<Message>) -> (String,
             format!("The conversation was left as it was: {error}"),
             true,
         ),
-    }
-}
-
-/// Another session is on screen: the next instruction does not follow
-/// from the run that ended in the one before.
-fn turn_away(running: &Running) {
-    if let Some(mind) = &running.mind {
-        mind.turn_away();
     }
 }
 
@@ -748,7 +757,7 @@ async fn carry_out(
                         if cortex_cli::brain_commands::parse(&message).is_some() {
                             let mut control = cortex_cli::brain_commands::Chat::default();
                             brain_message(&running.log, outbox, "user", &message);
-                            match control.handle(&message, &running.model, "desktop-brain-chat").await {
+                            match control.handle(&message, &running.model, &running.log.brain_session()).await {
                                 Ok(Some(reply)) => brain_message(&running.log, outbox, "reply", &reply.text),
                                 Err(error) => brain_message(&running.log, outbox, "reply", &format!("Brain command failed: {error}")),
                                 Ok(None) => {}

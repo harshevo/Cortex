@@ -6,12 +6,12 @@ edition.workspace = true
 license.workspace = true
 
 [features]
-desktop = ["dep:cortex-memory","dep:flate2"]
+desktop = ["dep:cortex-brain","dep:flate2"]
 
 [dependencies]
 cortex-core.workspace = true
 cortex-liquid.workspace = true
-cortex-memory = { workspace = true, optional = true }
+cortex-brain = { workspace = true, optional = true }
 flate2 = { version="1", optional=true }
 
 base64 = "0.22"

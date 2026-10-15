@@ -1,7 +1,5 @@
 //! Turning numbers into short text.
 
-use std::time::{SystemTime, UNIX_EPOCH};
-
 /// `950`, `21.6k`, `1.2M`.
 pub fn count(value: u64) -> String {
     match value {
@@ -26,23 +24,6 @@ pub fn duration(milliseconds: u64) -> String {
 
 pub fn percent(ratio: f32) -> String {
     format!("{:.0}%", ratio * 100.0)
-}
-
-/// How long ago a moment was: `just now`, `12 min ago`, `3 h ago`, `5 d ago`.
-pub fn ago(unix_milliseconds: u64) -> String {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_millis() as u64)
-        .unwrap_or(unix_milliseconds);
-
-    let minutes = now.saturating_sub(unix_milliseconds) / 60_000;
-
-    match minutes {
-        0 => "just now".to_string(),
-        1..60 => format!("{minutes} min ago"),
-        60..1_440 => format!("{} h ago", minutes / 60),
-        _ => format!("{} d ago", minutes / 1_440),
-    }
 }
 
 /// The text on one line, cut to `max_chars` with an ellipsis.

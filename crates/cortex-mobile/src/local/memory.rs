@@ -4,8 +4,8 @@
 use std::path::Path;
 
 use anyhow::Result;
+use cortex_brain::memory::Store;
 use cortex_core::Outcome;
-use cortex_memory::Store;
 use cortex_remote::wire::{MemoryGraph, MemoryKind, MemoryNode};
 
 /// The newest episodes drawn. A phone draws them all at once.

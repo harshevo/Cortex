@@ -74,7 +74,6 @@ pub struct CortexApp {
     /// The project is being got ready; the button waits until it is.
     preparing: bool,
 
-
     /// A past session opened from the sidebar, shown instead of `live`.
     viewing: Option<(PathBuf, Session)>,
 
@@ -99,17 +98,10 @@ pub struct CortexApp {
     /// The instruction being typed.
     draft: String,
 
-    /// The dendritic network, when a capability that uses it is on, and
-    /// how it is being drawn. `network_stamp` is what it was at when it
-    /// was last copied for drawing.
-    living: Option<std::sync::Arc<cortex_living::Living>>,
-    living_view: crate::views::living::LivingView,
-
-    /// The standalone brain's tabs, and the brain as last fetched.
+    /// The brain, once it has been reached, its view's tabs, and the
+    /// brain as last fetched for drawing.
+    brain: Option<std::sync::Arc<cortex_brain::Link>>,
     brain_view: crate::views::brain::BrainView,
-    neural: Option<cortex_living::neural::NeuralSnapshot>,
-    neural_fetched: Option<std::time::Instant>,
-    network_stamp: Option<(u64, u64, bool)>,
 
     trading: crate::views::trading::TradingView,
     /// The screen the trading screen's back button returns to.
@@ -164,8 +156,8 @@ impl CortexApp {
 
         let view = if rehearsal.opens_trading().is_some() {
             View::Trading
-        } else if rehearsal.opens_living() || rehearsal.opens_memory() {
-            View::Living
+        } else if rehearsal.opens_brain() || rehearsal.opens_memory() {
+            View::Brain
         } else if rehearsal.opens_insights() {
             View::Insights
         } else {
@@ -199,12 +191,11 @@ impl CortexApp {
             approvals: VecDeque::new(),
             files: Files::opened(rehearsal.opens_files(), rehearsal.opens_file()),
             draft: String::new(),
-            living: None,
-            living_view: Default::default(),
-            brain_view: Default::default(),
-            neural: None,
-            neural_fetched: None,
-            network_stamp: None,
+            brain: None,
+            brain_view: crate::views::brain::BrainView::on(match rehearsal.brain_tab() {
+                Some("metrics") => crate::views::brain::Tab::Metrics,
+                _ => crate::views::brain::Tab::Brain,
+            }),
             trading: Default::default(),
             trading_return: View::Conversation,
             insights: Default::default(),
@@ -298,7 +289,6 @@ impl CortexApp {
         }
     }
 
-
     fn refresh_sessions(&mut self) {
         self.history_revision += 1;
         let folders = self.settings.projects.iter().chain([&self.scratch]);
@@ -369,7 +359,7 @@ impl CortexApp {
                     self.refresh_sessions();
                 }
 
-                Update::Living(living) => self.living = living,
+                Update::Brain(brain) => self.brain = brain,
 
                 // One that arrives after the next run began is too late.
                 Update::Suggestion(suggestion) => {
@@ -433,8 +423,11 @@ impl CortexApp {
     fn heard(&mut self, event: &cortex_core::Event) {
         match event {
             cortex_core::Event::BrainObserved { source, detail, .. }
-                if source == "snn+dann conversation" && detail["kind"] == "user" => {
-                if let Some(text) = detail["text"].as_str() { self.queued.retain(|queued| queued != text); }
+                if source == "snn+dann conversation" && detail["kind"] == "user" =>
+            {
+                if let Some(text) = detail["text"].as_str() {
+                    self.queued.retain(|queued| queued != text);
+                }
             }
             cortex_core::Event::UserInterjected { text, .. } => {
                 if let Some(position) = self.queued.iter().position(|queued| queued == text) {
@@ -1217,7 +1210,7 @@ impl CortexApp {
             .frame(frame)
             .show(ui, |ui| match self.view {
                 View::Conversation => self.conversation(ui),
-                View::Living => self.living_space(ui),
+                View::Brain => self.brain_space(ui),
                 View::Trading => {
                     if let Some(crate::views::trading::Action::Back) = crate::views::trading::show(
                         ui,
@@ -1252,7 +1245,7 @@ impl CortexApp {
                 self.apply_settings(*settings);
             }
             Some(settings_page::Action::Back) => self.show_chat(),
-            Some(settings_page::Action::OpenLiving) => self.view = View::Living,
+            Some(settings_page::Action::OpenBrain) => self.view = View::Brain,
 
             // Only what the window draws changes: the agent is left alone.
             Some(settings_page::Action::Theme(name)) => {
@@ -1282,64 +1275,12 @@ impl CortexApp {
         }
     }
 
-    /// Copies the network for drawing, if it has changed since it was
-    /// last copied. A copy holds every neuron's name, so it is not made
-    /// on every frame.
-    fn look_at_network(&mut self) {
-        let stamp = self.living.as_ref().map(|living| living.stamp());
-
-        if stamp == self.network_stamp {
-            return;
-        }
-
-        self.network_stamp = stamp;
-
-        self.memory
-            .look_at_network(self.living.as_ref().map(|living| living.snapshot()));
-    }
-
-    fn living_space(&mut self, ui: &mut egui::Ui) {
+    fn brain_space(&mut self, ui: &mut egui::Ui) {
         use crate::views::brain::{self, Tab};
 
-        self.look_at_network();
-
-        // The brain is copied twice a second at most: it changes every step.
-        if self
-            .neural_fetched
-            .is_none_or(|at| at.elapsed() >= std::time::Duration::from_millis(500))
-        {
-            self.neural_fetched = Some(std::time::Instant::now());
-            if let Some(neural) = self.living.as_ref().and_then(|living| living.neural()) {
-                self.neural = Some(neural);
-            }
-        }
-
         match brain::tabs(ui, &mut self.brain_view) {
-            Tab::Brain => match &self.neural {
-                Some(neural) => {
-                    let teaching = self
-                        .memory
-                        .network
-                        .as_ref()
-                        .map(|network| network.teaching.clone())
-                        .unwrap_or_default();
-                    brain::show_brain(ui, &mut self.brain_view, neural, &teaching, self.living.as_ref())
-                }
-                None => brain::waiting(ui),
-            },
-            Tab::Metrics => match &self.neural {
-                Some(neural) => brain::show_metrics(ui, &mut self.brain_view, neural),
-                None => brain::waiting(ui),
-            },
-            Tab::Habits => match &self.memory.network {
-                Some(snapshot) => crate::views::living::show(
-                    ui,
-                    &mut self.living_view,
-                    snapshot,
-                    &self.memory.performance,
-                ),
-                None => brain::waiting(ui),
-            },
+            Tab::Brain => brain::show_brain(ui, &mut self.brain_view),
+            Tab::Metrics => brain::show_metrics(ui, &mut self.brain_view),
         }
     }
 

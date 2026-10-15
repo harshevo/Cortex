@@ -52,8 +52,13 @@ impl Rehearsal {
         self.args.open_insights
     }
 
-    pub fn opens_living(&self) -> bool {
-        self.args.open_living
+    pub fn opens_brain(&self) -> bool {
+        self.args.open_brain
+    }
+
+    /// The brain tab to start on, if one was named.
+    pub fn brain_tab(&self) -> Option<&str> {
+        self.args.brain_tab.as_deref()
     }
 
     /// The trading tab to start on, if any.

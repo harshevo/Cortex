@@ -229,8 +229,8 @@ fn prepare_demo(model: &mut ModelArgs) {
 
     switch_on(model, Feature::Gate);
 
-    // The stand-in's made-up runs are nothing for the mind to learn from.
-    model.features.retain(|feature| *feature != Feature::Mind);
+    // The stand-in's made-up runs are nothing for the brain to learn from.
+    model.features.retain(|feature| *feature != Feature::Brain);
 
     if model.checks.is_empty() {
         model.checks = vec![demo::CHECK.to_string()];

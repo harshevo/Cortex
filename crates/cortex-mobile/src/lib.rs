@@ -16,8 +16,8 @@
 mod driver;
 mod insights;
 mod local;
-mod model;
 mod market;
+mod model;
 mod trading;
 mod view;
 
@@ -33,8 +33,8 @@ use tokio::runtime::Runtime;
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
 pub use insights::*;
-pub use model::Change;
 pub use market::*;
+pub use model::Change;
 pub use trading::*;
 pub use view::*;
 

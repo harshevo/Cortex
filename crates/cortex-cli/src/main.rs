@@ -9,7 +9,7 @@ use cortex_cli::commands;
 #[tokio::main]
 async fn main() -> ExitCode {
     #[cfg(unix)]
-    if let Some(result) = cortex_living::service::serve_argument() {
+    if let Some(result) = cortex_brain::service::serve_argument() {
         return match result {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
@@ -29,7 +29,6 @@ async fn main() -> ExitCode {
         Command::Eval(command) => commands::eval::execute(command).await,
         Command::Skills(args) => commands::skills::execute(args),
         Command::Login => commands::login::execute().await,
-        Command::Mind(args) => commands::mind::execute(args),
         Command::Usage(args) => commands::usage::execute(args),
         Command::Effect(args) => commands::effect::execute(args),
     };

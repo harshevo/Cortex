@@ -5,7 +5,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use eframe::egui::Color32;
 
-
 /// The colours of one theme.
 pub struct Theme {
     pub name: &'static str,
@@ -422,7 +421,6 @@ pub fn background() -> Color32 {
     current().background
 }
 
-
 /// A pairing code is drawn dark on white whatever the theme: that is
 /// what cameras read best.
 pub const CODE_PAPER: Color32 = Color32::WHITE;
@@ -483,7 +481,6 @@ pub fn warning() -> Color32 {
 pub fn model() -> Color32 {
     current().model
 }
-
 
 #[cfg(test)]
 mod tests {

@@ -4,10 +4,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use cortex_brain::intuition::{Network, Picture};
-use cortex_cli::features::intuition_file;
-use cortex_memory::store::StoredEpisode;
-use cortex_memory::{Embedder, Episode, Fact, Store, StoredLesson};
+use cortex_brain::memory::store::StoredEpisode;
+use cortex_brain::memory::{Embedder, Episode, Fact, Store, StoredLesson};
 use cortex_retrieval::EmbeddingClient;
 
 use super::words::hash_words;
@@ -15,10 +13,6 @@ use super::words::hash_words;
 /// Longest the app waits for episodes to be embedded. The service may be
 /// busy indexing a project for another session.
 const EMBED_TIMEOUT: Duration = Duration::from_secs(45);
-
-/// Most neurons of the intuition drawn. The network may hold thousands;
-/// the best connected are the ones worth seeing.
-const NEURONS_SHOWN: usize = 60;
 
 /// What decided where each episode sits.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -48,19 +42,12 @@ pub struct Remembered {
     pub lessons: Vec<StoredLesson>,
 
     pub placement: Placement,
-
-    /// The best-connected part of the associative network. Empty when
-    /// the intuition has never been switched on here.
-    pub intuition: Picture,
 }
 
 /// One project's memory: its file, and the repository it is about.
 struct Source {
     store: Store,
     scope: String,
-
-    /// Where the engine keeps the intuition's network.
-    intuition: PathBuf,
 }
 
 /// Row ids are per file. Episodes and lessons of the nth other project
@@ -96,7 +83,6 @@ impl MemoryReader {
             own: Source {
                 store,
                 scope: scope.to_string(),
-                intuition: intuition_file(path),
             },
             others: Vec::new(),
             embedder,
@@ -125,11 +111,7 @@ impl MemoryReader {
             }
 
             if let Ok(store) = Store::open(&path) {
-                self.others.push(Source {
-                    store,
-                    scope,
-                    intuition: intuition_file(&path),
-                });
+                self.others.push(Source { store, scope });
             }
         }
 
@@ -141,7 +123,6 @@ impl MemoryReader {
         let mut facts: Vec<Fact> = Vec::new();
         let mut lessons: Vec<StoredLesson> = Vec::new();
         let mut total_episodes = 0;
-        let mut pictures = Vec::new();
 
         for (index, source) in [&self.own].into_iter().chain(&self.others).enumerate() {
             let offset = index as i64 * ID_SPACING;
@@ -179,8 +160,6 @@ impl MemoryReader {
             }));
 
             total_episodes += source.store.episode_count(&source.scope)?;
-
-            pictures.push(Network::load_or_new(&source.intuition).picture(NEURONS_SHOWN));
         }
 
         // Oldest first, across projects as within one.
@@ -200,7 +179,6 @@ impl MemoryReader {
             facts,
             lessons,
             placement,
-            intuition: merge(pictures, NEURONS_SHOWN),
         })
     }
 
@@ -275,89 +253,6 @@ impl MemoryReader {
             }
         }
     }
-}
-
-/// Several networks' pictures as one: a concept met in more than one
-/// project becomes one neuron, and the best connected `most` are kept.
-fn merge(pictures: Vec<Picture>, most: usize) -> Picture {
-    if pictures.len() == 1 {
-        return pictures.into_iter().next().unwrap_or_default();
-    }
-
-    let mut merged = Picture::default();
-    let mut synapses: Vec<(usize, usize, f32)> = Vec::new();
-
-    for picture in pictures {
-        let place: Vec<usize> = picture
-            .neurons
-            .into_iter()
-            .map(|neuron| {
-                let known = merged
-                    .neurons
-                    .iter()
-                    .position(|other| other.concept == neuron.concept);
-
-                match known {
-                    Some(place) => {
-                        merged.neurons[place].runs += neuron.runs;
-                        merged.neurons[place].strength += neuron.strength;
-
-                        place
-                    }
-
-                    None => {
-                        merged.neurons.push(neuron);
-
-                        merged.neurons.len() - 1
-                    }
-                }
-            })
-            .collect();
-
-        synapses.extend(
-            picture
-                .synapses
-                .into_iter()
-                .map(|(from, to, strength)| (place[from], place[to], strength)),
-        );
-
-        merged.total_neurons += picture.total_neurons;
-        merged.total_synapses += picture.total_synapses;
-        merged.runs += picture.runs;
-    }
-
-    let mut order: Vec<usize> = (0..merged.neurons.len()).collect();
-
-    order.sort_by(|left, right| {
-        merged.neurons[*right]
-            .strength
-            .total_cmp(&merged.neurons[*left].strength)
-    });
-    order.truncate(most);
-
-    let mut place = vec![None; merged.neurons.len()];
-
-    for (new, old) in order.iter().enumerate() {
-        place[*old] = Some(new);
-    }
-
-    let mut neurons: Vec<Option<_>> = merged.neurons.into_iter().map(Some).collect();
-
-    merged.neurons = order
-        .iter()
-        .filter_map(|old| neurons[*old].take())
-        .collect();
-
-    merged.synapses = synapses
-        .into_iter()
-        .filter_map(|(from, to, strength)| Some((place[from]?, place[to]?, strength)))
-        .collect();
-
-    merged
-        .synapses
-        .sort_by_key(|synapse| (synapse.0, synapse.1));
-
-    merged
 }
 
 #[cfg(test)]

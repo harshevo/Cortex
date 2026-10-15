@@ -26,3 +26,6 @@ apps/ios/Cortex.xcodeproj/
 
 screenshots/
 ui-screens/
+artifacts/
+docs/
+.claude/

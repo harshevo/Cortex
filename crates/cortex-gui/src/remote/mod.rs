@@ -179,7 +179,7 @@ pub fn mirror(chat: &str, update: &Update) {
         Update::Ready(_)
         | Update::Unavailable(_)
         | Update::Logging(_)
-        | Update::Living(_)
+        | Update::Brain(_)
         | Update::MemoryFailed(_) => return,
     };
 

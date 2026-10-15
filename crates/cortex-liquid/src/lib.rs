@@ -7,9 +7,11 @@
 //! - [`cfc`]: the liquid network, a closed-form continuous-time cell
 //!   that is told how much time passed between bars, trained by
 //!   hand-written backpropagation.
-//! - [`regime`]: the dendritic network from `cortex-living`, fed each bar
-//!   as a few words, whose expectations of the next bar become extra
-//!   inputs to the liquid network.
+//! - [`regime`]: the brain from `cortex-brain`, fed each bar as a few
+//!   words, whose expectations of the next bar become extra inputs to the
+//!   liquid network.
+//! - [`abilities`]: small learners for live readings (liquid, spiking and
+//!   a ridge readout of what the one brain expects), one per domain.
 //! - [`analysis`]: trains both on the first part of a series, scores
 //!   them and three baselines on the held-out last part, and gives a
 //!   verdict that is "no edge" unless the evidence is strong.

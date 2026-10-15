@@ -258,12 +258,16 @@ pub fn launch(program: &Path, show_window: bool, on_event: OnEvent) -> Result<Ch
     let (we_read, browser_writes) =
         std::io::pipe().map_err(|error| failed("open a pipe to the browser", error))?;
 
-    let (reads, writes) = (browser_reads.as_raw_handle(), browser_writes.as_raw_handle());
+    let (reads, writes) = (
+        browser_reads.as_raw_handle(),
+        browser_writes.as_raw_handle(),
+    );
 
     for handle in [reads, writes] {
         // SAFETY: both handles are open, and owned here until the
         // browser has started.
-        let marked = unsafe { SetHandleInformation(handle as _, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) };
+        let marked =
+            unsafe { SetHandleInformation(handle as _, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) };
 
         if marked == 0 {
             return Err(failed(

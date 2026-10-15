@@ -6,8 +6,8 @@ use cortex_market::market::time_label;
 use cortex_market::{Brain, Market, Snapshot, Source, Tally, Tone, clock};
 use eframe::egui::{self, Align, Color32, CornerRadius, Layout, RichText, Sense, Ui, vec2};
 
-use super::{format, widgets};
 use super::panel::tone_colour;
+use super::{format, widgets};
 use crate::theme::{self, palette};
 
 const ROW: f32 = 32.0;
@@ -137,7 +137,10 @@ fn table_with_text(
         }
     };
 
-    let header_cells: Vec<Cell> = header.iter().map(|name| cell(name.to_uppercase())).collect();
+    let header_cells: Vec<Cell> = header
+        .iter()
+        .map(|name| cell(name.to_uppercase()))
+        .collect();
 
     egui::Frame::new()
         .fill(palette::surface())
@@ -422,7 +425,10 @@ pub fn outcomes(ui: &mut Ui, market: &Market, snapshot: &Snapshot) {
     }
 
     if rows.is_empty() {
-        quiet(ui, "Nothing recorded yet: forecasts are checked as candles close.");
+        quiet(
+            ui,
+            "Nothing recorded yet: forecasts are checked as candles close.",
+        );
 
         return;
     }

@@ -16,6 +16,7 @@ use crate::session::history::TRAJECTORY_DIRECTORY;
 /// the command-line agent. The file is created on the session's first
 /// event, so a session in which nothing was asked leaves no empty log.
 pub struct SessionLog {
+    brain_session: Mutex<String>,
     directory: PathBuf,
     current: Mutex<Option<JsonlSink>>,
 
@@ -35,6 +36,7 @@ pub type Namer = Box<dyn Fn(&str) + Send + Sync>;
 impl SessionLog {
     pub fn new(project: &Path, outbox: Outbox) -> Self {
         Self {
+            brain_session: Mutex::new(new_session_key()),
             directory: project.join(TRAJECTORY_DIRECTORY),
             current: Mutex::new(None),
             path: Mutex::new(None),
@@ -54,6 +56,7 @@ impl SessionLog {
     }
 
     fn began(&self, path: &Path) {
+        *lock(&self.brain_session) = stem(path);
         *lock(&self.path) = Some(path.to_path_buf());
 
         if let Some(namer) = &*lock(&self.namer) {
@@ -83,24 +86,29 @@ impl SessionLog {
     pub fn start_new_session(&self) {
         *self.lock() = None;
         *lock(&self.path) = None;
+        *lock(&self.brain_session) = new_session_key();
+    }
+
+    pub fn brain_session(&self) -> String {
+        format!("desktop-{}", &*lock(&self.brain_session))
     }
 
     fn create_log(&self) -> std::io::Result<(PathBuf, JsonlSink)> {
         std::fs::create_dir_all(&self.directory)?;
         loop {
-            let counter = NEXT_LOG.fetch_add(1, Ordering::Relaxed);
-            let path = self.directory.join(format!(
-                "{}-{}-{counter}.jsonl",
-                unix_millis(),
-                std::process::id()
-            ));
+            let path = self
+                .directory
+                .join(format!("{}.jsonl", &*lock(&self.brain_session)));
             match std::fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
                 .open(&path)
             {
                 Ok(_) => return JsonlSink::append(&path).map(|sink| (path, sink)),
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    *lock(&self.brain_session) = new_session_key();
+                    continue;
+                }
                 Err(error) => return Err(error),
             }
         }
@@ -111,6 +119,15 @@ impl SessionLog {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
+}
+
+fn new_session_key() -> String {
+    format!(
+        "{}-{}-{}",
+        unix_millis(),
+        std::process::id(),
+        NEXT_LOG.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 fn stem(path: &Path) -> String {

@@ -20,7 +20,7 @@ struct Arguments {
 /// The system prompt and the tool descriptions an agent built with
 /// `flags` would send.
 async fn built(project: &std::path::Path, flags: &[&str]) -> (String, Vec<ToolSpec>) {
-    let mut arguments = vec!["cortex", "--no-records", "--without", "mind"];
+    let mut arguments = vec!["cortex", "--no-records", "--without", "brain"];
 
     arguments.extend(flags);
 
@@ -63,7 +63,7 @@ const EVERYTHING: [&str; 22] = [
     "--with",
     "browser",
     "--with",
-    "intuition",
+    "gate",
 ];
 
 #[tokio::test]

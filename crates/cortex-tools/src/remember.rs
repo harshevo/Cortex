@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use cortex_brain::memory::MemorySystem;
 use cortex_core::{Access, Tool, ToolContext, ToolError, ToolSpec};
-use cortex_memory::MemorySystem;
 use serde::Deserialize;
 use serde_json::{Value, json};
 

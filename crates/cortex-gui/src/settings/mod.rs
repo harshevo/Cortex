@@ -258,17 +258,11 @@ impl Default for Settings {
             combine_memory: false,
             max_steps: 60,
             show_thinking: true,
-            capabilities: [
-                Feature::Memory,
-                Feature::Brain,
-                Feature::Intuition,
-                Feature::Gate,
-                Feature::Mind,
-            ]
-            .into_iter()
-            .map(capability_name)
-            .collect(),
-            brain_integration_version: 2,
+            capabilities: [Feature::Memory, Feature::Brain, Feature::Gate]
+                .into_iter()
+                .map(capability_name)
+                .collect(),
+            brain_integration_version: 3,
             rollouts: 3,
             rollouts_parallel: false,
             browser_pictures: false,
@@ -308,18 +302,30 @@ impl Settings {
     fn migrate_brain(&mut self) {
         if self.brain_integration_version == 0 {
             if self.capabilities == [capability_name(Feature::Memory)] {
-                for feature in [Feature::Brain, Feature::Intuition, Feature::Gate] {
+                for feature in [Feature::Brain, Feature::Gate] {
                     self.set(feature, true);
                 }
             }
             self.brain_integration_version = 1;
         }
 
-        // The mind is on unless it is switched off, so settings saved
+        // The brain is on unless it is switched off, so settings saved
         // before it existed gain it once. Switching it off afterwards holds.
         if self.brain_integration_version == 1 {
-            self.set(Feature::Mind, true);
+            self.set(Feature::Brain, true);
             self.brain_integration_version = 2;
+        }
+
+        // There is one brain now. The mind it replaced carries over as the
+        // brain; the other learners it replaced are gone, and a saved name
+        // the agent no longer knows would stop it from starting.
+        if self.brain_integration_version == 2 {
+            if self.capabilities.iter().any(|name| name == "mind") {
+                self.set(Feature::Brain, true);
+            }
+            self.capabilities
+                .retain(|name| !RETIRED.contains(&name.as_str()));
+            self.brain_integration_version = 3;
         }
     }
 
@@ -362,15 +368,6 @@ impl Settings {
     }
 
     pub fn set(&mut self, feature: Feature, on: bool) {
-        if on && matches!(feature, Feature::Brain | Feature::Controller) {
-            let other = if feature == Feature::Brain {
-                Feature::Controller
-            } else {
-                Feature::Brain
-            };
-            self.capabilities
-                .retain(|name| *name != capability_name(other));
-        }
         let name = capability_name(feature);
 
         self.capabilities.retain(|existing| *existing != name);
@@ -505,15 +502,6 @@ impl Settings {
             arguments.extend(["--with".to_string(), capability.clone()]);
         }
 
-        // One brain is shared by every chat, code and trading session, so
-        // it always watches. Brain on in Capabilities lets it advise too.
-        let brain = capability_name(Feature::Brain);
-        let living = capability_name(Feature::Living);
-
-        if !self.capabilities.iter().any(|c| *c == brain || *c == living) {
-            arguments.extend(["--with".to_string(), living]);
-        }
-
         let parsed = ModelOnly::try_parse_from(arguments)
             .context("the saved settings are not ones the agent accepts")?;
 
@@ -527,6 +515,9 @@ struct ModelOnly {
     #[command(flatten)]
     model: ModelArgs,
 }
+
+/// Capabilities saved by earlier versions that the one brain replaced.
+const RETIRED: [&str; 4] = ["mind", "intuition", "living", "controller"];
 
 /// A capability's `--with` name.
 pub fn capability_name(feature: Feature) -> String {
@@ -605,19 +596,24 @@ mod tests {
             ..Settings::default()
         };
         settings.migrate_brain();
-        assert!(
-            settings.has(Feature::Brain)
-                && settings.has(Feature::Intuition)
-                && settings.has(Feature::Gate)
-        );
-        assert!(settings.has(Feature::Mind));
+        assert!(settings.has(Feature::Brain) && settings.has(Feature::Gate));
         settings.set(Feature::Brain, false);
-        settings.set(Feature::Mind, false);
         settings.migrate_brain();
-        assert!(!settings.has(Feature::Brain) && !settings.has(Feature::Mind));
-        settings.set(Feature::Controller, true);
-        settings.set(Feature::Brain, true);
-        assert!(!settings.has(Feature::Controller));
+        assert!(!settings.has(Feature::Brain));
+    }
+
+    #[test]
+    fn the_retired_learners_become_the_one_brain() {
+        let mut settings = Settings {
+            capabilities: ["memory", "intuition", "mind", "living", "controller"]
+                .map(String::from)
+                .to_vec(),
+            brain_integration_version: 2,
+            ..Settings::default()
+        };
+        settings.migrate_brain();
+        assert_eq!(settings.capabilities, ["memory", "brain"]);
+        assert!(settings.model_args().is_ok());
     }
     use super::*;
 
@@ -646,13 +642,7 @@ mod tests {
         assert_eq!(arguments.max_steps, 25);
         assert_eq!(
             arguments.features,
-            [
-                Feature::Memory,
-                Feature::Brain,
-                Feature::Intuition,
-                Feature::Mind,
-                Feature::Gate
-            ]
+            [Feature::Memory, Feature::Brain, Feature::Gate]
         );
     }
 
@@ -675,10 +665,7 @@ mod tests {
         settings.set(Feature::Router, true);
         settings.set(Feature::Memory, false);
 
-        assert_eq!(
-            settings.capabilities,
-            ["brain", "intuition", "gate", "mind", "router"]
-        );
+        assert_eq!(settings.capabilities, ["brain", "gate", "router"]);
     }
 
     #[test]

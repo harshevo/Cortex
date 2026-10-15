@@ -223,7 +223,7 @@ impl TradingView {
                     move || context.request_repaint(),
                 );
                 #[cfg(unix)]
-                chat.listen(shared_brain());
+                chat.listen(shared_brain(chat.learning.clone()));
                 self.chat = Some(chat);
             }
             Err(error) => self.problem = Some(format!("Trading memory unavailable: {error}")),
@@ -362,7 +362,6 @@ fn choose_file() -> Option<PathBuf> {
         .pick_file()
 }
 
-
 pub fn show(
     ui: &mut Ui,
     view: &mut TradingView,
@@ -458,14 +457,16 @@ pub fn show(
             }
 
             egui::CentralPanel::default()
-                .frame(egui::Frame::new().fill(palette::background()).inner_margin(
-                    egui::Margin {
-                        left: 16,
-                        right: 16,
-                        top: 0,
-                        bottom: 16,
-                    },
-                ))
+                .frame(
+                    egui::Frame::new()
+                        .fill(palette::background())
+                        .inner_margin(egui::Margin {
+                            left: 16,
+                            right: 16,
+                            top: 0,
+                            bottom: 16,
+                        }),
+                )
                 .show(ui, |ui| {
                     egui::Frame::new()
                         .fill(palette::background())
@@ -481,33 +482,33 @@ pub fn show(
 
         tab => {
             egui::CentralPanel::default()
-                .frame(egui::Frame::new().fill(palette::background()).inner_margin(
-                    egui::Margin {
-                        left: 16,
-                        right: 16,
-                        top: 0,
-                        bottom: 0,
-                    },
-                ))
+                .frame(
+                    egui::Frame::new()
+                        .fill(palette::background())
+                        .inner_margin(egui::Margin {
+                            left: 16,
+                            right: 16,
+                            top: 0,
+                            bottom: 0,
+                        }),
+                )
                 .show(ui, |ui| {
-                    egui::ScrollArea::both()
-                        .auto_shrink(false)
-                        .show(ui, |ui| {
-                            egui::Frame::new()
-                                .inner_margin(egui::Margin {
-                                    left: 2,
-                                    right: 8,
-                                    top: 0,
-                                    bottom: 8,
-                                })
-                                .show(ui, |ui| match tab {
-                                    Tab::Forecast => tables::forecast(ui, &snapshot),
-                                    Tab::Outcomes => tables::outcomes(ui, &market, &snapshot),
-                                    Tab::Metrics => tables::metrics(ui, &market, &snapshot),
-                                    Tab::Flow => flow_panel::show(ui, &market, &snapshot),
-                                    Tab::Chart => {}
-                                });
-                        });
+                    egui::ScrollArea::both().auto_shrink(false).show(ui, |ui| {
+                        egui::Frame::new()
+                            .inner_margin(egui::Margin {
+                                left: 2,
+                                right: 8,
+                                top: 0,
+                                bottom: 8,
+                            })
+                            .show(ui, |ui| match tab {
+                                Tab::Forecast => tables::forecast(ui, &snapshot),
+                                Tab::Outcomes => tables::outcomes(ui, &market, &snapshot),
+                                Tab::Metrics => tables::metrics(ui, &market, &snapshot),
+                                Tab::Flow => flow_panel::show(ui, &market, &snapshot),
+                                Tab::Chart => {}
+                            });
+                    });
                 });
         }
     }
@@ -732,21 +733,16 @@ fn header(
                 }
 
                 let (dhan, detail) = match &snapshot.connection {
-                    Connection::Connected(profile) => {
-                        ("Dhan account…", format!("Connected as {}", profile.client_id))
-                    }
+                    Connection::Connected(profile) => (
+                        "Dhan account…",
+                        format!("Connected as {}", profile.client_id),
+                    ),
                     Connection::Checking => ("Dhan account…", "Checking…".to_string()),
                     _ => ("Connect Dhan…", "Live data in real time".to_string()),
                 };
 
-                if widgets::menu_item(
-                    ui,
-                    dhan,
-                    Some(widgets::Glyph::Link),
-                    Some(&detail),
-                    false,
-                )
-                .clicked()
+                if widgets::menu_item(ui, dhan, Some(widgets::Glyph::Link), Some(&detail), false)
+                    .clicked()
                 {
                     view.connecting = true;
                 }
@@ -816,9 +812,9 @@ fn header(
 
 /// The instrument's name, large, opening the picker.
 fn instrument_button(ui: &mut Ui, title: &str) -> egui::Response {
-    let galley = ui
-        .painter()
-        .layout_no_wrap(title.to_string(), theme::strong(18.0), palette::text());
+    let galley =
+        ui.painter()
+            .layout_no_wrap(title.to_string(), theme::strong(18.0), palette::text());
     let (rect, response) = ui.allocate_exact_size(
         vec2(galley.size().x + 40.0, widgets::HEIGHT + 4.0),
         Sense::click(),
@@ -864,13 +860,11 @@ fn tabs(ui: &mut Ui, view: &mut TradingView) {
 
                 let more = MORE_TABS.contains(&view.tab);
                 let label = if more { view.tab.name() } else { "More" };
-                let response =
-                    widgets::segment(ui, label, more, Some(widgets::Glyph::Chevron));
+                let response = widgets::segment(ui, label, more, Some(widgets::Glyph::Chevron));
 
                 widgets::menu(&response, false, |ui| {
                     for tab in MORE_TABS {
-                        if widgets::menu_item(ui, tab.name(), None, None, view.tab == tab)
-                            .clicked()
+                        if widgets::menu_item(ui, tab.name(), None, None, view.tab == tab).clicked()
                         {
                             view.tab = tab;
                         }
@@ -910,8 +904,14 @@ fn intervals(ui: &mut Ui, view: &mut TradingView, snapshot: &Snapshot) {
             ui.set_min_width(140.0);
 
             for interval in Interval::ALL {
-                if widgets::menu_item(ui, interval.label(), None, None, snapshot.interval == interval)
-                    .clicked()
+                if widgets::menu_item(
+                    ui,
+                    interval.label(),
+                    None,
+                    None,
+                    snapshot.interval == interval,
+                )
+                .clicked()
                 {
                     chosen = Some(interval);
                 }
@@ -985,9 +985,11 @@ fn status_pill(ui: &mut Ui, snapshot: &Snapshot) -> Option<String> {
         (_, FeedState::Live) => ("Live".to_string(), palette::good(), None),
         (_, FeedState::Connecting) => ("Connecting".to_string(), palette::text_muted(), None),
         (_, FeedState::Retrying(_)) => ("Reconnecting".to_string(), palette::warning(), None),
-        (_, FeedState::Stopped(reason)) => {
-            ("Feed stopped".to_string(), palette::bad(), Some(reason.clone()))
-        }
+        (_, FeedState::Stopped(reason)) => (
+            "Feed stopped".to_string(),
+            palette::bad(),
+            Some(reason.clone()),
+        ),
         _ => match &snapshot.source {
             Some(Source::Dhan { .. }) => ("Market closed".to_string(), palette::text_muted(), None),
             Some(_) => ("Offline".to_string(), palette::text_muted(), None),
@@ -1250,10 +1252,8 @@ fn picker_window(ui: &mut Ui, view: &mut TradingView, market: &Market) {
                     ui.spacing_mut().item_spacing.y = 2.0;
 
                     for instrument in &found {
-                        let (rect, response) = ui.allocate_exact_size(
-                            vec2(ui.available_width(), 40.0),
-                            Sense::click(),
-                        );
+                        let (rect, response) = ui
+                            .allocate_exact_size(vec2(ui.available_width(), 40.0), Sense::click());
 
                         if response.hovered() {
                             ui.painter().rect_filled(
@@ -1329,32 +1329,35 @@ fn picker_window(ui: &mut Ui, view: &mut TradingView, market: &Market) {
     }
 }
 
-/// Hands each line of the trading conversation to the one brain that the
-/// chat and code sessions feed too. It connects on first use, and again
-/// later if the background service could not be reached.
+/// Connects the one brain that the chat and code sessions feed to
+/// trading: from then on it lives the bars the market's learning sees and
+/// hears each line of the trading conversation. The background service
+/// is reached on a thread of its own, since starting it can take seconds;
+/// what is said before then is not heard.
 #[cfg(unix)]
-fn shared_brain() -> cortex_market::chat::Listener {
-    use std::sync::{Arc, Mutex};
+fn shared_brain(learning: Arc<cortex_market::learning::Learning>) -> cortex_market::chat::Listener {
+    use std::sync::OnceLock;
 
-    let brain: Arc<Mutex<Option<Arc<cortex_living::Living>>>> = Arc::default();
+    let brain: Arc<OnceLock<Arc<cortex_brain::Link>>> = Arc::default();
+    let reached = brain.clone();
+
+    let _ = std::thread::Builder::new()
+        .name("trading-brain".into())
+        .spawn(move || {
+            match cortex_brain::service::default_file()
+                .and_then(|file| cortex_brain::Link::connect(&file))
+            {
+                Ok(link) => {
+                    learning.connect_brain(link.clone());
+                    let _ = reached.set(link);
+                }
+                Err(error) => eprintln!("warning: the brain is unavailable to trading: {error}"),
+            }
+        });
 
     Arc::new(move |session: &str, speaker: &str, text: &str| {
-        let mut held = brain.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-
-        if held.is_none() {
-            match cortex_living::service::default_file()
-                .and_then(|file| cortex_living::Living::connect(&file))
-            {
-                Ok(living) => *held = Some(living),
-                Err(error) => {
-                    eprintln!("warning: the brain is unavailable to trading: {error}");
-                    return;
-                }
-            }
-        }
-
-        if let Some(living) = held.as_ref() {
-            living.hear(session, speaker, text);
+        if let Some(link) = brain.get() {
+            link.hear(session, speaker, text);
         }
     })
 }

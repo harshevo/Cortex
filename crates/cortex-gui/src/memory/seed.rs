@@ -5,10 +5,10 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use cortex_brain::memory::consolidate::derive_facts;
+use cortex_brain::memory::{Episode, Store};
 use cortex_core::Outcome;
 use cortex_core::trajectory::unix_millis;
-use cortex_memory::consolidate::derive_facts;
-use cortex_memory::{Episode, Store};
 
 /// How a seeded task ended.
 #[derive(Clone, Copy)]

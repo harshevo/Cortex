@@ -2,8 +2,8 @@ use super::{
     Market,
     learning::{Learning, unique_key},
 };
+use cortex_brain::memory::experience::{Domain, Experience};
 use cortex_core::{Message, ModelProvider, ModelRequest, StreamObserver, ToolResult, ToolSpec};
-use cortex_memory::experience::{Domain, Experience};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex, OnceLock};

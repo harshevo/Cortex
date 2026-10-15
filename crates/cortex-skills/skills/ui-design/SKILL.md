@@ -23,7 +23,18 @@ In two or three sentences for yourself: who uses this and what is the one thing 
 - Spacing: one scale (4, 8, 12, 16, 24, 32, 48, 64). More space between groups than within them; that is what makes grouping visible without boxes. Be generous: cramped is the commonest fault.
 - Colour: neutrals carry most of the interface; one accent, used for the primary action and little else. Semantic colours (danger, success, warning) only for their meaning. Tint the neutrals slightly rather than using pure grey, and avoid pure black on pure white. Define colours once, as variables.
 - Depth and edges: one consistent radius family; borders or shadows, rarely both; shadows soft and few.
+- Soft shapes: cards, panels, tiles and grouped surfaces use squircle (continuous-curvature) or generously rounded corners, never square or sharp-cornered rectangles unless the element really needs a hard edge (a chart's plot area, a pixel grid, a divider). In the Cortex desktop app use `theme::squircle` and `theme::soft_card` rather than a bare `Frame` with a small radius.
 - Alignment: everything sits on a shared edge or grid. Stray one-off offsets read as mistakes.
+
+## 3a. Clean, spacious, no redundant text
+
+These rules are required for every Cortex screen.
+
+- No redundant text. Say a thing once. Drop explanatory paragraphs that repeat what the heading, the label or the visual already shows; drop captions that restate a number; drop "how to use this" notes when the control is self-evident. Longer explanations go in a hover tooltip or a collapsed "Details", not in the page.
+- Labels are short nouns ("Memories", "Sleep pressure"), not sentences. Empty states are one short line.
+- Spacious layout. Generous padding inside cards (at least 16 to 20 px on desktop) and wider gaps between sections (24 to 32 px) than inside them. Give data room to breathe rather than packing every number in. When the desktop window is wide, use the width: more columns of tiles, a wider side panel, larger visuals, not longer lines of text.
+- Proper sections. Each group of related things sits in its own section with one heading; unrelated things are separated by space and their own card, never run together in one long list. Put the most used section first.
+- Key numbers as tiles. Show a few headline numbers as large figures with a small label under them; keep secondary numbers as quiet rows inside a section.
 
 Avoid the generic look: a purple-blue gradient on white, three identical cards with an icon on top, centred everything, emoji as icons, a shadow on every box. If the result could be any product's page, it is not finished.
 

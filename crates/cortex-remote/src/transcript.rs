@@ -182,9 +182,15 @@ impl Session {
                     && let Some(text) = detail["text"].as_str()
                 {
                     if detail["kind"] == "user" {
-                        self.items.push(Item::User { text:text.into(), images:Vec::new() });
+                        self.items.push(Item::User {
+                            text: text.into(),
+                            images: Vec::new(),
+                        });
                     } else {
-                        self.items.push(Item::Notice { text:text.into(), tone:Tone::Muted });
+                        self.items.push(Item::Notice {
+                            text: text.into(),
+                            tone: Tone::Muted,
+                        });
                     }
                 }
             }

@@ -1,6 +1,8 @@
 use cortex_liquid::abilities::{Abilities, INPUTS, Perception};
 fn main() {
     let mut abilities = Abilities::default();
+    // The brain lives the percepts; what it then expects is the DANN input.
+    let mut brain = cortex_brain::Brain::new();
     let mut reading = Default::default();
     for at in 1..501 {
         let phase = at as f32 * 0.15;
@@ -9,19 +11,22 @@ fn main() {
         values[1] = phase.cos();
         values[2] = 0.1;
         values[3] = 1.;
+        let percepts: Vec<String> = vec![
+            "domain: trading".into(),
+            if values[0] > 0. {
+                "movement: up".into()
+            } else {
+                "movement: down".into()
+            },
+        ];
+        brain.live("synthetic", &percepts);
         reading = abilities.observe(Perception {
             domain: "trading".into(),
             scope: "synthetic:5m".into(),
             time_ms: at * 10_000,
             values,
-            percepts: vec![
-                "domain: trading".into(),
-                if values[0] > 0. {
-                    "movement: up".into()
-                } else {
-                    "movement: down".into()
-                },
-            ],
+            percepts,
+            expected: brain.expectations("synthetic", 8),
         });
     }
     println!(

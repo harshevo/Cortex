@@ -9,8 +9,8 @@
 //! - [`approval::Approver`] is implemented by whoever decides what may run.
 //! - [`briefing::ContextSource`] is implemented by memory and the router.
 //! - [`verify::Verifier`] is implemented by `cortex-verify`.
-//! - [`advice::Adviser`] is implemented by the decision controllers in `cortex-brain`.
-//! - [`rollout::StrategyPolicy`] is implemented by the bandit in `cortex-brain`.
+//! - [`advice::Adviser`] is implemented by the brain (`Counsel` in `cortex-brain`).
+//! - [`rollout::StrategyPolicy`] is implemented by the strategy bandit in `cortex-cli`.
 
 pub mod advice;
 pub mod agent;

@@ -2,13 +2,11 @@
 //! and reports what the person did; none of them talks to the agent.
 
 pub mod brain;
-pub mod brain_map;
 pub mod composer;
 pub mod conversation;
 pub mod files;
 pub mod icons;
 pub mod insights;
-pub mod living;
 pub mod memory_space;
 pub mod menu;
 pub mod prose;
@@ -26,11 +24,10 @@ pub mod typeset;
 pub enum View {
     Conversation,
 
-    /// The shared brain, drawn live: neurons, dendrites, synapses and
-    /// memories.
-    Living,
+    /// The brain, drawn live: its spiking circuit as it runs.
+    Brain,
 
-    /// Price bars read with the liquid and the dendritic network.
+    /// Price bars, read with the liquid network and the brain.
     Trading,
 
     /// Tokens used, and whether the advisers help.

@@ -6,7 +6,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-cortex-living.workspace = true
+cortex-brain.workspace = true
 
 serde.workspace = true
 

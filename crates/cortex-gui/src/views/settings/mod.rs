@@ -192,8 +192,8 @@ pub enum Action {
     Apply(Box<Settings>),
     Back,
 
-    /// Show the memory space.
-    OpenLiving,
+    /// Show the brain.
+    OpenBrain,
 
     /// Use this colour theme, from now on.
     Theme(&'static str),

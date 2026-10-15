@@ -74,11 +74,23 @@ pub async fn login(announce: impl FnOnce(&str)) -> Result<(), ProviderError> {
 
     let (paste, pasted) = unbounded_channel();
 
-    *PASTED.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(paste);
+    *PASTED
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(paste);
 
-    let finished = wait(&listener, listener_v6.as_ref(), pasted, &verifier, &state, announce).await;
+    let finished = wait(
+        &listener,
+        listener_v6.as_ref(),
+        pasted,
+        &verifier,
+        &state,
+        announce,
+    )
+    .await;
 
-    *PASTED.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+    *PASTED
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
 
     finished
 }
@@ -112,9 +124,12 @@ async fn wait(
     announce(&address);
     open_browser(&address);
 
-    let code = tokio::time::timeout(WAIT_FOR_BROWSER, wait_for_code(listener, listener_v6, pasted, state))
-        .await
-        .map_err(|_| ProviderError::SignIn("gave up waiting for the sign-in".to_string()))??;
+    let code = tokio::time::timeout(
+        WAIT_FOR_BROWSER,
+        wait_for_code(listener, listener_v6, pasted, state),
+    )
+    .await
+    .map_err(|_| ProviderError::SignIn("gave up waiting for the sign-in".to_string()))??;
 
     exchange(&code, verifier, &redirect).await?.save()
 }
@@ -178,7 +193,8 @@ async fn wait_for_code(
             }
         };
 
-        let (mut stream, _) = accepted.map_err(|error| ProviderError::Network(error.to_string()))?;
+        let (mut stream, _) =
+            accepted.map_err(|error| ProviderError::Network(error.to_string()))?;
 
         let Some(target) = read_target(&mut stream).await else {
             continue;
@@ -386,7 +402,10 @@ mod tests {
     fn only_this_sign_ins_address_gives_its_code() {
         assert!(matches!(outcome("code=abc&state=s1", "s1"), Some(Ok(code)) if code == "abc"));
         assert!(outcome("code=abc&state=other", "s1").is_none());
-        assert!(matches!(outcome("error=access_denied&state=s1", "s1"), Some(Err(_))));
+        assert!(matches!(
+            outcome("error=access_denied&state=s1", "s1"),
+            Some(Err(_))
+        ));
     }
 
     #[tokio::test]
@@ -396,14 +415,19 @@ mod tests {
         let (paste, pasted) = unbounded_channel();
 
         let v4 = listener.local_addr().unwrap();
-        let v6 = listener_v6.as_ref().map(|listener| listener.local_addr().unwrap());
+        let v6 = listener_v6
+            .as_ref()
+            .map(|listener| listener.local_addr().unwrap());
 
         let asker = tokio::spawn(async move {
             let ask = |address: std::net::SocketAddr, state: &'static str| async move {
                 let mut stream = TcpStream::connect(address).await.unwrap();
 
                 stream
-                    .write_all(format!("GET {CALLBACK_PATH}?state={state}&code=c HTTP/1.0\r\n\r\n").as_bytes())
+                    .write_all(
+                        format!("GET {CALLBACK_PATH}?state={state}&code=c HTTP/1.0\r\n\r\n")
+                            .as_bytes(),
+                    )
                     .await
                     .unwrap();
 
@@ -423,7 +447,9 @@ mod tests {
             drop(paste);
         });
 
-        let code = wait_for_code(&listener, listener_v6.as_ref(), pasted, "s3").await.unwrap();
+        let code = wait_for_code(&listener, listener_v6.as_ref(), pasted, "s3")
+            .await
+            .unwrap();
 
         assert_eq!(code, "c");
         asker.await.unwrap();

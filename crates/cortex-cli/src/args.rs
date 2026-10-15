@@ -45,10 +45,6 @@ pub enum Command {
     /// with `--provider codex`.
     Login,
 
-    /// Show what the mind has learned and how runs have gone with it
-    /// speaking and with it silent: checks passed, steps, tokens and time.
-    Mind(MindArgs),
-
     /// Show the tokens used: a calendar of one month with the total of
     /// each day, then the busiest day and hour, the model used most, the
     /// sessions, and what it cost where the price is known.
@@ -107,17 +103,6 @@ pub struct EffectArgs {
     pub utc_offset: Option<i32>,
 }
 
-#[derive(Args)]
-pub struct MindArgs {
-    /// Address of the brain service.
-    #[arg(long, default_value = cortex_brain::mind::DEFAULT_URL)]
-    pub mind_url: String,
-
-    /// Print the service's whole report as JSON.
-    #[arg(long)]
-    pub json: bool,
-}
-
 /// Where the model runs.
 #[derive(ValueEnum, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderKind {
@@ -173,7 +158,7 @@ pub struct ModelArgs {
     pub features: Vec<Feature>,
 
     /// Turn off a capability, including one that is on unless turned off:
-    /// `run` and `chat` start with `mind`. Repeat to turn off several.
+    /// `run` and `chat` start with `brain`. Repeat to turn off several.
     #[arg(long = "without", value_enum, value_name = "FEATURE")]
     pub without: Vec<Feature>,
 
@@ -182,21 +167,8 @@ pub struct ModelArgs {
     pub embedding_url: String,
 
     /// Address of the HOPE memory service used by `--with hope`.
-    #[arg(long, default_value = cortex_memory::hope::DEFAULT_URL)]
+    #[arg(long, default_value = cortex_brain::memory::hope::DEFAULT_URL)]
     pub hope_url: String,
-
-    /// Address of the brain service used by `--with mind`. One on this
-    /// machine is started when it is not running.
-    #[arg(long, default_value = cortex_brain::mind::DEFAULT_URL)]
-    pub mind_url: String,
-
-    /// The share of runs in which the mind watches and says nothing, so
-    /// that `cortex mind` can compare the rest with them. 0 for none.
-    /// Only used with `--holdout 0`: otherwise the mind is held out by
-    /// `--holdout` like every other adviser, and `cortex effect` makes
-    /// the comparison.
-    #[arg(long, default_value_t = cortex_brain::mind::DEFAULT_CONTROL, value_name = "SHARE")]
-    pub mind_control: f64,
 
     /// A command the verification gate runs instead of detecting the
     /// project's checks. Repeat to run several. Used with `--with gate`.
@@ -264,8 +236,7 @@ pub struct ModelArgs {
     #[arg(long, default_value_t = cortex_core::compact::DEFAULT_KEEP_RECENT, value_name = "RESPONSES")]
     pub compact_keep: usize,
 
-    /// The share of runs each adviser (brain, intuition, controller,
-    /// mind) is held out of: it watches and learns, and what it would
+    /// The share of runs the brain, as an adviser, is held out of: it watches and learns, and what it would
     /// have said is recorded and not shown to the model, so that
     /// `cortex effect` can compare runs with and without it. 0 for none.
     #[arg(long, default_value_t = cortex_core::effect::DEFAULT_SHARE, value_name = "SHARE")]

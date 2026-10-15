@@ -18,7 +18,7 @@ pub fn show(
         filter,
         "Brain network",
         &format!(
-            "The one brain shared by chat, code and trading, drawn live: neurons, dendrites, \
+            "The one brain shared by chat, code and trading, drawn live: columns, cells, dendrites, \
              synapses, taught memories and what it is curious about. The agent also \
              remembers {} earlier tasks.",
             workspace.memories
@@ -27,7 +27,7 @@ pub fn show(
     );
 
     if opened == Some(true) {
-        action = Some(Action::OpenLiving);
+        action = Some(Action::OpenBrain);
     }
 
     rows::switch(

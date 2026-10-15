@@ -6,13 +6,9 @@ members = [
     "crates/cortex-providers",
     "crates/cortex-index",
     "crates/cortex-retrieval",
-    "crates/cortex-memory",
     "crates/cortex-verify",
     "crates/cortex-router",
     "crates/cortex-brain",
-    "crates/cortex-living",
-    "crates/cortex-neural",
-    "crates/cortex-living-service",
     "crates/cortex-liquid",
     "crates/cortex-market",
     "crates/cortex-tools",
@@ -34,12 +30,9 @@ default-members = [
     "crates/cortex-providers",
     "crates/cortex-index",
     "crates/cortex-retrieval",
-    "crates/cortex-memory",
     "crates/cortex-verify",
     "crates/cortex-router",
     "crates/cortex-brain",
-    "crates/cortex-living",
-    "crates/cortex-neural",
     "crates/cortex-liquid",
     "crates/cortex-market",
     "crates/cortex-tools",
@@ -59,12 +52,9 @@ cortex-core = { path = "crates/cortex-core" }
 cortex-providers = { path = "crates/cortex-providers" }
 cortex-index = { path = "crates/cortex-index" }
 cortex-retrieval = { path = "crates/cortex-retrieval" }
-cortex-memory = { path = "crates/cortex-memory" }
 cortex-verify = { path = "crates/cortex-verify" }
 cortex-router = { path = "crates/cortex-router" }
 cortex-brain = { path = "crates/cortex-brain" }
-cortex-living = { path = "crates/cortex-living" }
-cortex-neural = { path = "crates/cortex-neural" }
 cortex-liquid = { path = "crates/cortex-liquid" }
 cortex-market = { path = "crates/cortex-market" }
 cortex-cli = { path = "crates/cortex-cli" }

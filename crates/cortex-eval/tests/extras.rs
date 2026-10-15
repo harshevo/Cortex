@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use cortex_brain::memory::{MemoryConfig, MemorySystem, Store};
 use cortex_core::{
     CheckOutcome, Event, Extras, Message, ModelProvider, ModelRequest, ModelResponse,
     ProviderError, RolloutConfig, StopReason, TrajectorySink, Usage, Verification, Verifier,
@@ -13,7 +14,6 @@ use cortex_core::{
 };
 use cortex_eval::preserve::read_events;
 use cortex_eval::{RunOptions, Suite, SuiteReport, run_suite};
-use cortex_memory::{MemoryConfig, MemorySystem, Store};
 use cortex_providers::ScriptedProvider;
 use cortex_providers::scripted::{final_turn, tool_turn};
 use serde_json::{Value, json};

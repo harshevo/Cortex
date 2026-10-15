@@ -11,12 +11,10 @@ path = "src/main.rs"
 
 [dependencies]
 cortex-brain.workspace = true
-cortex-living.workspace = true
 cortex-liquid.workspace = true
 cortex-market = { workspace = true, features = ["desktop"] }
 cortex-cli.workspace = true
 cortex-core.workspace = true
-cortex-memory.workspace = true
 cortex-providers.workspace = true
 cortex-remote.workspace = true
 cortex-retrieval.workspace = true

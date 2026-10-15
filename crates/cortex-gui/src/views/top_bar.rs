@@ -187,21 +187,14 @@ fn views(ui: &mut Ui, view: &mut View, narrow: bool) {
             egui::Key::L,
         )
     }) {
-        *view = View::Living;
+        *view = View::Brain;
     }
     const SHOWN: [(View, &str, &str); 2] = [
         (View::Conversation, "Chat", "The conversation"),
-        (
-            View::Living,
-            "Network",
-            "The shared brain, drawn live (⌘⇧L)",
-        ),
+        (View::Brain, "Brain", "The one brain, drawn live (⌘⇧L)"),
     ];
 
-    const TUCKED: [(View, &str); 2] = [
-        (View::Trading, "Trading"),
-        (View::Insights, "Insights"),
-    ];
+    const TUCKED: [(View, &str); 2] = [(View::Trading, "Trading"), (View::Insights, "Insights")];
 
     // Settings belong to the chat they were opened from.
     let on_screen = if *view == View::Settings {

@@ -37,12 +37,18 @@ pub async fn execute(args: ChatArgs) -> Result<ExitCode> {
         }
 
         #[cfg(unix)]
-        match brain.handle(instruction, &args.session.model, "terminal-brain-chat").await {
+        match brain
+            .handle(instruction, &args.session.model, "terminal-brain-chat")
+            .await
+        {
             Ok(Some(reply)) => {
                 println!("{}", reply.text);
                 continue;
             }
-            Err(error) => { eprintln!("error: {error}"); continue; }
+            Err(error) => {
+                eprintln!("error: {error}");
+                continue;
+            }
             Ok(None) => {}
         }
 
@@ -53,7 +59,9 @@ pub async fn execute(args: ChatArgs) -> Result<ExitCode> {
         }
 
         if instruction == "/compact" {
-            if let Some(agent) = &agent { compact(agent, &mut conversation).await; }
+            if let Some(agent) = &agent {
+                compact(agent, &mut conversation).await;
+            }
 
             continue;
         }
@@ -63,10 +71,18 @@ pub async fn execute(args: ChatArgs) -> Result<ExitCode> {
         if agent.is_none() {
             match session::build_agent(&args.session).await {
                 Ok(built) => agent = Some(built),
-                Err(error) => { eprintln!("error: {error}"); continue; }
+                Err(error) => {
+                    eprintln!("error: {error}");
+                    continue;
+                }
             }
         }
-        if let Err(error) = agent.as_ref().unwrap().run(&mut conversation, instruction).await {
+        if let Err(error) = agent
+            .as_ref()
+            .unwrap()
+            .run(&mut conversation, instruction)
+            .await
+        {
             eprintln!("error: {error}");
         }
     }

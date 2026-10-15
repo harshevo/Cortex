@@ -9,15 +9,14 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use clap::ValueEnum;
-use cortex_brain::{Controller, DirectEncoder, Intuition, Mind, StrategyBandit};
+use cortex_brain::memory::{HopeClient, MemoryConfig, MemorySystem};
+use cortex_brain::{Counsel, Link};
 use cortex_core::{
     Adviser, CompactConfig, ContextSource, EffectLedger, EffectSink, ExperimentConfig, Extras,
     Ledger, LedgerSink, MaskConfig, PruneConfig, RolloutConfig, ToolRegistry, TrajectorySink,
     Verifier, Workspace, prompt,
 };
 use cortex_index::{CodeGraph, CodeIndex};
-use cortex_living::{Counsel, Living};
-use cortex_memory::{HopeClient, MemoryConfig, MemorySystem};
 use cortex_retrieval::{EmbeddingClient, SemanticIndex};
 use cortex_router::{ContextRouter, LikelyFiles, ProjectMap};
 use cortex_skills::{SkillLibrary, SkillSource, UseSkill};
@@ -25,6 +24,7 @@ use cortex_tools::BrowserOptions;
 use cortex_verify::ProjectVerifier;
 
 use crate::args::{ModelArgs, ProviderKind};
+use crate::strategies::StrategyBandit;
 
 #[derive(ValueEnum, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Feature {
@@ -67,34 +67,22 @@ pub enum Feature {
     /// `--with memory` and the service from `ml/cortex_ml/hope`.
     Hope,
 
-    /// A decision controller that learns, from runs whose checks passed
-    /// or failed, which kind of next action pays off, and says so between
-    /// steps. Learns only with `--with gate`.
-    Controller,
-
-    /// The dendritic network, allowed to speak. It grows a neuron for
-    /// each thing it meets, and each neuron grows branches that learn
-    /// which combinations of earlier events it follows. From that it
-    /// expects what comes next, imagines a few steps on, and compares the
-    /// ways forward by how they have turned out. When its own record
-    /// says it is sure enough, it adds one line between steps: what has
-    /// usually come next here and gone well, or that the usual next step
-    /// has usually gone badly. It keeps count of whether its advice was
-    /// followed by what it said and grows more cautious when it was not.
-    /// One network for all projects, in `~/.cortex/living`, drawn live in
-    /// the app. Whether its line helps a model is not measured.
+    /// The brain: one cortex of spiking cells with dendritic branches,
+    /// shared by every chat, agent session and market, kept alive by its
+    /// background service. It lives each run as a stream of percepts,
+    /// hears what you say, learns what comes next and what turns out
+    /// well, sleeps and dreams between sessions, and adds one line
+    /// between steps when its own record says it is sure enough: what
+    /// has usually come next here and gone well, or that the usual next
+    /// step has usually gone badly. The model can ask it to imagine where
+    /// a run is heading, and talk to it with `brain_chat`. Kept in
+    /// `~/.cortex/brain` and drawn live in the app. Whether its line
+    /// helps a model is measured by `--holdout` and `cortex effect`.
     Brain,
 
     /// Gather context for the task before the model starts, choosing among
     /// the other capabilities that are switched on.
     Router,
-
-    /// A second brain beside the controller: an associative network that
-    /// learns which files, commands and errors went together in passing
-    /// runs, and brings them to mind before a task and between steps. On a
-    /// long run it also recalls a check left failing or edits left
-    /// unchecked. Works with or without `--with brain`.
-    Intuition,
 
     /// Replace tool output older than the last ten steps with one line,
     /// keeping the model's own reasoning and calls. For long runs.
@@ -134,18 +122,6 @@ pub enum Feature {
     /// words, and those closely tied to them by imports.
     Likely,
 
-    /// The learning brain from the `brain` project, watching every step
-    /// and listening to what you say. It learns which actions work here,
-    /// keeps your corrections, and says a line when it has one: a habit
-    /// it is sure of, something you said before, an action that failed
-    /// here before, a choice worth asking you about, or something untried.
-    /// The model can also have it imagine how actions would turn out. Its
-    /// service is started when needed. On in `run`, `chat` and the app
-    /// unless turned off; silent in a share of runs so that `cortex mind`
-    /// can measure its effect. Without `--with gate` it learns from
-    /// commands and from you, not from checks.
-    Mind,
-
     /// Make up to `--rollouts` attempts, each in its own copy of the
     /// project and each told to go about the task differently, and keep
     /// the best. Stops at the first convincing attempt unless
@@ -171,15 +147,10 @@ pub enum Feature {
     /// interface, testing it, and automating work on web pages. Needs
     /// Chrome, Chromium, Edge or Brave to be installed.
     Browser,
-
-    /// The same dendritic network as `brain`, only watching: it grows,
-    /// rewires, expects, imagines and rests, and nothing it learns
-    /// reaches the model. For studying it before letting it speak.
-    Living,
 }
 
 /// On in `run`, `chat` and the app unless turned off with `--without`.
-pub const DEFAULTS: [Feature; 1] = [Feature::Mind];
+pub const DEFAULTS: [Feature; 1] = [Feature::Brain];
 
 impl crate::args::ModelArgs {
     /// Switches on the capabilities a session starts with, leaving out
@@ -243,13 +214,9 @@ pub struct Setup {
     /// The model has been told which skills there are.
     pub skill_listing: bool,
 
-    /// The mind, when it is on, for a caller that wants its guess at
-    /// what the person will ask for next.
-    pub mind: Option<Arc<Mind>>,
-
-    /// The dendritic network, when it is on, for a caller that wants to
-    /// draw it or its guess at what will be asked next.
-    pub living: Option<Arc<Living>>,
+    /// The brain, when it is on, for a caller that wants to draw it or
+    /// its guess at what will be asked next.
+    pub brain: Option<Arc<Link>>,
 
     /// Records the tokens of every model call, for a caller that wants
     /// to name the session or read the totals. It is among `sinks`
@@ -369,10 +336,6 @@ pub async fn setup(args: &ModelArgs, memory_location: MemoryLocation) -> Result<
         .map(|folder| EffectLedger::open(folder.join("effect")))
         .map(|ledger| Arc::new(EffectSink::new(ledger, &memory_location.scope)));
 
-    let controller = controller(args, &memory_location).await?;
-    let intuition = intuition(args, &memory_location);
-    let mind = mind(args, &memory_location).await;
-
     let memory = if has(Feature::Memory) {
         let memory = open_memory(
             memory_location,
@@ -412,43 +375,25 @@ pub async fn setup(args: &ModelArgs, memory_location: MemoryLocation) -> Result<
         sinks.push(memory.clone());
     }
 
-    let living = (has(Feature::Living) || has(Feature::Brain))
-        .then(living)
-        .flatten();
-
-    if let Some(living) = &living {
-        sinks.push(living.sink());
-        #[cfg(unix)]
-        {
-            tools.register(cortex_tools::BrainChat(living.clone()));
-            tools.register(cortex_tools::TeachBrain(crate::brain_commands::teacher_config(args, "")));
-        }
-    }
+    let brain = has(Feature::Brain).then(brain).flatten();
 
     let mut advisers: Vec<Arc<dyn Adviser>> = Vec::new();
 
-    if let Some(living) = &living
-        && has(Feature::Brain)
-    {
-        advisers.push(Arc::new(Counsel(living.clone())));
+    if let Some(brain) = &brain {
+        let sink = brain.sink();
+
+        sinks.push(sink.clone());
+        advisers.push(Arc::new(Counsel::of(&sink)));
+
+        #[cfg(unix)]
+        {
+            tools.register(cortex_tools::BrainChat(brain.clone()));
+            tools.register(cortex_tools::TeachBrain(
+                crate::brain_commands::teacher_config(args, ""),
+            ));
+        }
     }
 
-    if let Some(controller) = controller {
-        sinks.push(controller.clone());
-        advisers.push(controller);
-    }
-
-    if let Some(intuition) = &intuition {
-        sinks.push(intuition.clone());
-        advisers.push(intuition.clone());
-    }
-    let mind_listens = mind.is_some();
-    let suggester = mind.clone();
-
-    if let Some(mind) = &mind {
-        sinks.push(mind.clone());
-        advisers.push(mind.clone());
-    }
     if !advisers.is_empty() {
         tools.register(cortex_tools::BrainState(advisers.clone()));
     }
@@ -475,14 +420,6 @@ pub async fn setup(args: &ModelArgs, memory_location: MemoryLocation) -> Result<
         let graph = graph.unwrap_or_else(|| Arc::new(CodeGraph::new(Arc::new(CodeIndex::new()))));
 
         context_sources.push(Arc::new(LikelyFiles::new(graph)));
-    }
-
-    if let Some(mind) = mind {
-        context_sources.push(mind);
-    }
-
-    if let Some(intuition) = intuition {
-        context_sources.push(intuition);
     }
 
     // Last, so that it reads straight before the task. A task that does
@@ -523,14 +460,9 @@ pub async fn setup(args: &ModelArgs, memory_location: MemoryLocation) -> Result<
         prompt_notes.push(prompt::browser_note(args.browser_pictures));
     }
 
-    if mind_listens {
-        prompt_notes.push(cortex_brain::mind::PROMPT_NOTE.to_string());
-    }
-
     Ok(Setup {
         skill_listing: has(Feature::Skills),
-        mind: suggester,
-        living,
+        brain,
         usage,
         effect,
         semantic,
@@ -627,8 +559,8 @@ fn extras(args: &ModelArgs, memory_location: &MemoryLocation) -> Result<Extras> 
 }
 
 /// The folder the records of tokens used and of how runs went are kept
-/// under: the one given, or `~/.cortex`, where the dendritic network is
-/// kept as well. `None` when no records are wanted.
+/// under: the one given, or `~/.cortex`, where the brain is kept as
+/// well. `None` when no records are wanted.
 pub fn records_folder(args: &ModelArgs) -> Option<PathBuf> {
     if args.no_records {
         return None;
@@ -648,145 +580,54 @@ pub fn strategies_file(memory: &std::path::Path) -> PathBuf {
     memory.with_extension("strategies.json")
 }
 
-/// The decision controller, when one is asked for. What it learns is kept
-/// beside the memory file.
-async fn controller(
-    args: &ModelArgs,
-    memory_location: &MemoryLocation,
-) -> Result<Option<Arc<Controller>>> {
-    let has = |feature: Feature| args.features.contains(&feature);
-
-    if !has(Feature::Controller) {
-        return Ok(None);
-    }
-
-    if !has(Feature::Gate) {
-        eprintln!(
-            "controller: without `--with gate` no run has a checked result, so it will not learn"
-        );
-    }
-
-    let file = memory_location.path.with_extension("controller.json");
-
-    let controller = Controller::new(Box::new(DirectEncoder), Some(file.clone()));
-
-    eprintln!(
-        "controller: learned from {} checked runs so far ({})",
-        controller.runs(),
-        file.display()
-    );
-
-    Ok(Some(Arc::new(controller)))
-}
-
-/// The associative network, when it is asked for. What it learns is kept
-/// beside the memory file.
-fn intuition(args: &ModelArgs, memory_location: &MemoryLocation) -> Option<Arc<Intuition>> {
-    if !args.features.contains(&Feature::Intuition) {
-        return None;
-    }
-
-    let file = intuition_file(&memory_location.path);
-
-    let intuition = Intuition::new(Some(file.clone()));
-
-    eprintln!(
-        "intuition: {} neurons, {} synapses, learned from {} runs so far ({})",
-        intuition.neurons(),
-        intuition.synapses(),
-        intuition.runs(),
-        file.display()
-    );
-
-    Some(Arc::new(intuition))
-}
-
-/// The learning brain, when it is asked for. Its service is started if it
-/// is not running; one that cannot be started switches the capability off
-/// with a note, and never stops the agent from starting.
-async fn mind(args: &ModelArgs, memory_location: &MemoryLocation) -> Option<Arc<Mind>> {
-    if !args.features.contains(&Feature::Mind) || args.without.contains(&Feature::Mind) {
-        return None;
-    }
-
-    // The mind can keep itself silent in a share of runs. When the
-    // engine holds advisers out, the mind among them, that is the
-    // experiment, and the mind's own is switched off: two draws would
-    // silence it more often than either says, and only the engine's is
-    // recorded with the run.
-    let own_control = if args.holdout > 0.0 {
-        0.0
-    } else {
-        args.mind_control
-    };
-
-    let mind = Mind::new(&args.mind_url, &memory_location.scope).with_control(own_control);
-
-    let mind = Arc::new(mind);
-    let waking = mind.clone();
-
-    // Starting the service can take seconds the first time.
-    let woken = tokio::task::spawn_blocking(move || waking.wake()).await;
-
-    let health = match woken.unwrap_or_else(|error| Err(error.to_string())) {
-        Ok(health) => health,
-
-        Err(reason) => {
-            eprintln!(
-                "mind: off for this session: {reason}. `--without mind` leaves it out without \
-                 this note"
-            );
-
+/// The brain. It is one for everything: the background service's when it
+/// can be reached or started, otherwise one shared by this process.
+fn brain() -> Option<Arc<Link>> {
+    let file = match brain_file() {
+        Some(file) => file,
+        None => {
+            eprintln!("brain: off, there is no home directory to keep it in");
             return None;
         }
     };
 
-    eprintln!(
-        "mind: {} steps remembered, {} rules, {} things you said ({})",
-        health["remembered"],
-        health["rules"],
-        health["told"].as_u64().unwrap_or_default(),
-        args.mind_url
-    );
-
-    Some(mind)
-}
-
-/// The dendritic network. It is one for all projects, and shared by
-/// everything in this process.
-fn living() -> Option<Arc<Living>> {
-    let file = std::env::home_dir()?
-        .join(".cortex")
-        .join("living")
-        .join("network.json");
-
     #[cfg(all(unix, not(target_os = "ios"), not(target_os = "android")))]
-    let living = match Living::connect(&file) {
-        Ok(living) => living,
+    let brain = match Link::connect(&file) {
+        Ok(brain) => brain,
         Err(error) => {
-            eprintln!("network: background service unavailable: {error}");
-            return None;
+            eprintln!(
+                "brain: background service unavailable ({error}), so it lives in this process"
+            );
+            Link::shared(&file)
         }
     };
     #[cfg(any(not(unix), target_os = "ios", target_os = "android"))]
-    let living = Living::shared(&file);
-    let meters = living.snapshot().meters;
+    let brain = Link::shared(&file);
+    let snapshot = brain.snapshot();
 
     eprintln!(
-        "network: {} neurons, {} branches, {} synapses, {} moments lived ({})",
-        meters.neurons,
-        meters.segments,
-        meters.synapses,
-        meters.moments,
+        "brain: {} cells, {} branches, {} synapses, {} memories ({})",
+        snapshot.cells,
+        snapshot.branches,
+        snapshot.synapses,
+        snapshot.engram_count,
         file.display()
     );
 
-    Some(living)
+    Some(brain)
 }
 
-/// Where the associative network for the memory at `memory` is kept.
-pub fn intuition_file(memory: &std::path::Path) -> PathBuf {
-    memory.with_extension("intuition.json")
+/// Where the brain is kept: `~/.cortex/brain/brain.bin`.
+pub fn brain_file() -> Option<PathBuf> {
+    #[cfg(unix)]
+    return cortex_brain::service::default_file().ok();
+    #[cfg(not(unix))]
+    return Some(
+        std::env::home_dir()?
+            .join(".cortex")
+            .join("brain")
+            .join("brain.bin"),
+    );
 }
 
 /// With the router on, it alone decides what is gathered. Without it,
@@ -849,7 +690,7 @@ async fn hope_client(args: &ModelArgs) -> Result<Option<HopeClient>> {
 
     let client = HopeClient::new(&args.hope_url);
 
-    // Started here when it is not running, as the mind is.
+    // Started here when it is not running.
     let health = match client.wake().await {
         Ok(health) => health,
 
@@ -930,7 +771,7 @@ async fn open_memory(
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| folder.display().to_string());
 
-        match cortex_memory::Store::open(&file) {
+        match cortex_brain::memory::Store::open(&file) {
             Ok(store) => memory = memory.with_other(store, &folder.display().to_string(), &name),
             Err(error) => eprintln!("memory: {} is left out: {error}", file.display()),
         }

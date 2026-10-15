@@ -755,7 +755,9 @@ pub(super) fn build_provider(settings: &Settings) -> Result<Arc<dyn ModelProvide
 
         "hosted" => {
             if settings.address.is_empty() {
-                bail!("The hosted provider needs the address of its API. Add it in Settings → Account.");
+                bail!(
+                    "The hosted provider needs the address of its API. Add it in Settings → Account."
+                );
             }
 
             Arc::new(OpenAiCompatProvider::new(

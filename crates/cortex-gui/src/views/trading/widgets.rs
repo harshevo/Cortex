@@ -43,7 +43,12 @@ pub enum Glyph {
 }
 
 /// Colours of a control in its current state: ground, ink, outline.
-fn colours(kind: Kind, response: &Response, enabled: bool, active: bool) -> (Color32, Color32, Stroke) {
+fn colours(
+    kind: Kind,
+    response: &Response,
+    enabled: bool,
+    active: bool,
+) -> (Color32, Color32, Stroke) {
     let hovered = enabled && response.hovered();
     let pressed = enabled && response.is_pointer_button_down_on();
 
@@ -142,9 +147,9 @@ fn labelled(
     kind: Kind,
     active: bool,
 ) -> Response {
-    let galley = ui
-        .painter()
-        .layout_no_wrap(text.to_string(), theme::strong(13.0), palette::text());
+    let galley =
+        ui.painter()
+            .layout_no_wrap(text.to_string(), theme::strong(13.0), palette::text());
 
     let glyph_width = 16.0;
     let gap = 8.0;
@@ -160,7 +165,11 @@ fn labelled(
 
     let (rect, response) = ui.allocate_exact_size(
         vec2(width, HEIGHT),
-        if enabled { Sense::click() } else { Sense::hover() },
+        if enabled {
+            Sense::click()
+        } else {
+            Sense::hover()
+        },
     );
 
     let (fill, ink, stroke) = colours(kind, &response, enabled, active);
@@ -176,7 +185,12 @@ fn labelled(
     let mut left = rect.left() + 12.0;
 
     if let Some(glyph) = leading {
-        paint(ui, pos2(left + glyph_width / 2.0, rect.center().y), glyph, ink);
+        paint(
+            ui,
+            pos2(left + glyph_width / 2.0, rect.center().y),
+            glyph,
+            ink,
+        );
         left += glyph_width + gap;
     }
 
@@ -189,7 +203,10 @@ fn labelled(
     if let Some(glyph) = trailing {
         paint(
             ui,
-            pos2(rect.right() - 10.0 - glyph_width / 2.0 + 4.0, rect.center().y),
+            pos2(
+                rect.right() - 10.0 - glyph_width / 2.0 + 4.0,
+                rect.center().y,
+            ),
             glyph,
             ink,
         );
@@ -213,7 +230,11 @@ pub fn icon_button_kind(
 ) -> Response {
     let (rect, response) = ui.allocate_exact_size(
         vec2(HEIGHT, HEIGHT),
-        if enabled { Sense::click() } else { Sense::hover() },
+        if enabled {
+            Sense::click()
+        } else {
+            Sense::hover()
+        },
     );
 
     let (fill, ink, stroke) = colours(kind, &response, enabled, active);
@@ -263,9 +284,17 @@ pub fn overflow<R>(
 /// The menu a button opens: a raised panel with roomy rows.
 pub fn menu<R>(response: &Response, up: bool, contents: impl FnOnce(&mut Ui) -> R) -> Option<R> {
     let aligns: &[RectAlign] = if up {
-        &[RectAlign::TOP_END, RectAlign::TOP_START, RectAlign::BOTTOM_END]
+        &[
+            RectAlign::TOP_END,
+            RectAlign::TOP_START,
+            RectAlign::BOTTOM_END,
+        ]
     } else {
-        &[RectAlign::BOTTOM_END, RectAlign::BOTTOM_START, RectAlign::TOP_END]
+        &[
+            RectAlign::BOTTOM_END,
+            RectAlign::BOTTOM_START,
+            RectAlign::TOP_END,
+        ]
     };
 
     egui::Popup::menu(response)
@@ -311,7 +340,10 @@ pub fn menu_item(
             width - 48.0,
         )
     });
-    let height = 32.0 + detail_galley.as_ref().map_or(0.0, |galley| galley.size().y + 2.0);
+    let height = 32.0
+        + detail_galley
+            .as_ref()
+            .map_or(0.0, |galley| galley.size().y + 2.0);
 
     let (rect, response) = ui.allocate_exact_size(vec2(width, height), Sense::click());
 
@@ -398,9 +430,9 @@ pub fn segmented(ui: &mut Ui, items: &[&str], chosen: Option<usize>) -> Option<u
 /// One segment of the track. With `menu`, it shows a chevron and is the
 /// button for that menu.
 pub fn segment(ui: &mut Ui, text: &str, on: bool, trailing: Option<Glyph>) -> Response {
-    let galley = ui
-        .painter()
-        .layout_no_wrap(text.to_string(), theme::strong(13.0), palette::text());
+    let galley =
+        ui.painter()
+            .layout_no_wrap(text.to_string(), theme::strong(13.0), palette::text());
     let extra = if trailing.is_some() { 18.0 } else { 0.0 };
     let (rect, response) = ui.allocate_exact_size(
         vec2(galley.size().x + 28.0 + extra, HEIGHT - 4.0),

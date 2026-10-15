@@ -207,35 +207,12 @@ const ROWS: &[Row] = &[
         false,
     ),
     (
-        "mind",
-        "Mind",
-        "A learning brain that watches each step, keeps your corrections and guesses your \
-         next request.",
-        Group::Learning,
-        false,
-    ),
-    (
         "brain",
-        "Dendritic network",
-        "The network that grows as it watches runs, allowed to advise the model between \
-         steps. The same network as Living network, which only watches.",
+        "Brain",
+        "The one brain shared by chat, code and trading: it lives each run, learns what \
+         comes next and what goes well, and advises between steps when it is sure.",
         Group::Learning,
         false,
-    ),
-    (
-        "intuition",
-        "Intuition",
-        "Recalls which files, commands and errors went together in runs that passed.",
-        Group::Learning,
-        false,
-    ),
-    (
-        "controller",
-        "Decision controller",
-        "Learns which kind of next action pays off. Cannot be on together with the \
-         dendritic network.",
-        Group::Learning,
-        true,
     ),
     (
         "skills",
@@ -257,14 +234,6 @@ const ROWS: &[Row] = &[
         "A real browser the agent can open pages in, click, type and take screenshots of.",
         Group::Tools,
         false,
-    ),
-    (
-        "living",
-        "Living network",
-        "The same network as Dendritic network, only watching: it grows and nothing it \
-         learns reaches the model.",
-        Group::Experimental,
-        true,
     ),
 ];
 
@@ -356,21 +325,6 @@ mod tests {
                 row.0
             );
         }
-    }
-
-    /// The same network is behind `brain` and `living`; the two lines say so.
-    const SAME_NETWORK: &str = "The same network as";
-
-    #[test]
-    fn the_two_names_of_the_one_network_say_so() {
-        let brain = about(Feature::Brain);
-        let living = about(Feature::Living);
-
-        assert_eq!(brain.label, "Dendritic network");
-        assert_eq!(living.label, "Living network");
-
-        assert!(brain.help.contains(SAME_NETWORK) && brain.help.contains("Living network"));
-        assert!(living.help.contains(SAME_NETWORK) && living.help.contains("Dendritic network"));
     }
 
     #[test]

@@ -7,6 +7,7 @@
 mod app;
 mod args;
 mod attachment;
+mod circuit;
 mod engine;
 mod environment;
 mod format;
@@ -35,7 +36,7 @@ use crate::settings::Settings;
 
 fn main() -> ExitCode {
     #[cfg(unix)]
-    if let Some(result) = cortex_living::service::serve_argument() {
+    if let Some(result) = cortex_brain::service::serve_argument() {
         return match result {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
@@ -96,7 +97,10 @@ fn run() -> Result<()> {
     let window_size = args.rehearsal.window_size.as_deref().and_then(|size| {
         let (width, height) = size.split_once('x')?;
 
-        Some([width.trim().parse::<f32>().ok()?, height.trim().parse::<f32>().ok()?])
+        Some([
+            width.trim().parse::<f32>().ok()?,
+            height.trim().parse::<f32>().ok()?,
+        ])
     });
     let rehearsal = Rehearsal::new(args.rehearsal);
     let demo = args.demo;

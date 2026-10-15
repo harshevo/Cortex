@@ -18,10 +18,10 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
+use cortex_brain::memory::{MemoryConfig, MemorySystem};
 use cortex_core::{ModelProvider, Usage, Workspace, judge};
 use cortex_index::graph::GraphStats;
 use cortex_index::{CodeGraph, CodeIndex, repo_map};
-use cortex_memory::{MemoryConfig, MemorySystem};
 use cortex_retrieval::{EmbeddingClient, IndexSize};
 
 use crate::args::{ModelArgs, PrepareArgs};

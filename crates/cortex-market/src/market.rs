@@ -546,7 +546,7 @@ impl Market {
             values[11] = if flow.volume_delta.is_some() { 1. } else { 0. };
         }
 
-        let percepts = vec![
+        let percepts: Vec<String> = vec![
             "domain: trading".into(),
             format!("instrument: {}", source.key()),
             format!(
@@ -572,6 +572,30 @@ impl Market {
                 }
             ),
         ];
+        // What each forecaster expects of the next candle goes with the
+        // bar, so that the brain learns whose calls come true when.
+        let mut percepts = percepts;
+        for (name, candles) in &state.snapshot.networks {
+            if let Some(next) = candles.first() {
+                let change = (next.close / price - 1.) * 100.;
+                let name: String = name
+                    .chars()
+                    .filter(|c| c.is_alphanumeric())
+                    .take(16)
+                    .collect::<String>()
+                    .to_lowercase();
+                percepts.push(format!(
+                    "{name}: expects {}",
+                    if change > 0.01 {
+                        "up"
+                    } else if change < -0.01 {
+                        "down"
+                    } else {
+                        "flat"
+                    }
+                ));
+            }
+        }
         let evidence = serde_json::json!({"revision":state.snapshot.revision,"price":price,"depth":state.snapshot.depth,"flow":flow,"feature_version":1});
         state.last_observed = now;
         drop(state);
@@ -582,6 +606,7 @@ impl Market {
                 time_ms: now,
                 values,
                 percepts,
+                expected: Vec::new(),
             },
             evidence,
         );
@@ -606,7 +631,7 @@ impl Market {
         #[cfg(feature = "desktop")]
         if let Some(learning) = self.state().learning.clone() {
             context["adaptive"] = serde_json::to_value(learning.reading(
-                cortex_memory::experience::Domain::Trading,
+                cortex_brain::memory::experience::Domain::Trading,
                 &format!("{scope}:{}", snapshot.interval.label()),
             ))
             .unwrap_or_default();
@@ -685,7 +710,7 @@ impl Market {
     }
     #[cfg(feature = "desktop")]
     fn remember_outcomes(&self) {
-        use cortex_memory::experience::{Domain, Experience};
+        use cortex_brain::memory::experience::{Domain, Experience};
         let (learning, snapshot) = {
             let state = self.state();
             let Some(learning) = state.learning.clone() else {

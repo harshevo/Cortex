@@ -15,11 +15,9 @@ path = "src/main.rs"
 
 [dependencies]
 cortex-brain.workspace = true
-cortex-living.workspace = true
 cortex-core.workspace = true
 cortex-eval.workspace = true
 cortex-index.workspace = true
-cortex-memory.workspace = true
 cortex-providers.workspace = true
 cortex-retrieval.workspace = true
 cortex-router.workspace = true
@@ -30,6 +28,7 @@ cortex-verify.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 clap.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 tokio.workspace = true

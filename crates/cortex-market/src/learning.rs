@@ -1,7 +1,7 @@
 use async_trait::async_trait;
+use cortex_brain::memory::experience::{Domain, Experience, ExperienceStore};
 use cortex_core::{Briefing, ContextSource, Event, TrajectorySink, Workspace};
 use cortex_liquid::abilities::{Abilities, AbilityReading, INPUTS, Perception};
-use cortex_memory::experience::{Domain, Experience, ExperienceStore};
 use serde_json::json;
 use std::collections::{BTreeMap, HashMap};
 use std::io::Write;
@@ -41,6 +41,11 @@ enum Work {
 pub struct Learning {
     pub memory: Arc<ExperienceStore>,
     tx: mpsc::SyncSender<Work>,
+
+    /// The one brain, once the app has handed it over: it lives the bars
+    /// and what is said about them, and what it then expects is one of
+    /// the inputs the small learners read.
+    brain: Arc<Mutex<Option<Arc<cortex_brain::Link>>>>,
     readings: Arc<Mutex<BTreeMap<String, AbilityReading>>>,
     problem: Arc<Mutex<Option<String>>>,
     dropped: AtomicU64,
@@ -74,11 +79,14 @@ impl Learning {
             })
             .unwrap_or_default();
         let (tx, rx) = mpsc::sync_channel(256);
+        let brain: Arc<Mutex<Option<Arc<cortex_brain::Link>>>> = Arc::default();
+        let link = brain.clone();
         let readings = Arc::new(Mutex::new(abilities.readings()));
         let problem = Arc::new(Mutex::new(None));
         let learning = Arc::new(Self {
             memory: memory.clone(),
             tx,
+            brain,
             readings: readings.clone(),
             problem: problem.clone(),
             dropped: AtomicU64::new(0),
@@ -92,8 +100,9 @@ impl Learning {
                 let mut last_save = std::time::Instant::now();
                 loop {
                     let work = rx.recv_timeout(std::time::Duration::from_secs(2));
+                    let brain = link.lock().unwrap_or_else(|p| p.into_inner()).clone();
                     match work {
-                        Ok(Work::Observe(event, evidence)) => {
+                        Ok(Work::Observe(mut event, evidence)) => {
                             let key = format!(
                                 "observation:{}:{}:{}",
                                 event.domain, event.scope, event.time_ms
@@ -126,7 +135,28 @@ impl Learning {
                                 *problem.lock().unwrap() = Some(error.to_string());
                                 continue;
                             }
-                            let reading = abilities.observe(event.clone());
+                            let outlook = brain.as_ref().map(|brain| {
+                                let stream = stream(&event.domain, &event.scope);
+                                // The agent's own work reaches the brain
+                                // through the agent; only the market is
+                                // lived here.
+                                if event.domain == "trading" {
+                                    brain.perceive(&stream, event.percepts.clone());
+                                }
+                                brain.outlook(
+                                    &stream,
+                                    8,
+                                    (event.domain == "trading").then_some("movement: up"),
+                                )
+                            });
+                            event.expected = outlook
+                                .as_ref()
+                                .map(|o| o.expected.clone())
+                                .unwrap_or_default();
+                            let mut reading = abilities.observe(event.clone());
+                            if let (Some(brain), Some(outlook)) = (&brain, outlook) {
+                                describe(&mut reading, brain, outlook);
+                            }
                             let neural = Experience {
                                 id: 0,
                                 key: format!("neural:{}", experience.key),
@@ -160,7 +190,24 @@ impl Learning {
                             unsaved += 1;
                         }
                         Ok(Work::Hear(domain, scope, percepts)) => {
-                            let reading = abilities.hear(domain.label(), &scope, &percepts);
+                            let outlook =
+                                brain
+                                    .as_ref()
+                                    .filter(|_| domain == Domain::Trading)
+                                    .map(|brain| {
+                                        let stream = stream(domain.label(), &scope);
+                                        brain.perceive(&stream, percepts.clone());
+                                        (brain, brain.outlook(&stream, 8, None))
+                                    });
+                            let expected = outlook
+                                .as_ref()
+                                .map(|o| o.1.expected.clone())
+                                .unwrap_or_default();
+                            let mut reading =
+                                abilities.hear(domain.label(), &scope, &percepts, &expected);
+                            if let Some((brain, outlook)) = outlook {
+                                describe(&mut reading, brain, outlook);
+                            }
                             readings
                                 .lock()
                                 .unwrap()
@@ -194,6 +241,12 @@ impl Learning {
             .map_err(|e| e.to_string())?;
         open.insert(folder.to_path_buf(), Arc::downgrade(&learning));
         Ok(learning)
+    }
+
+    /// Hands over the one brain, which from now on lives the bars and
+    /// the trading chat this learns from.
+    pub fn connect_brain(&self, brain: Arc<cortex_brain::Link>) {
+        *self.brain.lock().unwrap_or_else(|p| p.into_inner()) = Some(brain);
     }
 
     fn send(&self, work: Work) {
@@ -243,6 +296,35 @@ impl Learning {
             scope: scope.into(),
         })
     }
+}
+
+/// The brain's stream for a domain's scope: one per instrument and
+/// interval, or per repository.
+fn stream(domain: &str, scope: &str) -> String {
+    format!("{domain}: {scope}")
+}
+
+/// What the brain imagines and plans from here, and how big it is, for
+/// the reading.
+fn describe(
+    reading: &mut AbilityReading,
+    brain: &cortex_brain::Link,
+    outlook: cortex_brain::Outlook,
+) {
+    reading.imagined = outlook
+        .imagined
+        .iter()
+        .map(|(step, sure)| format!("{step} ({:.0}% sure)", sure * 100.))
+        .collect();
+    reading.plan = if outlook.plan.is_empty() {
+        Vec::new()
+    } else {
+        vec![outlook.plan]
+    };
+    let snapshot = brain.snapshot();
+    reading.neurons = snapshot.cells;
+    reading.branches = snapshot.branches;
+    reading.synapses = snapshot.synapses;
 }
 
 fn archive_event(folder: &Path, time_ms: i64, event: &Experience) -> Result<(), String> {
@@ -345,6 +427,7 @@ impl TrajectorySink for ScopeMemory {
                     time_ms: now,
                     values: features,
                     percepts: vec!["domain: coding".into(), text.chars().take(80).collect()],
+                    expected: Vec::new(),
                 },
                 json!({"event_id":experience.key}),
             );

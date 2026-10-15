@@ -4,9 +4,9 @@
 //! can change anything, and how to run.
 
 mod affected_tests;
-mod brain_state;
 #[cfg(unix)]
 mod brain_chat;
+mod brain_state;
 mod browser;
 mod calculate;
 mod checks;
@@ -28,15 +28,15 @@ mod write_file;
 
 use std::sync::Arc;
 
+use cortex_brain::memory::MemorySystem;
 use cortex_core::ToolRegistry;
 use cortex_index::{CodeGraph, CodeIndex};
-use cortex_memory::MemorySystem;
 use cortex_retrieval::{EmbeddingClient, SemanticIndex};
 
 pub use affected_tests::AffectedTests;
-pub use brain_state::BrainState;
 #[cfg(unix)]
 pub use brain_chat::{BrainChat, TeachBrain};
+pub use brain_state::BrainState;
 pub use browser::{Browser, BrowserOptions, BrowserView};
 pub use edit_file::EditFile;
 pub use file_dependencies::FileDependencies;

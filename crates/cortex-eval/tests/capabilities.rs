@@ -5,8 +5,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use cortex_brain::memory::{MemoryConfig, MemorySystem, Store};
 use cortex_eval::{RunOptions, Suite, SuiteReport, run_suite};
-use cortex_memory::{MemoryConfig, MemorySystem, Store};
 use cortex_providers::ScriptedProvider;
 use cortex_providers::scripted::{final_turn, tool_turn};
 use cortex_verify::ProjectVerifier;

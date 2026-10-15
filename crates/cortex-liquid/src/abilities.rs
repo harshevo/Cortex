@@ -3,7 +3,6 @@ use crate::{
     ridge::Ridge,
     spiking::{Activity, Reservoir},
 };
-use cortex_living::Network;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, VecDeque};
 
@@ -18,6 +17,13 @@ pub struct Perception {
     pub time_ms: i64,
     pub values: [f32; INPUTS],
     pub percepts: Vec<String>,
+
+    /// What the brain expected next once it had lived these percepts,
+    /// and how sure it was: the "DANN" input. Empty when the brain was not
+    /// reachable; the brain lives elsewhere, and this crate only reads
+    /// what it said.
+    #[serde(default)]
+    pub expected: Vec<(String, f32)>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -61,7 +67,6 @@ struct DomainState {
     reservoir: Reservoir,
     activity: Activity,
     readout: Ridge,
-    dendritic: Network,
     dendritic_readout: Ridge,
     replay: VecDeque<Pair>,
     previous: Option<Perception>,
@@ -95,10 +100,6 @@ impl DomainState {
             cell,
             reservoir,
             readout: readout(32),
-            dendritic: Network::with_meanings(
-                &[("feedback: accepted", 1.), ("feedback: rejected", -1.)],
-                &["action: "],
-            ),
             dendritic_readout: readout(INPUTS + 3),
             replay: VecDeque::new(),
             previous: None,
@@ -134,9 +135,8 @@ impl DomainState {
             self.cell_state = self.cell.fresh_state();
             self.activity = self.reservoir.fresh();
         }
-        self.dendritic.live(&event.percepts);
         let mut dendritic = event.values.to_vec();
-        let expected = self.dendritic.expectations();
+        let expected = event.expected.clone();
         for prefix in ["movement: up", "movement: down", "movement: flat"] {
             dendritic.push(
                 expected
@@ -165,14 +165,15 @@ impl DomainState {
                 time_ms: previous.time_ms,
             });
             if self.reading.scored.is_multiple_of(8)
-                && let Some(pair) = self.replay.back().cloned() {
-                    if self.retained.len() < 64 {
-                        self.retained.push(pair);
-                    } else {
-                        let slot = 32 + (self.reading.scored as usize / 8) % 32;
-                        self.retained[slot] = pair;
-                    }
+                && let Some(pair) = self.replay.back().cloned()
+            {
+                if self.retained.len() < 64 {
+                    self.retained.push(pair);
+                } else {
+                    let slot = 32 + (self.reading.scored as usize / 8) % 32;
+                    self.retained[slot] = pair;
                 }
+            }
             if self.replay.len() > REPLAY {
                 self.replay.pop_front();
             }
@@ -184,13 +185,9 @@ impl DomainState {
         self.reservoir.play(&mut self.activity, &event.values);
         self.predictions[1] = self.dendritic_readout.apply(&dendritic);
         self.predictions[2] = self.readout.apply(&self.activity.trace);
-        let meters = self.dendritic.meters();
         self.reading.domain = event.domain.clone();
         self.reading.scope = event.scope.clone();
         self.reading.time_ms = event.time_ms;
-        self.reading.neurons = meters.neurons;
-        self.reading.branches = meters.segments;
-        self.reading.synapses = meters.synapses;
         self.reading.snn_neurons = self.reservoir.neurons;
         self.reading.spikes = self.activity.spikes;
         self.reading.observed += 1;
@@ -204,38 +201,8 @@ impl DomainState {
             .reading
             .expectations
             .iter()
-            .flat_map(|(label, _)| self.dendritic.explain(label))
             .take(6)
-            .map(|r| {
-                format!(
-                    "{} because {}; confidence {:.0}%, {} hits / {} misses",
-                    r.expected,
-                    r.because.join(", "),
-                    r.confidence * 100.,
-                    r.hits,
-                    r.misses
-                )
-            })
-            .collect();
-        self.reading.imagined = self
-            .dendritic
-            .imagine(3)
-            .iter()
-            .take(3)
-            .map(|t| format!("{t:?}"))
-            .collect();
-        self.reading.plan = self
-            .dendritic
-            .plan(
-                if event.domain == "coding" {
-                    "checks: passed"
-                } else {
-                    "movement: up"
-                },
-                3,
-            )
-            .into_iter()
-            .take(3)
+            .map(|(label, sure)| format!("the brain expects {label}, {:.0}% sure", sure * 100.))
             .collect();
         self.previous = Some(event.clone());
         self.previous_gap = gap;
@@ -362,9 +329,6 @@ impl DomainState {
             self.cell
                 .run(&mut self.cell_state, &pair.inputs, &[pair.gap]);
         }
-        for _ in 0..3 {
-            self.dendritic.rest();
-        }
         self.reading.generation += 1;
         self.reading.replays += count as u64;
     }
@@ -467,17 +431,26 @@ impl Abilities {
             .perceive(&event)
     }
 
-    pub fn hear(&mut self, domain: &str, scope: &str, percepts: &[String]) -> AbilityReading {
+    /// Words heard in a domain: they shape its memory features, and what
+    /// the brain expected after hearing them is kept for the reading.
+    pub fn hear(
+        &mut self,
+        domain: &str,
+        scope: &str,
+        percepts: &[String],
+        expected: &[(String, f32)],
+    ) -> AbilityReading {
         let key = format!("{domain}:{scope}");
-        if !self.states.contains_key(&key) && self.states.len() >= 16
+        if !self.states.contains_key(&key)
+            && self.states.len() >= 16
             && let Some(oldest) = self
                 .states
                 .iter()
                 .min_by_key(|(_, s)| s.reading.time_ms)
                 .map(|(k, _)| k.clone())
-            {
-                self.states.remove(&oldest);
-            }
+        {
+            self.states.remove(&oldest);
+        }
         let state = self.states.entry(key).or_insert_with(DomainState::new);
         let mut features = [0f32; 4];
         for token in percepts {
@@ -489,19 +462,7 @@ impl Abilities {
         for (to, from) in state.memory_features.iter_mut().zip(features) {
             *to = (*to * 0.7 + from / percepts.len().max(1) as f32 * 0.3).clamp(-1., 1.);
         }
-        state.dendritic.live(percepts);
-        let meters = state.dendritic.meters();
-        state.reading.neurons = meters.neurons;
-        state.reading.branches = meters.segments;
-        state.reading.synapses = meters.synapses;
-        state.reading.expectations = state.dendritic.expectations().into_iter().take(8).collect();
-        state.reading.imagined = state
-            .dendritic
-            .imagine(3)
-            .iter()
-            .take(3)
-            .map(|t| format!("{t:?}"))
-            .collect();
+        state.reading.expectations = expected.iter().take(8).cloned().collect();
         state.reading.clone()
     }
 }
@@ -526,6 +487,7 @@ mod tests {
                 } else {
                     "movement: down".into()
                 }],
+                expected: vec![("movement: up".into(), 0.4)],
             });
         }
         let mut restored: Abilities =
@@ -536,7 +498,7 @@ mod tests {
         assert!(trading.reading.generation > 0);
         assert!(trading.reading.mean_errors.iter().all(|e| e.is_finite()));
         assert!(trading.reservoir.neurons <= 128);
-        let coding = restored.hear("coding", "repo", &["result: failed".into()]);
+        let coding = restored.hear("coding", "repo", &["result: failed".into()], &[]);
         assert_eq!(coding.scored, 0);
         assert!(restored.states.contains_key("coding:repo"));
     }

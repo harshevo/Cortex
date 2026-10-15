@@ -53,9 +53,13 @@ pub struct RehearsalArgs {
     #[arg(long, hide = true)]
     pub open_memory: bool,
 
-    /// Start on the living network instead of the conversation.
+    /// Start on the brain instead of the conversation.
     #[arg(long, hide = true)]
-    pub open_living: bool,
+    pub open_brain: bool,
+
+    /// With `--open-brain`, start on this tab: brain or metrics.
+    #[arg(long, hide = true)]
+    pub brain_tab: Option<String>,
 
     /// Select the newest episode whenever memory changes.
     #[arg(long, hide = true)]

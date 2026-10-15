@@ -19,10 +19,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use cortex_brain::memory::similarity;
 use cortex_core::{Briefing, ContextSource, Workspace};
 use cortex_index::rank::Graph;
 use cortex_index::{CodeGraph, Language, walk};
-use cortex_memory::similarity;
 use serde_json::json;
 
 /// Files shown at most.

@@ -1,6 +1,6 @@
-//! The dendritic network's side: each bar is put into words, the words
-//! are fed in time order to a [`cortex_living`] network, and what that
-//! network then expects of the next bar is handed on as numbers.
+//! The brain's side: each bar is put into words, the words are lived in
+//! time order by a [`cortex_brain::Brain`], and what the brain then
+//! expects of the next bar is handed on as numbers.
 //!
 //! A bar becomes up to five percepts, one from each of
 //!
@@ -11,30 +11,34 @@
 //! - `osc: low | mid | high`
 //!
 //! with the edges of the buckets taken from the training part only. The
-//! network grows a neuron per percept, and neurons for combinations that
-//! recur, and learns on its branches which earlier combinations each
-//! `move:` follows. It learns online: by the time it is asked about the
-//! next bar it has lived every bar up to now and none after.
+//! brain's cortex learns which earlier bars each `move:` follows, as it
+//! learns which words follow which. It learns online: by the time it is
+//! asked about the next bar it has lived every bar up to now and none
+//! after.
+//!
+//! This is the same brain as the one that lives the agent's work and the
+//! chats, run on this series alone. A forecast is measured on bars held
+//! out from training, and the shared brain has lived whatever it was
+//! shown, including those bars; a brain of its own for each model keeps
+//! the measurement honest. Live bars reach the shared brain separately.
 //!
 //! What comes out for the liquid network is one number per `move:`
-//! bucket, how sure the dendritic network is that the next bar is that
-//! one (0 when it does not expect it), and its running surprise.
+//! bucket, how sure the brain is that the next bar is that one (0 when it
+//! does not expect it), and its running surprise.
 //!
-//! What this cannot do: the dendritic network was built to follow an
-//! agent's work, where the same things recur exactly. It speaks only
-//! when a branch that has been right before is driven again, so on many
-//! bars it expects no move at all and the numbers handed on are zeros.
-//! It keeps learning on every bar it is shown, including held-out ones
-//! as they pass, which uses nothing from the future but does mean its
-//! record is a running one, not that of a frozen model.
+//! What this cannot do: markets rarely repeat exactly, and the brain
+//! expects a move only when cells that have been right before are primed
+//! again, so on many bars it expects no move at all and the numbers
+//! handed on are zeros.
 //!
-//! The network's working context (what fired last, what it expects) is
-//! not part of its saved form. So a `Regime` is saved as the bucket codes
-//! of every bar it has lived and rebuilt by living them again, which
-//! gives exactly the network that was saved at the cost of about a
-//! twentieth of a millisecond per bar on a laptop.
+//! The brain's working context is not part of what is saved. So a
+//! `Regime` is saved as the bucket codes of every bar it has lived and
+//! rebuilt by living them again, which gives exactly the brain that was
+//! saved.
 
-use cortex_living::network::Network;
+use std::sync::{Mutex, MutexGuard};
+
+use cortex_brain::Brain;
 use serde::{Deserialize, Serialize};
 
 use crate::features::{self, Row};
@@ -59,13 +63,18 @@ pub const MOVE: &str = "move: ";
 /// bucket, and the surprise.
 pub const OUTLOOK: usize = MOVES.len() + 1;
 
-/// How sure the network must be of a move for it to count when the move
-/// is not among its few surest expectations. Where the network starts
-/// its own threshold for an expectation.
+/// How sure the brain must be of a move for it to count when the move
+/// is not among its few surest expectations.
 const FORESEEN: f32 = 0.35;
 
-/// Steps the network is asked to imagine ahead for its account.
-const IMAGINED: usize = 4;
+/// Expectations it is asked for.
+const EXPECTED: usize = 8;
+
+/// The stream the bars are lived in.
+const STREAM: &str = "bars";
+
+/// How far each running share moves towards each new bar.
+const RATE: f32 = 0.05;
 
 /// The names of the regimes a bar can be in: its trend and how wide its
 /// range is. A bar's regime is an index into this.
@@ -189,7 +198,7 @@ pub fn regime_of(codes: &Codes) -> u8 {
     codes[3] * 3 + codes[2]
 }
 
-/// What the dendritic network makes of the next bar, as numbers.
+/// What the brain makes of the next bar, as numbers.
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub struct Outlook {
     /// How sure it is of each move bucket, in the order of [`MOVES`],
@@ -238,14 +247,14 @@ impl Outlook {
     }
 }
 
-/// One thing the dendritic network expects, and how sure it is.
+/// One thing the brain expects, and how sure it is.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Expectation {
     pub label: String,
     pub confidence: f32,
 }
 
-/// One step of the way on as the dendritic network imagines it.
+/// One step of the way on as the brain imagines it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ImaginedStep {
     pub labels: Vec<String>,
@@ -254,7 +263,7 @@ pub struct ImaginedStep {
     pub confidence: f32,
 }
 
-/// The dendritic network's own account of what comes after the latest
+/// The brain's own account of what comes after the latest
 /// bar, for showing why.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct Account {
@@ -273,7 +282,7 @@ pub struct Account {
     pub surprise: f32,
 }
 
-/// How much the dendritic network has grown and what it has got right.
+/// How much the brain has grown and how its expectations of moves went.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct Growth {
     pub neurons: usize,
@@ -283,28 +292,43 @@ pub struct Growth {
     /// Bars lived.
     pub moments: u64,
 
-    /// Running share of each bar's percepts it had expected.
+    /// Running share of bars whose move it was surest of beforehand.
     pub expected_right: f32,
 
-    /// The same for always guessing the commonest percepts. It has
+    /// The same for always guessing the commonest move so far. It has
     /// learned something only where `expected_right` is above this.
     pub baseline_right: f32,
 
-    /// Running share of what it expected that came.
+    /// Running share of the moves it expected that came.
     pub precision: f32,
     pub surprise: f32,
 }
 
-/// The bucket edges, the dendritic network, and every bar it has lived.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// The bucket edges, the brain, and every bar it has lived.
+#[derive(Serialize, Deserialize)]
 #[serde(from = "Saved", into = "Saved")]
 pub struct Regime {
     buckets: Buckets,
     lived: Vec<Codes>,
-    network: Network,
+
+    /// Behind a lock so that it can be asked what it expects through a
+    /// shared reference: asking puts its cortex where the bars left it.
+    brain: Mutex<Brain>,
+    record: Record,
 }
 
-/// What is written to a file: enough to rebuild the network exactly.
+/// How its expectations of moves have gone, bar by bar.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct Record {
+    /// The move it was surest of before each bar, if any.
+    expected: Option<usize>,
+    expected_right: f32,
+    baseline_right: f32,
+    precision: f32,
+    counts: [u32; 5],
+}
+
+/// What is written to a file: enough to rebuild the brain exactly.
 #[derive(Serialize, Deserialize)]
 struct Saved {
     buckets: Buckets,
@@ -335,6 +359,26 @@ impl From<Saved> for Regime {
     }
 }
 
+impl Clone for Regime {
+    fn clone(&self) -> Self {
+        Self {
+            buckets: self.buckets.clone(),
+            lived: self.lived.clone(),
+            brain: Mutex::new(self.brain().clone()),
+            record: self.record.clone(),
+        }
+    }
+}
+
+impl std::fmt::Debug for Regime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Regime")
+            .field("buckets", &self.buckets)
+            .field("lived", &self.lived.len())
+            .finish_non_exhaustive()
+    }
+}
+
 fn codes_are_sound(codes: &Codes) -> bool {
     (codes[0] as usize) < MOVES.len()
         && (codes[1] == NONE || codes[1] < 3)
@@ -343,23 +387,22 @@ fn codes_are_sound(codes: &Codes) -> bool {
 
 impl PartialEq for Regime {
     /// Two are equal when they have the same edges and have lived the
-    /// same bars, since the network follows from those.
+    /// same bars, since the brain follows from those.
     fn eq(&self, other: &Self) -> bool {
         self.buckets == other.buckets && self.lived == other.lived
     }
 }
 
 impl Regime {
-    /// A network that has seen nothing.
+    /// A brain that has seen nothing.
     pub fn new(buckets: Buckets) -> Self {
+        let mut brain = Brain::new();
+        brain.begin(STREAM, "bars");
         Self {
             buckets,
             lived: Vec::new(),
-
-            // No percept of a market is good or bad news in itself. The
-            // one entry, worth nothing, is there because an empty table
-            // is replaced with the agent's own.
-            network: Network::with_meanings(&[(MOVES[2], 0.0)], &[MOVE]),
+            brain: Mutex::new(brain),
+            record: Record::default(),
         }
     }
 
@@ -372,54 +415,71 @@ impl Regime {
         &self.lived
     }
 
-    pub fn network(&self) -> &Network {
-        &self.network
+    fn brain(&self) -> MutexGuard<'_, Brain> {
+        self.brain
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     fn live(&mut self, codes: Codes) {
-        self.network.live(&percepts(&codes));
+        let came = codes[0] as usize;
+        let record = &mut self.record;
+        let commonest = (0..MOVES.len()).max_by_key(|at| (record.counts[*at], MOVES.len() - at));
+        let share = |hit: bool| if hit { 1.0 } else { 0.0 };
+        if !self.lived.is_empty() {
+            record.expected_right +=
+                RATE * (share(record.expected == Some(came)) - record.expected_right);
+            record.baseline_right +=
+                RATE * (share(commonest == Some(came)) - record.baseline_right);
+            if let Some(expected) = record.expected {
+                record.precision += RATE * (share(expected == came) - record.precision);
+            }
+        }
+        record.counts[came] += 1;
+        self.brain().live(STREAM, &percepts(&codes));
         self.lived.push(codes);
+        self.record.expected = self.outlook().surest().map(|(at, _)| at);
     }
 
-    /// The next bar has closed. The network lives it and says what it
-    /// now makes of the one after.
+    /// The next bar has closed. The brain lives it and says what it now
+    /// makes of the one after.
     pub fn observe(&mut self, row: &Row) -> Outlook {
         self.live(self.buckets.codes(row));
 
         self.outlook()
     }
 
-    /// What the network makes of the bar after the latest one it lived.
+    /// What the brain makes of the bar after the latest one it lived.
     pub fn outlook(&self) -> Outlook {
+        let mut brain = self.brain();
         let mut outlook = Outlook {
-            surprise: self.network.meters().surprise,
+            surprise: brain.mind.senses.surprise,
             ..Outlook::default()
         };
 
-        // The network keeps only its few surest expectations of any
-        // kind, and the trend and the oscillator, which change slowly,
-        // are nearly always surer than a move. So it is also asked for
-        // the move it is surest of, whatever else it expects.
-        let foreseen = self.network.foresee(MOVE, FORESEEN);
+        // The trend and the oscillator change slowly and are nearly always
+        // surer than a move, so it is also asked for the move it is surest
+        // of, whatever else it expects.
+        let foreseen = brain.foresee(STREAM, MOVE, FORESEEN);
+        let expected = brain.expectations(STREAM, EXPECTED);
 
-        for (label, sure) in self.network.expectations().into_iter().chain(foreseen) {
+        for (label, sure) in expected.into_iter().chain(foreseen) {
             if let Some(at) = MOVES.iter().position(|name| *name == label) {
-                outlook.moves[at] = outlook.moves[at].max(sure);
+                outlook.moves[at] = outlook.moves[at].max(sure.clamp(0.0, 1.0));
             }
         }
 
         outlook
     }
 
-    /// The network's account of what comes next, in its own words.
+    /// The brain's account of what comes next, in its own words.
     pub fn account(&self) -> Account {
         let Some(latest) = self.lived.last() else {
             return Account::default();
         };
-
-        let mut expectations: Vec<Expectation> = self
-            .network
-            .expectations()
+        let mut brain = self.brain();
+        let mut expectations: Vec<Expectation> = brain
+            .expectations(STREAM, EXPECTED)
             .into_iter()
             .map(|(label, confidence)| Expectation { label, confidence })
             .collect();
@@ -431,35 +491,35 @@ impl Regime {
                 .then_with(|| left.label.cmp(&right.label))
         });
 
+        let imagined = brain.outlook(STREAM, 1, None).imagined;
+
         Account {
             now: percepts(latest),
             regime: regime_names()[regime_of(latest) as usize].clone(),
             expectations,
-            imagined: self
-                .network
-                .imagine(IMAGINED)
+            imagined: imagined
                 .into_iter()
-                .map(|thought| ImaginedStep {
-                    labels: thought.labels,
-                    confidence: thought.confidence,
+                .map(|(label, confidence)| ImaginedStep {
+                    labels: vec![label],
+                    confidence,
                 })
                 .collect(),
-            surprise: self.network.meters().surprise,
+            surprise: brain.mind.senses.surprise,
         }
     }
 
     pub fn growth(&self) -> Growth {
-        let meters = self.network.meters();
+        let brain = self.brain();
 
         Growth {
-            neurons: meters.neurons,
-            segments: meters.segments,
-            synapses: meters.synapses,
-            moments: meters.moments,
-            expected_right: meters.expected_right,
-            baseline_right: meters.baseline_right,
-            precision: meters.precision,
-            surprise: meters.surprise,
+            neurons: brain.cortex.cells_alive(),
+            segments: brain.cortex.segments_alive(),
+            synapses: brain.cortex.synapse_counts().0,
+            moments: self.lived.len() as u64,
+            expected_right: self.record.expected_right,
+            baseline_right: self.record.baseline_right,
+            precision: self.record.precision,
+            surprise: brain.mind.senses.surprise,
         }
     }
 }
