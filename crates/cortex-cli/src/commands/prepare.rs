@@ -4,9 +4,7 @@
 //! not have to wait for it or pay for it step by step: parsing the code
 //! into the graph, embedding it for search by meaning, and having the
 //! model read a map of the project once and write down what a newcomer
-//! should know. The description is kept in memory and shown before every
-//! later task, in place of the first steps a run would otherwise spend
-//! finding its way.
+//! should know. The overview is returned to the caller.
 //!
 //! This is the idea of sleep-time compute (Lin et al., 2025): think about
 //! the context ahead of the question, when the question is predictable.
@@ -18,7 +16,6 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
-use cortex_brain::memory::{MemoryConfig, MemorySystem};
 use cortex_core::{ModelProvider, Usage, Workspace, judge};
 use cortex_index::graph::GraphStats;
 use cortex_index::{CodeGraph, CodeIndex, repo_map};
@@ -103,7 +100,7 @@ pub async fn execute(args: PrepareArgs) -> Result<ExitCode> {
 
     match &prepared.overview {
         Some(overview) => println!(
-            "\nproject description, saved to memory ({} tokens in, {} out):\n\n{overview}",
+            "\nproject description ({} tokens in, {} out):\n\n{overview}",
             prepared.usage.total_input(),
             prepared.usage.output_tokens
         ),
@@ -169,19 +166,6 @@ pub async fn prepare(
         return Ok(prepared);
     }
 
-    let memory_file = args
-        .memory_db
-        .clone()
-        .unwrap_or_else(|| root.join(".cortex").join("memory.db"));
-
-    let memory = MemorySystem::open(
-        &memory_file,
-        MemoryConfig::for_scope(root.display().to_string()),
-    )
-    .with_context(|| format!("cannot open the memory at {}", memory_file.display()))?;
-
-    memory.set_overview(&overview)?;
-
     prepared.overview = Some(overview);
     prepared.usage = answer.usage;
 
@@ -222,15 +206,13 @@ fn material(index: &CodeIndex, workspace: &Workspace) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use cortex_core::Briefing;
-    use cortex_core::ContextSource;
     use cortex_providers::ScriptedProvider;
     use cortex_providers::scripted::final_turn;
 
     use super::*;
 
     #[tokio::test]
-    async fn the_description_is_written_once_and_shown_before_later_tasks() {
+    async fn the_project_overview_is_returned_without_persistent_memory() {
         let dir = tempfile::tempdir().unwrap();
 
         fs::write(
@@ -263,23 +245,6 @@ mod tests {
                 .as_deref()
                 .unwrap()
                 .contains("fee calculator")
-        );
-
-        let memory = MemorySystem::open(
-            &workspace.root().join(".cortex/memory.db"),
-            MemoryConfig::for_scope(workspace.root().display().to_string()),
-        )
-        .unwrap();
-
-        let briefing: Briefing = memory
-            .brief("Round fees to cents", &workspace)
-            .await
-            .unwrap();
-
-        assert!(
-            briefing
-                .text
-                .contains("About this project:\n\n- A fee calculator")
         );
     }
 

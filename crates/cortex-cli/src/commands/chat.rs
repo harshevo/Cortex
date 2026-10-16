@@ -11,14 +11,11 @@ use crate::session;
 
 pub async fn execute(args: ChatArgs) -> Result<ExitCode> {
     let mut agent = None;
-    #[cfg(unix)]
-    let mut brain = crate::brain_commands::Chat::default();
-
     let mut conversation = Vec::new();
 
     println!(
         "Cortex. Type an instruction, `/skills` to list skills, `/compact` to shorten a long \
-         conversation, `/teach snn+dann` to teach, `/brain` to talk to the learner, or `exit` to leave."
+         conversation, or `exit` to leave."
     );
 
     loop {
@@ -36,25 +33,8 @@ pub async fn execute(args: ChatArgs) -> Result<ExitCode> {
             break;
         }
 
-        #[cfg(unix)]
-        match brain
-            .handle(instruction, &args.session.model, "terminal-brain-chat")
-            .await
-        {
-            Ok(Some(reply)) => {
-                println!("{}", reply.text);
-                continue;
-            }
-            Err(error) => {
-                eprintln!("error: {error}");
-                continue;
-            }
-            Ok(None) => {}
-        }
-
         if matches!(instruction, "/skills" | "/help") {
             print!("{}", skills::list(&args.session.dir));
-
             continue;
         }
 

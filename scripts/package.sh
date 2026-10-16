@@ -9,11 +9,10 @@
 #     scripts/package.sh --install    macOS: also copies it to /Applications
 #     scripts/package.sh --fresh      builds the Python side again from nothing
 #
-# What goes in beside the desktop, CLI and learning service is a `services` folder:
+# What goes in beside the desktop and CLI is a `services` folder:
 #
 #     python/    an interpreter of its own, with torch and the rest installed
-#     ml/        cortex_ml and the trained HOPE weights
-#     brain/     the mind, from the `brain` project beside this checkout
+#     ml/        cortex_ml embedding service
 #     models/    the embedding model's weights
 #
 # The machine that builds needs `cargo` and `uv`, and the embedding model:
@@ -44,7 +43,6 @@ system=$(uname -s)
 machine=$(uname -m)
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 
-brain=${CORTEX_BRAIN_DIR:-../brain}
 python_version=3.12
 model=google/embeddinggemma-2
 model_folder=embeddinggemma-2
@@ -57,11 +55,10 @@ services=$stage/services
 python=$services/python/bin/python3
 
 command -v uv >/dev/null || { echo "uv is needed to build the Python side: https://docs.astral.sh/uv/" >&2; exit 1; }
-[ -f "$brain/cortex/brain/server.py" ] || { echo "the brain project was not found at $brain; set CORTEX_BRAIN_DIR" >&2; exit 1; }
 
 # ---------------------------------------------------------------- programs
 
-cargo build --release -p cortex-gui -p cortex-cli -p cortex-brain
+cargo build --release -p cortex-gui -p cortex-cli
 
 # ------------------------------------------------------------- Python side
 
@@ -81,11 +78,7 @@ if [ "$fresh" = yes ] || [ "$(cat "$services/.libraries" 2>/dev/null)" != "$stam
     rm -rf "$stage/interpreters"
 
     # The libraries the lock file names, without those only training uses.
-    extra=
-    [ "$system" = Darwin ] && extra="--extra apple"
-
-    # shellcheck disable=SC2086
-    uv export --project ml --frozen --no-dev --no-emit-project --no-hashes $extra \
+    uv export --project ml --frozen --no-dev --no-emit-project --no-hashes \
         --prune pandas --prune pyarrow \
         --output-file "$stage/requirements.txt" >/dev/null
 
@@ -117,16 +110,13 @@ if [ "$fresh" = yes ] || [ "$(cat "$services/.libraries" 2>/dev/null)" != "$stam
 fi
 
 # The services' own code is small and changes often: copied every time.
-rm -rf "$services/ml" "$services/brain"
-mkdir -p "$services/ml" "$services/brain/cortex"
+rm -rf "$services/ml"
+mkdir -p "$services/ml"
 
 cp -R ml/cortex_ml "$services/ml/cortex_ml"
-cp ml/hope.pt "$services/ml/hope.pt"
 
-cp "$brain/cortex/__init__.py" "$brain/cortex/profile.py" "$services/brain/cortex/"
-cp -R "$brain/cortex/brain" "$services/brain/cortex/brain"
 
-find "$services/ml" "$services/brain" -name __pycache__ -type d -prune -exec rm -rf {} +
+find "$services/ml" -name __pycache__ -type d -prune -exec rm -rf {} +
 
 # The embedding model's weights.
 if [ ! -f "$services/models/$model_folder/model.safetensors" ]; then
@@ -154,7 +144,7 @@ fi
 # its compiled files as it goes. They are made here instead, and marked
 # as good whatever the dates on the files become when they are unpacked.
 "$python" -m compileall -q -j 0 --invalidation-mode unchecked-hash \
-    "$services/python/lib" "$services/ml" "$services/brain" >/dev/null 2>&1 || true
+    "$services/python/lib" "$services/ml" >/dev/null 2>&1 || true
 
 # --------------------------------------------------------------- the package
 
@@ -165,7 +155,7 @@ if [ "$system" = Darwin ]; then
     rm -rf "$app"
     mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 
-    cp "$target/release/cortex-gui" "$target/release/cortex" "$target/release/cortex-brain-service" "$app/Contents/MacOS/"
+    cp "$target/release/cortex-gui" "$target/release/cortex" "$app/Contents/MacOS/"
 
     # A clone: no second copy of two gigabytes is kept on the disk.
     cp -Rc "$services" "$app/Contents/Resources/services"
@@ -211,7 +201,7 @@ else
     rm -rf "$package"
     mkdir -p "$package"
 
-    cp "$target/release/cortex-gui" "$target/release/cortex" "$target/release/cortex-brain-service" "$package/"
+    cp "$target/release/cortex-gui" "$target/release/cortex" "$package/"
     cp -al "$services" "$package/services" 2>/dev/null || cp -a "$services" "$package/services"
 
     archive=dist/cortex-$version-linux-$machine.tar.gz

@@ -1,34 +1,24 @@
 //! The parts of the window. Each view draws itself from state it is handed
 //! and reports what the person did; none of them talks to the agent.
 
-pub mod brain;
 pub mod composer;
 pub mod conversation;
 pub mod files;
 pub mod icons;
 pub mod insights;
-pub mod memory_space;
 pub mod menu;
 pub mod prose;
-pub mod remote;
 pub mod settings;
 pub mod sidebar;
 pub mod stats_strip;
 pub mod tool_card;
 pub mod top_bar;
-pub mod trading;
 pub mod typeset;
 
 /// What the middle of the window shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum View {
     Conversation,
-
-    /// The brain, drawn live: its spiking circuit as it runs.
-    Brain,
-
-    /// Price bars, read with the liquid network and the brain.
-    Trading,
 
     /// Tokens used, and whether the advisers help.
     Insights,

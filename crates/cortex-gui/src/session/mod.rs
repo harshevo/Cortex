@@ -1,16 +1,18 @@
 //! What the window shows about a conversation, built from the agent's
 //! events. Replaying a saved trajectory through the same code is how past
-//! sessions are shown. The conversation itself lives in `cortex-remote`,
-//! so that a phone builds the very same one from the same events.
+//! sessions are shown. The conversation is stored locally.
 
 pub mod history;
 
 use std::borrow::Cow;
 
 use cortex_core::Event;
-pub use cortex_remote::stats::{Cell, Stats};
-pub use cortex_remote::transcript::{Activity, Doing, Item, Session, Tone, ToolItem, Writing};
+mod stats;
+mod transcript;
+
 use serde_json::Value;
+pub use stats::{Cell, Stats};
+pub use transcript::{Activity, Doing, Item, Session, Tone, ToolItem, Writing};
 
 /// Longest tool output kept for showing, in characters. A command can
 /// print megabytes; nobody reads them in a card, and a conversation of

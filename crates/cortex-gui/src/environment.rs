@@ -3,9 +3,8 @@
 //!
 //! macOS starts such an app with the bare system `PATH`, not the one the
 //! person's shell sets up. With it the agent's commands cannot find
-//! `cargo`, `gh`, `uv` or `node`, and the mind service is started with the
-//! system's Python, which lacks what it needs. So the `PATH` is asked of
-//! the person's own shell once, before anything else starts.
+//! `cargo`, `gh`, `uv` or `node`. Read `PATH` from the person's own shell
+//! once, before anything else starts.
 
 use std::io::Read;
 use std::process::{Command, Stdio};

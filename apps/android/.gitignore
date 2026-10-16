@@ -1,6 +1,0 @@
-.gradle/
-build/
-local.properties
-# Written by scripts/mobile-android.sh from the Rust core.
-app/src/main/jniLibs/
-app/src/main/java/uniffi/

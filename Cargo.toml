@@ -8,23 +8,17 @@ members = [
     "crates/cortex-retrieval",
     "crates/cortex-verify",
     "crates/cortex-router",
-    "crates/cortex-brain",
-    "crates/cortex-liquid",
-    "crates/cortex-market",
     "crates/cortex-tools",
     "crates/cortex-skills",
     "crates/cortex-eval",
     "crates/cortex-cli",
-    "crates/cortex-remote",
-    "crates/cortex-mobile",
     "crates/cortex-gui",
 ]
 
 # What plain `cargo build`, `cargo test` and `cargo run` act on. The desktop
 # app is left out so that `cargo run` still means the `cortex` command and
 # the agent can be built without the graphics libraries. Build the app with
-# `-p cortex-gui`. The phone apps' core is left out too: it is built for
-# phones by `scripts/mobile-ios.sh` and `scripts/mobile-android.sh`. A new crate has to be added here as well as to `members`.
+# `-p cortex-gui`.
 default-members = [
     "crates/cortex-core",
     "crates/cortex-providers",
@@ -32,14 +26,10 @@ default-members = [
     "crates/cortex-retrieval",
     "crates/cortex-verify",
     "crates/cortex-router",
-    "crates/cortex-brain",
-    "crates/cortex-liquid",
-    "crates/cortex-market",
     "crates/cortex-tools",
     "crates/cortex-skills",
     "crates/cortex-eval",
     "crates/cortex-cli",
-    "crates/cortex-remote",
 ]
 
 [workspace.package]
@@ -54,14 +44,10 @@ cortex-index = { path = "crates/cortex-index" }
 cortex-retrieval = { path = "crates/cortex-retrieval" }
 cortex-verify = { path = "crates/cortex-verify" }
 cortex-router = { path = "crates/cortex-router" }
-cortex-brain = { path = "crates/cortex-brain" }
-cortex-liquid = { path = "crates/cortex-liquid" }
-cortex-market = { path = "crates/cortex-market" }
 cortex-cli = { path = "crates/cortex-cli" }
 cortex-tools = { path = "crates/cortex-tools" }
 cortex-skills = { path = "crates/cortex-skills" }
 cortex-eval = { path = "crates/cortex-eval" }
-cortex-remote = { path = "crates/cortex-remote" }
 
 anyhow = "1"
 async-trait = "0.1"
@@ -82,11 +68,4 @@ toml = "0.8"
 # optimises dependencies in debug builds while leaving this workspace's own
 # crates quick to compile and easy to debug.
 [profile.dev.package."*"]
-opt-level = 2
-
-[profile.dev.package.cortex-brain]
-opt-level = 2
-
-# Training the trading networks unoptimised takes many times longer.
-[profile.dev.package.cortex-liquid]
 opt-level = 2

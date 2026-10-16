@@ -11,7 +11,7 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 from sentence_transformers import SentenceTransformer
-from cortex_ml.acceleration import configure_threads, gpu_device, release_gpu_memory
+from cortex_ml.embedding.runtime import configure_threads, gpu_device, release_gpu_memory
 
 MODEL_NAME = "google/embeddinggemma-2"
 

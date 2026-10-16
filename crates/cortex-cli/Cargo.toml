@@ -14,7 +14,6 @@ name = "cortex"
 path = "src/main.rs"
 
 [dependencies]
-cortex-brain.workspace = true
 cortex-core.workspace = true
 cortex-eval.workspace = true
 cortex-index.workspace = true

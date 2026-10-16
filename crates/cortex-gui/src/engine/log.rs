@@ -16,7 +16,7 @@ use crate::session::history::TRAJECTORY_DIRECTORY;
 /// the command-line agent. The file is created on the session's first
 /// event, so a session in which nothing was asked leaves no empty log.
 pub struct SessionLog {
-    brain_session: Mutex<String>,
+    session_key: Mutex<String>,
     directory: PathBuf,
     current: Mutex<Option<JsonlSink>>,
 
@@ -36,7 +36,7 @@ pub type Namer = Box<dyn Fn(&str) + Send + Sync>;
 impl SessionLog {
     pub fn new(project: &Path, outbox: Outbox) -> Self {
         Self {
-            brain_session: Mutex::new(new_session_key()),
+            session_key: Mutex::new(new_session_key()),
             directory: project.join(TRAJECTORY_DIRECTORY),
             current: Mutex::new(None),
             path: Mutex::new(None),
@@ -56,7 +56,7 @@ impl SessionLog {
     }
 
     fn began(&self, path: &Path) {
-        *lock(&self.brain_session) = stem(path);
+        *lock(&self.session_key) = stem(path);
         *lock(&self.path) = Some(path.to_path_buf());
 
         if let Some(namer) = &*lock(&self.namer) {
@@ -86,11 +86,7 @@ impl SessionLog {
     pub fn start_new_session(&self) {
         *self.lock() = None;
         *lock(&self.path) = None;
-        *lock(&self.brain_session) = new_session_key();
-    }
-
-    pub fn brain_session(&self) -> String {
-        format!("desktop-{}", &*lock(&self.brain_session))
+        *lock(&self.session_key) = new_session_key();
     }
 
     fn create_log(&self) -> std::io::Result<(PathBuf, JsonlSink)> {
@@ -98,7 +94,7 @@ impl SessionLog {
         loop {
             let path = self
                 .directory
-                .join(format!("{}.jsonl", &*lock(&self.brain_session)));
+                .join(format!("{}.jsonl", *lock(&self.session_key)));
             match std::fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
@@ -106,7 +102,7 @@ impl SessionLog {
             {
                 Ok(_) => return JsonlSink::append(&path).map(|sink| (path, sink)),
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    *lock(&self.brain_session) = new_session_key();
+                    *lock(&self.session_key) = new_session_key();
                     continue;
                 }
                 Err(error) => return Err(error),
@@ -184,7 +180,6 @@ mod tests {
         let outbox = Outbox {
             updates,
             window: eframe::egui::Context::default(),
-            chat: "agent-1".into(),
         };
         let barrier = Arc::new(Barrier::new(32));
         std::thread::scope(|scope| {

@@ -6,11 +6,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use cortex_brain::memory::{MemoryConfig, MemorySystem, Store};
 use cortex_core::{
     CheckOutcome, Event, Extras, Message, ModelProvider, ModelRequest, ModelResponse,
-    ProviderError, RolloutConfig, StopReason, TrajectorySink, Usage, Verification, Verifier,
-    Workspace,
+    ProviderError, RolloutConfig, StopReason, Usage, Verification, Verifier, Workspace,
 };
 use cortex_eval::preserve::read_events;
 use cortex_eval::{RunOptions, Suite, SuiteReport, run_suite};
@@ -138,52 +136,6 @@ async fn the_review_sends_half_done_work_back_once() {
             .unwrap()
             .contains("the page count rounds up")
     );
-}
-
-#[tokio::test]
-async fn lessons_from_a_run_reach_memory() {
-    let memory = Arc::new(MemorySystem::new(
-        Store::in_memory().unwrap(),
-        MemoryConfig::for_scope("smoke"),
-    ));
-
-    let provider = scripted(vec![
-        tool_turn(vec![fix_start(), fix_count()]),
-        final_turn("Fixed both problems."),
-        final_turn(
-            &json!({ "lessons": [{
-                "title": "Pagination is one-based",
-                "when": "a page comes back empty or shifted",
-                "advice": "Pages count from 1 here; check offsets in pagination.py.",
-                "paths": ["pagination.py"],
-            }] })
-            .to_string(),
-        ),
-    ]);
-
-    let sink: Arc<dyn TrajectorySink> = memory.clone();
-
-    let (report, events) = run(provider, |options| {
-        options.extras.reflect = true;
-        options.sinks.push(sink);
-    })
-    .await;
-
-    assert!(report.results[0].solved);
-
-    let lessons = memory.store().lessons("smoke").unwrap();
-
-    assert_eq!(lessons.len(), 1);
-    assert_eq!(lessons[0].lesson.lesson.title, "Pagination is one-based");
-    assert!(!lessons[0].lesson.lesson.from_failure);
-
-    // The lessons are reported before the run is.
-    let learned = events
-        .iter()
-        .position(|event| matches!(event, Event::LessonsLearned { .. }))
-        .unwrap();
-
-    assert!(matches!(events[learned + 1], Event::RunFinished { .. }));
 }
 
 #[tokio::test]

@@ -27,3 +27,5 @@ pub use context::ContextRouter;
 pub use map::ProjectMap;
 pub use rules::{Available, Route, Source, TaskKind};
 pub use spread::LikelyFiles;
+
+mod words;

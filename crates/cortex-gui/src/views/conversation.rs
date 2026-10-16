@@ -1549,7 +1549,7 @@ fn doing_line(ui: &mut Ui, doing: &Doing, model: &str) {
     let waited = doing.since.elapsed().as_secs();
 
     let text = match &doing.activity {
-        Activity::Preparing => "Looking up memory and relevant code".to_string(),
+        Activity::Preparing => "Looking up relevant code".to_string(),
         Activity::Waiting => format!("Waiting for {model}"),
 
         Activity::Retrying { reason, until } => {

@@ -67,8 +67,7 @@ pub enum Action {
 /// stopped. It only shows while the composer is ready for an instruction.
 /// `queued` is what has been sent to the run in progress and not yet read
 /// by the model. `attachments` are the pictures that go with the next
-/// instruction. `suggestion` is what the person is expected to ask for
-/// next: it shows in the empty box, and Tab puts it there to send or edit.
+/// instruction.
 pub fn show(
     ui: &mut Ui,
     draft: &mut String,
@@ -76,12 +75,8 @@ pub fn show(
     mode: Mode,
     can_continue: bool,
     queued: &[String],
-    suggestion: Option<&str>,
 ) -> Option<Action> {
     let can_continue = can_continue && mode == Mode::Ready;
-
-    let suggestion =
-        suggestion.filter(|_| mode == Mode::Ready && draft.is_empty() && attachments.is_empty());
 
     let mut action = None;
 
@@ -161,11 +156,6 @@ pub fn show(
                     Mode::Unavailable => "Set up a model in Settings first",
                 };
 
-                let hint = match suggestion {
-                    Some(suggestion) => format!("{suggestion}    Tab"),
-                    None => hint.to_string(),
-                };
-
                 let editor_id = ui.id().with("composer editor");
 
                 // Asked before the box is drawn: Escape takes the keyboard
@@ -181,17 +171,8 @@ pub fn show(
                     put_cursor_at_end(ui, editor_id, draft);
                 }
 
-                // Tab takes the suggestion, unless another field has the
-                // keyboard and Tab is on its way there.
-                // Without a suggestion Tab does nothing here: it neither
-                // indents the message nor leaves the box.
-                let tab = ui.memory(|memory| memory.focused().is_none_or(|focused| focused == editor_id))
-                    && ui.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Tab));
-
-                let accepted = tab && suggestion.is_some();
-
-                if let (true, Some(suggestion)) = (accepted, suggestion) {
-                    *draft = suggestion.to_string();
+                if ui.memory(|memory| memory.focused().is_none_or(|focused| focused == editor_id)) {
+                    ui.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Tab));
                 }
 
                 let mut reserved = if can_continue { CONTINUE_WIDTH } else { 0.0 };
@@ -203,9 +184,7 @@ pub fn show(
 
                 let editor = egui::TextEdit::multiline(draft)
                     .id(editor_id)
-                    // Tab is the box's own key: it takes the suggestion
-                    // when one shows, and never moves the keyboard to
-                    // the next control. Left to do that, one Tab during
+                    // Keep keyboard focus in the composer. Previously, Tab during
                     // a run put the keyboard on the stop button, where
                     // typing went nowhere and Return stopped the run.
                     .lock_focus(true)
@@ -218,11 +197,7 @@ pub fn show(
 
                 let editor = ui.add_enabled(mode != Mode::Viewing, editor);
 
-                if accepted {
-                    put_cursor_at_end(ui, editor_id, draft);
 
-                    editor.request_focus();
-                }
 
                 if can_continue && continue_button(ui) {
                     action = Some(Action::Continue);
@@ -615,15 +590,7 @@ mod tests {
 
         let mut output = context.run_ui(egui::RawInput::default(), |ui| {
             ui.text_edit_singleline(&mut search).request_focus();
-            show(
-                ui,
-                &mut draft,
-                &mut Vec::new(),
-                Mode::Ready,
-                false,
-                &[],
-                None,
-            );
+            show(ui, &mut draft, &mut Vec::new(), Mode::Ready, false, &[]);
         });
         output.textures_delta.clear();
         let input = egui::RawInput {
@@ -632,41 +599,12 @@ mod tests {
         };
         let mut output = context.run_ui(input, |ui| {
             ui.text_edit_singleline(&mut search);
-            show(
-                ui,
-                &mut draft,
-                &mut Vec::new(),
-                Mode::Ready,
-                false,
-                &[],
-                None,
-            );
+            show(ui, &mut draft, &mut Vec::new(), Mode::Ready, false, &[]);
         });
 
         output.textures_delta.clear();
         assert_eq!(search, "find a session");
         assert!(draft.is_empty());
-    }
-
-    fn frame(context: &egui::Context, events: Vec<egui::Event>, draft: &mut String) {
-        let input = egui::RawInput {
-            events,
-            ..Default::default()
-        };
-
-        let mut output = context.run_ui(input, |ui| {
-            show(
-                ui,
-                draft,
-                &mut Vec::new(),
-                Mode::Ready,
-                false,
-                &[],
-                Some("run the tests"),
-            );
-        });
-
-        output.textures_delta.clear();
     }
 
     fn key(key: Key) -> egui::Event {
@@ -677,31 +615,6 @@ mod tests {
             repeat: false,
             modifiers: Modifiers::NONE,
         }
-    }
-
-    #[test]
-    fn tab_takes_the_suggestion_into_the_box() {
-        let context = egui::Context::default();
-        let mut draft = String::new();
-
-        // The box takes the keyboard, then holds on to Tab.
-        frame(&context, Vec::new(), &mut draft);
-        frame(&context, Vec::new(), &mut draft);
-
-        assert!(draft.is_empty());
-
-        frame(&context, vec![key(Key::Tab)], &mut draft);
-
-        assert_eq!(draft, "run the tests");
-
-        // It is ordinary text from here on: typing adds to it.
-        frame(
-            &context,
-            vec![egui::Event::Text(" first".into())],
-            &mut draft,
-        );
-
-        assert_eq!(draft, "run the tests first");
     }
 
     fn working(
@@ -717,7 +630,7 @@ mod tests {
         let mut action = None;
 
         let mut output = context.run_ui(input, |ui| {
-            action = show(ui, draft, &mut Vec::new(), Mode::Working, false, &[], None);
+            action = show(ui, draft, &mut Vec::new(), Mode::Working, false, &[]);
         });
 
         output.textures_delta.clear();
@@ -799,7 +712,7 @@ mod tests {
             let mut action = None;
 
             let mut output = context.run_ui(input, |ui| {
-                action = show(ui, draft, &mut Vec::new(), Mode::Ready, false, &[], None);
+                action = show(ui, draft, &mut Vec::new(), Mode::Ready, false, &[]);
             });
 
             output.textures_delta.clear();
@@ -819,18 +732,5 @@ mod tests {
         draft.push_str("typed");
 
         assert!(ready(vec![key(Key::ArrowUp)], &mut draft).is_none());
-    }
-
-    #[test]
-    fn typing_instead_leaves_the_suggestion_out() {
-        let context = egui::Context::default();
-        let mut draft = String::new();
-
-        frame(&context, Vec::new(), &mut draft);
-        frame(&context, Vec::new(), &mut draft);
-        frame(&context, vec![egui::Event::Text("no".into())], &mut draft);
-        frame(&context, vec![key(Key::Tab)], &mut draft);
-
-        assert!(!draft.contains("run the tests"), "{draft}");
     }
 }

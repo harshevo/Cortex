@@ -4,7 +4,6 @@ use std::process::ExitCode;
 
 use anyhow::{Result, bail};
 use cortex_core::MaskConfig;
-use cortex_core::trajectory::unix_millis;
 use cortex_eval::locate::{self, Summary};
 use cortex_eval::preserve;
 use cortex_eval::report::{self, REPORT_FILE};
@@ -14,7 +13,7 @@ use cortex_eval::{Comparison, RunOptions, Suite, SuiteReport, Verdict};
 use crate::args::{
     EvalCommand, EvalCompareArgs, EvalLocateArgs, EvalPreserveArgs, EvalRunArgs, EvalValidateArgs,
 };
-use crate::features::{self, MemoryLocation};
+use crate::features::{self, SessionLocation};
 use crate::session;
 
 pub async fn execute(command: EvalCommand) -> Result<ExitCode> {
@@ -40,20 +39,12 @@ async fn run(args: EvalRunArgs) -> Result<ExitCode> {
 
     let provider = session::build_provider(&args.model)?;
 
-    // Every task of a run shares one memory, so later tasks can draw on
-    // earlier ones. A fresh file per run keeps runs independent unless
-    // `--memory-db` deliberately carries one over.
-    let memory_location = MemoryLocation {
-        path: args.model.memory_db.clone().unwrap_or_else(|| {
-            args.out
-                .join("memory")
-                .join(format!("{}-{}.db", args.label, unix_millis() / 1000))
-        }),
+    let location = SessionLocation {
+        directory: args.out.join("state"),
         scope: suite.name.clone(),
-        skip_identical: true,
     };
 
-    let mut setup = features::setup(&args.model, memory_location).await?;
+    let mut setup = features::setup(&args.model, location).await?;
 
     // An evaluation compares a capability switched on with it switched
     // off. Holding an adviser out of some runs would water down the side
@@ -185,21 +176,15 @@ async fn locate(args: EvalLocateArgs) -> Result<ExitCode> {
         bail!("no task matches the filter");
     }
 
-    // A memory that does not exist yet: what is measured is what the
-    // sources find in the code, not what earlier runs left behind.
+    // Keep evaluation records separate from normal sessions.
     let scratch = tempfile::tempdir()?;
 
-    let memory_location = MemoryLocation {
-        path: args
-            .model
-            .memory_db
-            .clone()
-            .unwrap_or_else(|| scratch.path().join("memory.db")),
+    let location = SessionLocation {
+        directory: scratch.path().to_path_buf(),
         scope: suite.name.clone(),
-        skip_identical: true,
     };
 
-    let setup = features::setup(&args.model, memory_location).await?;
+    let setup = features::setup(&args.model, location).await?;
 
     if setup.context_sources.is_empty() {
         bail!("no context source is on; try `--with likely`, `--with router` or `--with map`");

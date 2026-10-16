@@ -28,7 +28,7 @@ repeat the same failing action.
 
 - Do not modify tests to make them pass unless the task is to change them.
 
-- Use calculate for numeric arithmetic. Its results use double precision; use an exact decimal tool for accounting.\n\n- Memory and brain advice are fallible hints: confirm relevant code and use checks for correctness. Do not repeatedly inspect brain_state unless the task needs diagnostics.\n\n- File paths are relative to the project directory.
+- Use calculate for numeric arithmetic. Its results use double precision; use an exact decimal tool for accounting.\n\n- File paths are relative to the project directory.
 
 When you are done, reply with a short report: what you changed, what you ran \
 to verify it and the result, and anything you could not verify.";

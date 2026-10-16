@@ -2,7 +2,7 @@
 //!
 //! Shows, without calling a model, what the switched-on capabilities would
 //! put in front of an instruction and how long gathering it takes. Useful
-//! for seeing what memory and the router contribute, and for measuring
+//! for seeing what code context and the router contribute, and for measuring
 //! their overhead on a project.
 
 use std::process::ExitCode;
@@ -14,27 +14,19 @@ use cortex_core::Workspace;
 use cortex_index::{CodeGraph, CodeIndex};
 
 use crate::args::ContextArgs;
-use crate::features::{self, MemoryLocation};
+use crate::features::{self, SessionLocation};
 
 pub async fn execute(args: ContextArgs) -> Result<ExitCode> {
     let workspace = Workspace::new(&args.dir)
         .with_context(|| format!("cannot open the project directory {}", args.dir.display()))?
         .with_sandbox(args.model.sandbox());
 
-    let memory_location = MemoryLocation {
-        path: args
-            .model
-            .memory_db
-            .clone()
-            .unwrap_or_else(|| workspace.root().join(".cortex").join("memory.db")),
-        scope: args
-            .scope
-            .clone()
-            .unwrap_or_else(|| workspace.root().display().to_string()),
-        skip_identical: false,
+    let location = SessionLocation {
+        directory: workspace.root().join(".cortex"),
+        scope: workspace.root().display().to_string(),
     };
 
-    let setup = features::setup(&args.model, memory_location).await?;
+    let setup = features::setup(&args.model, location).await?;
 
     print_graph_size(&workspace);
 
@@ -63,7 +55,7 @@ pub async fn execute(args: ContextArgs) -> Result<ExitCode> {
     }
 
     if setup.context_sources.is_empty() {
-        println!("No context source is on. Try `--with memory` or `--with router`.\n");
+        println!("No context source is on. Try `--with map` or `--with router`.\n");
     }
 
     let Some(verifier) = &setup.verifier else {

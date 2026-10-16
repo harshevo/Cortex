@@ -25,7 +25,8 @@ use crate::window::{ContextUse, PlanQuota};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
-    BrainObserved {
+    #[serde(alias = "brain_observed")]
+    AdviserObserved {
         source: String,
         step: u32,
         detail: Value,

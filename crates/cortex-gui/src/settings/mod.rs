@@ -175,10 +175,6 @@ pub struct Settings {
     /// Confine the commands tools start to the project folder.
     pub sandbox: bool,
 
-    /// Share memory between projects: the agent also recalls what it
-    /// learned in the others, and the memory space draws them all.
-    pub combine_memory: bool,
-
     /// Maximum number of model calls per instruction.
     pub max_steps: u32,
 
@@ -188,8 +184,6 @@ pub struct Settings {
 
     /// Optional capabilities that are switched on, by their `--with` names.
     pub capabilities: Vec<String>,
-    #[serde(default)]
-    pub brain_integration_version: u8,
 
     /// Attempts made at most when the `rollouts` capability is on.
     pub rollouts: u32,
@@ -211,13 +205,6 @@ pub struct Settings {
 
     /// The colour theme, by its name in `theme::palette::THEMES`.
     pub theme: String,
-
-    /// Let paired phones follow and drive the chats.
-    pub remote_control: bool,
-
-    /// The share of runs each adviser is held out of, in percent, so
-    /// that runs with and without it can be compared. 0 for none.
-    pub holdout_percent: u8,
 }
 
 impl Default for Settings {
@@ -255,22 +242,15 @@ impl Default for Settings {
             effort: Effort::default(),
             approve_everything: false,
             sandbox: true,
-            combine_memory: false,
             max_steps: 60,
             show_thinking: true,
-            capabilities: [Feature::Memory, Feature::Brain, Feature::Gate]
-                .into_iter()
-                .map(capability_name)
-                .collect(),
-            brain_integration_version: 3,
+            capabilities: [Feature::Gate].into_iter().map(capability_name).collect(),
             rollouts: 3,
             rollouts_parallel: false,
             browser_pictures: false,
             browser_window: false,
             projects: Vec::new(),
             theme: crate::theme::palette::DEFAULT.to_string(),
-            remote_control: false,
-            holdout_percent: (cortex_core::effect::DEFAULT_SHARE * 100.0).round() as u8,
         }
     }
 }
@@ -295,38 +275,13 @@ impl Settings {
 
             Self::default()
         });
-        settings.migrate_brain();
+        settings.remove_retired_capabilities();
         settings
     }
 
-    fn migrate_brain(&mut self) {
-        if self.brain_integration_version == 0 {
-            if self.capabilities == [capability_name(Feature::Memory)] {
-                for feature in [Feature::Brain, Feature::Gate] {
-                    self.set(feature, true);
-                }
-            }
-            self.brain_integration_version = 1;
-        }
-
-        // The brain is on unless it is switched off, so settings saved
-        // before it existed gain it once. Switching it off afterwards holds.
-        if self.brain_integration_version == 1 {
-            self.set(Feature::Brain, true);
-            self.brain_integration_version = 2;
-        }
-
-        // There is one brain now. The mind it replaced carries over as the
-        // brain; the other learners it replaced are gone, and a saved name
-        // the agent no longer knows would stop it from starting.
-        if self.brain_integration_version == 2 {
-            if self.capabilities.iter().any(|name| name == "mind") {
-                self.set(Feature::Brain, true);
-            }
-            self.capabilities
-                .retain(|name| !RETIRED.contains(&name.as_str()));
-            self.brain_integration_version = 3;
-        }
+    fn remove_retired_capabilities(&mut self) {
+        self.capabilities
+            .retain(|name| !RETIRED.contains(&name.as_str()));
     }
 
     pub fn save(&self) -> Result<()> {
@@ -485,19 +440,6 @@ impl Settings {
             arguments.push("--no-sandbox".to_string());
         }
 
-        arguments.extend([
-            "--holdout".to_string(),
-            (f64::from(self.holdout_percent.min(90)) / 100.0).to_string(),
-        ]);
-
-        if self.combine_memory {
-            let folders = self.projects.iter().cloned().chain(scratch_folder().ok());
-
-            for folder in folders {
-                arguments.extend(["--memory-from".to_string(), folder.display().to_string()]);
-            }
-        }
-
         for capability in &self.capabilities {
             arguments.extend(["--with".to_string(), capability.clone()]);
         }
@@ -516,8 +458,18 @@ struct ModelOnly {
     model: ModelArgs,
 }
 
-/// Capabilities saved by earlier versions that the one brain replaced.
-const RETIRED: [&str; 4] = ["mind", "intuition", "living", "controller"];
+/// Removed capabilities accepted only when migrating older settings.
+const RETIRED: [&str; 9] = [
+    "mind",
+    "intuition",
+    "living",
+    "controller",
+    "brain",
+    "memory",
+    "hope",
+    "lessons",
+    "priors",
+];
 
 /// A capability's `--with` name.
 pub fn capability_name(feature: Feature) -> String {
@@ -588,34 +540,15 @@ mod tests {
         );
     }
 
+    use super::*;
     #[test]
-    fn brain_defaults_migrate_once_and_preserve_later_opt_outs() {
-        let mut settings = Settings {
-            capabilities: vec!["memory".into()],
-            brain_integration_version: 0,
-            ..Settings::default()
-        };
-        settings.migrate_brain();
-        assert!(settings.has(Feature::Brain) && settings.has(Feature::Gate));
-        settings.set(Feature::Brain, false);
-        settings.migrate_brain();
-        assert!(!settings.has(Feature::Brain));
-    }
-
-    #[test]
-    fn the_retired_learners_become_the_one_brain() {
-        let mut settings = Settings {
-            capabilities: ["memory", "intuition", "mind", "living", "controller"]
-                .map(String::from)
-                .to_vec(),
-            brain_integration_version: 2,
-            ..Settings::default()
-        };
-        settings.migrate_brain();
-        assert_eq!(settings.capabilities, ["memory", "brain"]);
+    fn old_capabilities_are_removed_without_losing_provider_settings() {
+        let mut settings: Settings = serde_json::from_str(r#"{"provider":"codex","capabilities":["memory","brain","gate","hope","lessons","priors"],"combine_memory":true,"remote_control":true}"#).unwrap();
+        settings.remove_retired_capabilities();
+        assert_eq!(settings.provider, Provider::Codex);
+        assert_eq!(settings.capabilities, ["gate"]);
         assert!(settings.model_args().is_ok());
     }
-    use super::*;
 
     #[test]
     fn settings_become_the_command_lines_own_arguments() {
@@ -640,10 +573,7 @@ mod tests {
         );
         assert_eq!(arguments.effort, "xhigh");
         assert_eq!(arguments.max_steps, 25);
-        assert_eq!(
-            arguments.features,
-            [Feature::Memory, Feature::Brain, Feature::Gate]
-        );
+        assert_eq!(arguments.features, [Feature::Gate]);
     }
 
     #[test]
@@ -659,13 +589,13 @@ mod tests {
     fn capabilities_switch_on_and_off() {
         let mut settings = Settings::default();
 
-        assert!(settings.has(Feature::Memory));
+        assert!(settings.has(Feature::Gate));
 
         settings.set(Feature::Router, true);
         settings.set(Feature::Router, true);
-        settings.set(Feature::Memory, false);
+        settings.set(Feature::Gate, false);
 
-        assert_eq!(settings.capabilities, ["brain", "gate", "router"]);
+        assert_eq!(settings.capabilities, ["router"]);
     }
 
     #[test]

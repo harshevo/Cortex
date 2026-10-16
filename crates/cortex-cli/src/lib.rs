@@ -7,7 +7,6 @@
 pub mod approver;
 pub mod args;
 #[cfg(unix)]
-pub mod brain_commands;
 pub mod commands;
 pub mod console;
 pub mod features;

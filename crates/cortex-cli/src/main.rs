@@ -8,16 +8,6 @@ use cortex_cli::commands;
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    #[cfg(unix)]
-    if let Some(result) = cortex_brain::service::serve_argument() {
-        return match result {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(error) => {
-                eprintln!("error: {error}");
-                ExitCode::FAILURE
-            }
-        };
-    }
     let cli = Cli::parse();
 
     let result = match cli.command {

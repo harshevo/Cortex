@@ -1,27 +1,12 @@
 [project]
 name = "cortex-ml"
 version = "0.1.0"
-description = "The learned components of Cortex: embeddings now, memory and prediction models later."
+description = "Optional code embedding service for the Cortex coding harness."
 requires-python = ">=3.11"
-dependencies = [
-    "numpy",
-    "pandas>=3.0.6",
-    "pillow>=12.3.0",
-    "pyarrow>=26.0.0",
-    "sentence-transformers>=6.1",
-    "torch",
-    "torchvision>=0.29.1",
-    "transformers",
-]
+dependencies = ["numpy", "sentence-transformers>=6.1", "torch", "transformers"]
 
 [dependency-groups]
 dev = ["pytest"]
-
-[project.optional-dependencies]
-apple = ["coremltools>=9,<10; sys_platform == 'darwin'"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
 
 [build-system]
 requires = ["hatchling"]

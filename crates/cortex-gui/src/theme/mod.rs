@@ -193,19 +193,6 @@ pub fn primary_button(label: &str) -> egui::Button<'static> {
     .min_size(egui::vec2(0.0, control::MEDIUM))
 }
 
-/// A quiet bordered button for everything that is not the main action.
-pub fn secondary_button(label: &str) -> egui::Button<'static> {
-    egui::Button::new(
-        egui::RichText::new(label.to_string())
-            .font(ui())
-            .color(palette::text()),
-    )
-    .fill(palette::surface())
-    .stroke(Stroke::new(1.0, palette::border()))
-    .corner_radius(CornerRadius::same(radius::M))
-    .min_size(egui::vec2(0.0, control::MEDIUM))
-}
-
 /// The outline of whatever holds the keyboard.
 pub fn focus_ring() -> Stroke {
     Stroke::new(1.5, palette::accent())
@@ -229,74 +216,7 @@ pub fn mono() -> FontId {
     FontId::monospace(size::SMALL)
 }
 
-/// The serif the assistant speaks in.
-pub fn voice(size: f32) -> FontId {
-    FontId::new(size, egui::FontFamily::Name(fonts::VOICE.into()))
-}
-
 /// The interface font, heavier, for titles.
 pub fn strong(size: f32) -> FontId {
     FontId::new(size, egui::FontFamily::Name(fonts::STRONG.into()))
 }
-
-/// A rectangle with squircle corners: the curve eases into each straight
-/// side instead of meeting it at a circle's sudden join, so cards and tiles
-/// read as one soft shape. `radius` is how far each corner reaches along
-/// its sides; it is kept to half the shorter side.
-pub fn squircle(rect: egui::Rect, radius: f32, fill: Color32, stroke: Stroke) -> egui::Shape {
-    // A quarter superellipse of exponent 4 per corner, sampled finely
-    // enough that its edge stays smooth at any size a card is drawn.
-    const EXPONENT: f32 = 4.0;
-    const SAMPLES: usize = 10;
-
-    let r = radius
-        .min(rect.width() / 2.0)
-        .min(rect.height() / 2.0)
-        .max(0.0);
-    let corners = [
-        (egui::pos2(rect.right() - r, rect.top() + r), 0.0_f32),
-        (egui::pos2(rect.right() - r, rect.bottom() - r), 0.5),
-        (egui::pos2(rect.left() + r, rect.bottom() - r), 1.0),
-        (egui::pos2(rect.left() + r, rect.top() + r), 1.5),
-    ];
-    let mut points = Vec::with_capacity(4 * (SAMPLES + 1));
-
-    for (centre, start) in corners {
-        for at in 0..=SAMPLES {
-            // From the top of the right side round to the left of the
-            // bottom side, and so on clockwise in screen space.
-            let angle = (start - 0.5 + 0.5 * at as f32 / SAMPLES as f32) * std::f32::consts::PI;
-            let (sin, cos) = angle.sin_cos();
-            let x = cos.signum() * cos.abs().powf(2.0 / EXPONENT);
-            let y = sin.signum() * sin.abs().powf(2.0 / EXPONENT);
-            points.push(centre + egui::vec2(x * r, y * r));
-        }
-    }
-
-    egui::Shape::convex_polygon(points, fill, stroke)
-}
-
-/// Draws `content` on a soft squircle card that fills the width it is
-/// given, padded by `padding` on every side.
-pub fn soft_card<R>(
-    ui: &mut egui::Ui,
-    fill: Color32,
-    padding: f32,
-    content: impl FnOnce(&mut egui::Ui) -> R,
-) -> egui::InnerResponse<R> {
-    let behind = ui.painter().add(egui::Shape::Noop);
-    let response = egui::Frame::new()
-        .inner_margin(Margin::same(padding as i8))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            content(ui)
-        });
-    let rect = response.response.rect;
-    ui.painter()
-        .set(behind, squircle(rect, SOFT_RADIUS, fill, Stroke::NONE));
-
-    response
-}
-
-/// How far a soft card's corners reach.
-pub const SOFT_RADIUS: f32 = 22.0;

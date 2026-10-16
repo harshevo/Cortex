@@ -52,9 +52,6 @@ pub struct Workspace {
     visited: Vec<u64>,
     position: usize,
 
-    /// When paired phones were last told the state, in the window's time.
-    told_phones: f64,
-
     /// The window was narrow on the frame before.
     narrow: bool,
 
@@ -76,7 +73,6 @@ impl Workspace {
             minimized: Vec::new(),
             visited: vec![1],
             position: 0,
-            told_phones: f64::NEG_INFINITY,
             narrow: false,
             stepped_aside: false,
         };
@@ -84,32 +80,6 @@ impl Workspace {
             workspace.choose_split(Split::Columns);
         }
         workspace
-    }
-
-    /// Keeps paired phones up to date on the chats, projects and
-    /// settings. Looked at a few times a second: building the list every
-    /// frame would be wasted work.
-    fn tell_phones(&mut self, now: f64) {
-        const EVERY: f64 = 0.4;
-
-        let Some(bridge) = crate::remote::bridge() else {
-            return;
-        };
-
-        if !matches!(bridge.hosting(), crate::remote::Hosting::On(_))
-            || now - self.told_phones < EVERY
-        {
-            return;
-        }
-
-        self.told_phones = now;
-
-        let active = self.index(self.active);
-
-        bridge.state(cortex_remote::wire::HostState {
-            chats: self.chats.iter().map(|(_, app)| app.chat_info()).collect(),
-            projects: self.chats[active].1.remote_projects(),
-        });
     }
 
     fn index(&self, id: u64) -> usize {
@@ -232,7 +202,7 @@ impl Workspace {
             self.show(id);
 
             // A step leads to the session itself, even if its settings
-            // or memory space were open when it was left.
+            // were open when it was left.
             let index = self.index(id);
             self.chats[index].1.show_chat();
         }
@@ -421,7 +391,7 @@ impl eframe::App for Workspace {
         if history_changed {
             self.chats[active].1.refresh_history();
         }
-        self.tell_phones(ui.input(|input| input.time));
+
         if ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::B)) {
             self.chats[active].1.toggle_sidebar();
         }

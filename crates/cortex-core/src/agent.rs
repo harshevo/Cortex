@@ -162,12 +162,6 @@ pub struct Agent {
 }
 
 impl Agent {
-    pub fn inspect_brain(&self, query: &serde_json::Value) -> Vec<serde_json::Value> {
-        self.advisers
-            .iter()
-            .filter_map(|adviser| adviser.inspect(query))
-            .collect()
-    }
     pub fn new(
         provider: Arc<dyn ModelProvider>,
         tools: ToolRegistry,
@@ -352,7 +346,7 @@ impl Agent {
             for adviser in &self.advisers {
                 let adviser = adviser.clone();
                 let max_steps = self.config.max_steps;
-                brain_job(move || adviser.prepare(step, max_steps)).await;
+                adviser_job(move || adviser.prepare(step, max_steps)).await;
             }
 
             let request = ModelRequest {
@@ -698,8 +692,8 @@ impl Agent {
 
             let worker = adviser.clone();
             let max_steps = self.config.max_steps;
-            let advice = brain_job(move || worker.advise(step, max_steps)).await;
-            self.emit_brain(adviser.as_ref(), step);
+            let advice = adviser_job(move || worker.advise(step, max_steps)).await;
+            self.emit_adviser(adviser.as_ref(), step);
             let Some(advice) = advice else {
                 continue;
             };
@@ -985,15 +979,15 @@ impl Agent {
         };
         if let Some(step) = step {
             for adviser in &self.advisers {
-                self.emit_brain(adviser.as_ref(), step);
+                self.emit_adviser(adviser.as_ref(), step);
             }
         }
     }
 
-    fn emit_brain(&self, adviser: &dyn Adviser, step: u32) {
+    fn emit_adviser(&self, adviser: &dyn Adviser, step: u32) {
         if let Some(detail) = adviser.telemetry() {
-            let source = detail["source"].as_str().unwrap_or("brain").to_string();
-            let event = Event::BrainObserved {
+            let source = detail["source"].as_str().unwrap_or("adviser").to_string();
+            let event = Event::AdviserObserved {
                 source,
                 step,
                 detail,
@@ -1005,20 +999,20 @@ impl Agent {
     }
 }
 
-async fn brain_job<T: Send + 'static>(job: impl FnOnce() -> T + Send + 'static) -> T {
+async fn adviser_job<T: Send + 'static>(job: impl FnOnce() -> T + Send + 'static) -> T {
     static JOBS: std::sync::OnceLock<Arc<tokio::sync::Semaphore>> = std::sync::OnceLock::new();
     let permit = JOBS
         .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(1)))
         .clone()
         .acquire_owned()
         .await
-        .expect("brain scheduler open");
+        .expect("adviser scheduler open");
     tokio::task::spawn_blocking(move || {
         let _permit = permit;
         job()
     })
     .await
-    .expect("brain worker finished")
+    .expect("adviser worker finished")
 }
 
 /// Runs one call and reports how long it took, in milliseconds.

@@ -18,8 +18,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::words;
 use async_trait::async_trait;
-use cortex_brain::memory::similarity;
 use cortex_core::{Briefing, ContextSource, Workspace};
 use cortex_index::rank::Graph;
 use cortex_index::{CodeGraph, Language, walk};
@@ -139,7 +139,7 @@ impl LikelyFiles {
 
         let report_words: HashSet<String> = REPORT_WORDS.iter().map(|word| stem(word)).collect();
 
-        let task: HashSet<String> = similarity::words(instruction)
+        let task: HashSet<String> = words::words(instruction)
             .iter()
             .map(|word| stem(word))
             .filter(|word| !report_words.contains(word))
@@ -236,10 +236,7 @@ impl LikelyFiles {
         let text = fs::read_to_string(path).unwrap_or_default();
 
         let stems = |text: &str| -> HashSet<String> {
-            similarity::words(text)
-                .iter()
-                .map(|word| stem(word))
-                .collect()
+            words::words(text).iter().map(|word| stem(word)).collect()
         };
 
         FileWords {

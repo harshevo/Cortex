@@ -90,7 +90,7 @@ pub fn describe(report: &EffectReport) -> String {
     if report.runs_in_experiment == 0 {
         text.push_str(
             "Nothing to compare yet. Advisers are held out of a share of runs (`--holdout`, 0.25 \
-             unless changed) once the brain, which advises, is on.\n",
+             unless changed) when an adviser is enabled.\n",
         );
 
         return text;

@@ -1,11 +1,10 @@
-//! End-to-end checks of the verification gate and memory, with a scripted
+//! End-to-end checks of the verification gate, with a scripted
 //! model so they run without a network connection or an API key.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use cortex_brain::memory::{MemoryConfig, MemorySystem, Store};
 use cortex_eval::{RunOptions, Suite, SuiteReport, run_suite};
 use cortex_providers::ScriptedProvider;
 use cortex_providers::scripted::{final_turn, tool_turn};
@@ -160,83 +159,4 @@ async fn a_run_that_changes_nothing_is_not_checked() {
 
     assert_eq!(report.results[0].verified, None);
     assert_eq!(report.results[0].steps, 2);
-}
-
-#[tokio::test]
-async fn the_second_task_starts_with_memory_of_the_first() {
-    let results = tempfile::tempdir().unwrap();
-
-    let memory = Arc::new(MemorySystem::new(
-        Store::in_memory().unwrap(),
-        MemoryConfig::for_scope("smoke"),
-    ));
-
-    let mut tools = cortex_tools::default_registry();
-
-    cortex_tools::add_memory_tools(&mut tools, memory.clone());
-
-    let options = RunOptions {
-        repeats: 2,
-        context_sources: vec![memory.clone()],
-        sinks: vec![memory.clone()],
-        verifier: Some(Arc::new(ProjectVerifier::with_commands(vec![
-            FIRST_PAGE_CHECK.to_string(),
-        ]))),
-        ..RunOptions::plain("memory", results.path(), tools)
-    };
-
-    let attempt = || {
-        vec![
-            tool_turn(vec![("read_file", json!({ "path": "pagination.py" }))]),
-            fix_first_page(),
-            tool_turn(vec![
-                (
-                    "edit_file",
-                    json!({
-                        "path": "pagination.py",
-                        "old_text": "return len(items) // page_size",
-                        "new_text": "return (len(items) + page_size - 1) // page_size",
-                    }),
-                ),
-                (
-                    "remember",
-                    json!({
-                        "fact": "Pages are numbered from 1 in pagination.py.",
-                        "paths": ["pagination.py"],
-                    }),
-                ),
-            ]),
-            final_turn("Fixed both problems in pagination.py."),
-        ]
-    };
-
-    let mut script = attempt();
-
-    script.extend(attempt());
-
-    let (report, run_dir) = run(options, ScriptedProvider::new(script)).await;
-
-    assert!(report.results.iter().all(|result| result.solved));
-
-    // The first attempt had nothing to recall.
-    assert!(of_type(&events(&run_dir, 1), "context_prepared").is_empty());
-
-    let second = events(&run_dir, 2);
-    let prepared = of_type(&second, "context_prepared");
-
-    assert_eq!(prepared.len(), 1);
-
-    let text = prepared[0]["text"].as_str().unwrap();
-
-    assert!(text.contains("Changed: pagination.py"));
-    assert!(text.contains("the project's checks passed"));
-    assert!(text.contains("Pages are numbered from 1 in pagination.py."));
-    assert!(text.contains("is the project's check"));
-
-    // Both attempts were consolidated into episodes.
-    let stored = memory.store().episodes("smoke").unwrap();
-
-    assert_eq!(stored.len(), 2);
-    assert_eq!(stored[0].episode.files_changed, ["pagination.py"]);
-    assert_eq!(stored[0].episode.verified, Some(true));
 }

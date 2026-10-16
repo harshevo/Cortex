@@ -44,34 +44,12 @@ impl Rehearsal {
         self.args.theme.is_some()
     }
 
-    pub fn opens_memory(&self) -> bool {
-        self.args.open_memory
-    }
-
     pub fn opens_insights(&self) -> bool {
         self.args.open_insights
     }
 
-    pub fn opens_brain(&self) -> bool {
-        self.args.open_brain
-    }
-
-    /// The brain tab to start on, if one was named.
-    pub fn brain_tab(&self) -> Option<&str> {
-        self.args.brain_tab.as_deref()
-    }
-
-    /// The trading tab to start on, if any.
-    pub fn opens_trading(&self) -> Option<&str> {
-        self.args.open_trading.as_deref()
-    }
-
     pub fn opens_settings(&self) -> bool {
         self.args.open_settings
-    }
-
-    pub fn opens_remote(&self) -> bool {
-        self.args.open_remote
     }
 
     /// The instruction to send on opening. Yields it once.

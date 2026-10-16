@@ -7,7 +7,7 @@
 
 use clap::Parser;
 use cortex_cli::args::ModelArgs;
-use cortex_cli::features::{self, MemoryLocation};
+use cortex_cli::features::{self, SessionLocation};
 use cortex_core::window::tool_spec_chars;
 use cortex_core::{ToolSpec, Workspace, prompt};
 
@@ -20,16 +20,15 @@ struct Arguments {
 /// The system prompt and the tool descriptions an agent built with
 /// `flags` would send.
 async fn built(project: &std::path::Path, flags: &[&str]) -> (String, Vec<ToolSpec>) {
-    let mut arguments = vec!["cortex", "--no-records", "--without", "brain"];
+    let mut arguments = vec!["cortex", "--no-records"];
 
     arguments.extend(flags);
 
     let model = Arguments::parse_from(arguments).model;
 
-    let location = MemoryLocation {
-        path: project.join(".cortex").join("memory.db"),
+    let location = SessionLocation {
+        directory: project.join(".cortex"),
         scope: project.display().to_string(),
-        skip_identical: false,
     };
 
     let setup = features::setup(&model, location).await.unwrap();
@@ -41,7 +40,7 @@ async fn built(project: &std::path::Path, flags: &[&str]) -> (String, Vec<ToolSp
     (system, setup.tools.specs())
 }
 
-const EVERYTHING: [&str; 22] = [
+const EVERYTHING: [&str; 20] = [
     "--provider",
     "codex",
     "--with",
@@ -50,8 +49,6 @@ const EVERYTHING: [&str; 22] = [
     "index",
     "--with",
     "graph",
-    "--with",
-    "memory",
     "--with",
     "batch",
     "--with",

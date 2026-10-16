@@ -18,7 +18,7 @@ pub struct Args {
 
     /// Use a stand-in model that replays a fixed task in a throwaway
     /// project. Needs no network and no key; for trying the app and for
-    /// its tests. The tools, memory and checks it exercises are real.
+    /// its tests. The tools and checks it exercises are real.
     #[arg(long)]
     pub demo: bool,
 
@@ -49,42 +49,9 @@ pub struct RehearsalArgs {
     #[arg(long, hide = true)]
     pub open_file: Option<PathBuf>,
 
-    /// Start on the memory space instead of the conversation.
-    #[arg(long, hide = true)]
-    pub open_memory: bool,
-
-    /// Start on the brain instead of the conversation.
-    #[arg(long, hide = true)]
-    pub open_brain: bool,
-
-    /// With `--open-brain`, start on this tab: brain or metrics.
-    #[arg(long, hide = true)]
-    pub brain_tab: Option<String>,
-
-    /// Select the newest episode whenever memory changes.
-    #[arg(long, hide = true)]
-    pub select_newest: bool,
-
-    /// Start on the trading view, on this tab: chart, forecast, outcomes
-    /// or metrics.
-    #[arg(long, hide = true)]
-    pub open_trading: Option<String>,
-
     /// Start on the settings page.
     #[arg(long, hide = true)]
     pub open_settings: bool,
-
-    /// With `--open-settings`, start on its remote control part.
-    #[arg(long, hide = true)]
-    pub open_remote: bool,
-
-    /// Let phones connect in this run, without saving the choice.
-    #[arg(long, hide = true)]
-    pub remote: bool,
-
-    /// Write a pairing code to this file once phones can connect.
-    #[arg(long, hide = true)]
-    pub pairing_code: Option<PathBuf>,
 
     /// Press stop this many seconds after the window opens.
     #[arg(long, hide = true)]

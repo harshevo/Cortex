@@ -7,10 +7,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use clap::ValueEnum;
-use cortex_brain::memory::{HopeClient, MemoryConfig, MemorySystem};
-use cortex_brain::{Counsel, Link};
 use cortex_core::{
     Adviser, CompactConfig, ContextSource, EffectLedger, EffectSink, ExperimentConfig, Extras,
     Ledger, LedgerSink, MaskConfig, PruneConfig, RolloutConfig, ToolRegistry, TrajectorySink,
@@ -55,30 +53,9 @@ pub enum Feature {
     /// Code graph tools: `find_references` and `file_dependencies`.
     Graph,
 
-    /// Memory of earlier tasks in the same repository, shown before each
-    /// new task, plus the `remember` and `recall` tools.
-    Memory,
-
     /// Run the project's checks before accepting that a task is done, and
     /// send failures back to the model.
     Gate,
-
-    /// Let the HOPE-style memory model re-score recalled memories. Needs
-    /// `--with memory` and the service from `ml/cortex_ml/hope`.
-    Hope,
-
-    /// The brain: one cortex of spiking cells with dendritic branches,
-    /// shared by every chat, agent session and market, kept alive by its
-    /// background service. It lives each run as a stream of percepts,
-    /// hears what you say, learns what comes next and what turns out
-    /// well, sleeps and dreams between sessions, and adds one line
-    /// between steps when its own record says it is sure enough: what
-    /// has usually come next here and gone well, or that the usual next
-    /// step has usually gone badly. The model can ask it to imagine where
-    /// a run is heading, and talk to it with `brain_chat`. Kept in
-    /// `~/.cortex/brain` and drawn live in the app. Whether its line
-    /// helps a model is measured by `--holdout` and `cortex effect`.
-    Brain,
 
     /// Gather context for the task before the model starts, choosing among
     /// the other capabilities that are switched on.
@@ -106,17 +83,6 @@ pub enum Feature {
     /// Ask the model to reproduce a problem with a failing test or script
     /// before it changes any source file.
     Repro,
-
-    /// After each task, have the model write down what a later task
-    /// should know, from failed runs as well as passing ones, and show
-    /// the lessons that fit before a new task. Needs `--with memory`. One
-    /// extra model call per task.
-    Lessons,
-
-    /// Tell the model how often a first answer has passed the checks in
-    /// this repository, so it can weigh the cost of testing. Needs
-    /// `--with memory`, and speaks once five tasks have been checked.
-    Priors,
 
     /// Show the files the task is probably about: those that use its
     /// words, and those closely tied to them by imports.
@@ -150,7 +116,7 @@ pub enum Feature {
 }
 
 /// On in `run`, `chat` and the app unless turned off with `--without`.
-pub const DEFAULTS: [Feature; 1] = [Feature::Brain];
+pub const DEFAULTS: [Feature; 0] = [];
 
 impl crate::args::ModelArgs {
     /// Switches on the capabilities a session starts with, leaving out
@@ -170,16 +136,10 @@ impl crate::args::ModelArgs {
     }
 }
 
-/// Where memory is kept and what it is about.
-pub struct MemoryLocation {
-    /// The SQLite file.
-    pub path: PathBuf,
-
-    /// Separates repositories that share one file.
+/// Project identity and folder for harness records.
+pub struct SessionLocation {
+    pub directory: PathBuf,
     pub scope: String,
-
-    /// Leave out earlier attempts at the very same instruction.
-    pub skip_identical: bool,
 }
 
 /// What the chosen features add up to.
@@ -213,10 +173,6 @@ pub struct Setup {
 
     /// The model has been told which skills there are.
     pub skill_listing: bool,
-
-    /// The brain, when it is on, for a caller that wants to draw it or
-    /// its guess at what will be asked next.
-    pub brain: Option<Arc<Link>>,
 
     /// Records the tokens of every model call, for a caller that wants
     /// to name the session or read the totals. It is among `sinks`
@@ -262,7 +218,7 @@ impl Setup {
     }
 }
 
-pub async fn setup(args: &ModelArgs, memory_location: MemoryLocation) -> Result<Setup> {
+pub async fn setup(args: &ModelArgs, location: SessionLocation) -> Result<Setup> {
     let has =
         |feature: Feature| args.features.contains(&feature) && !args.without.contains(&feature);
 
@@ -277,14 +233,6 @@ pub async fn setup(args: &ModelArgs, memory_location: MemoryLocation) -> Result<
     }
 
     let client = EmbeddingClient::new(&args.embedding_url);
-
-    // A packaged program carries the embedding service, so memory always
-    // gets it. From a checkout it is used when someone has started it.
-    if cortex_core::services::packaged().is_some()
-        && let Err(error) = client.wake().await
-    {
-        eprintln!("warning: {error}");
-    }
 
     let semantic = if has(Feature::Semantic) {
         let index = semantic_index(&client).await?;
@@ -306,52 +254,19 @@ pub async fn setup(args: &ModelArgs, memory_location: MemoryLocation) -> Result<
         None
     };
 
-    if has(Feature::Hope) && !has(Feature::Memory) {
-        bail!("`--with hope` re-scores memories, so it needs `--with memory` as well");
-    }
-
-    if has(Feature::Lessons) && !has(Feature::Memory) {
-        bail!(
-            "`--with lessons` keeps what it learns in memory, so it needs `--with memory` as well"
-        );
-    }
-
-    if has(Feature::Priors) && !has(Feature::Memory) {
-        bail!(
-            "`--with priors` reads how earlier tasks went from memory, so it needs `--with memory` as well"
-        );
-    }
-
-    let extras = extras(args, &memory_location)?;
+    let extras = extras(args, &location)?;
 
     let records = records_folder(args);
 
     let usage = records
         .as_ref()
         .map(|folder| Ledger::open(folder.join("usage")))
-        .map(|ledger| Arc::new(LedgerSink::new(ledger, &memory_location.scope)));
+        .map(|ledger| Arc::new(LedgerSink::new(ledger, &location.scope)));
 
     let effect = records
         .as_ref()
         .map(|folder| EffectLedger::open(folder.join("effect")))
-        .map(|ledger| Arc::new(EffectSink::new(ledger, &memory_location.scope)));
-
-    let memory = if has(Feature::Memory) {
-        let memory = open_memory(
-            memory_location,
-            &client,
-            hope_client(args).await?,
-            has(Feature::Priors),
-            &args.memory_from,
-        )
-        .await?;
-
-        cortex_tools::add_memory_tools(&mut tools, memory.clone());
-
-        Some(memory)
-    } else {
-        None
-    };
+        .map(|ledger| Arc::new(EffectSink::new(ledger, &location.scope)));
 
     let verifier: Option<Arc<dyn Verifier>> = if has(Feature::Gate) {
         Some(Arc::new(ProjectVerifier::with_commands(
@@ -371,33 +286,6 @@ pub async fn setup(args: &ModelArgs, memory_location: MemoryLocation) -> Result<
         sinks.push(effect.clone());
     }
 
-    if let Some(memory) = &memory {
-        sinks.push(memory.clone());
-    }
-
-    let brain = has(Feature::Brain).then(brain).flatten();
-
-    let mut advisers: Vec<Arc<dyn Adviser>> = Vec::new();
-
-    if let Some(brain) = &brain {
-        let sink = brain.sink();
-
-        sinks.push(sink.clone());
-        advisers.push(Arc::new(Counsel::of(&sink)));
-
-        #[cfg(unix)]
-        {
-            tools.register(cortex_tools::BrainChat(brain.clone()));
-            tools.register(cortex_tools::TeachBrain(
-                crate::brain_commands::teacher_config(args, ""),
-            ));
-        }
-    }
-
-    if !advisers.is_empty() {
-        tools.register(cortex_tools::BrainState(advisers.clone()));
-    }
-
     let mut context_sources = Vec::new();
 
     // The map is the same for every task in a project, so it goes first:
@@ -410,7 +298,6 @@ pub async fn setup(args: &ModelArgs, memory_location: MemoryLocation) -> Result<
 
     context_sources.extend(task_context_sources(
         has(Feature::Router),
-        memory,
         graph.clone(),
         semantic.clone(),
         &verifier,
@@ -462,7 +349,6 @@ pub async fn setup(args: &ModelArgs, memory_location: MemoryLocation) -> Result<
 
     Ok(Setup {
         skill_listing: has(Feature::Skills),
-        brain,
         usage,
         effect,
         semantic,
@@ -471,7 +357,7 @@ pub async fn setup(args: &ModelArgs, memory_location: MemoryLocation) -> Result<
         context_sources,
         sinks,
         verifier,
-        advisers,
+        advisers: Vec::new(),
         prompt_notes,
         fold_repeats: has(Feature::Lean),
         extras,
@@ -479,7 +365,7 @@ pub async fn setup(args: &ModelArgs, memory_location: MemoryLocation) -> Result<
 }
 
 /// The parts of the loop itself that the chosen features switch on.
-fn extras(args: &ModelArgs, memory_location: &MemoryLocation) -> Result<Extras> {
+fn extras(args: &ModelArgs, location: &SessionLocation) -> Result<Extras> {
     let has = |feature: Feature| args.features.contains(&feature);
 
     // Masking rewrites earlier messages, as pruning does, and the
@@ -493,7 +379,7 @@ fn extras(args: &ModelArgs, memory_location: &MemoryLocation) -> Result<Extras> 
             bail!("`--rollouts` must be at least 2 for `--with rollouts` to do anything");
         }
 
-        let file = strategies_file(&memory_location.path);
+        let file = location.directory.join("strategies.json");
 
         let bandit = StrategyBandit::new(Some(file.clone()));
 
@@ -550,7 +436,7 @@ fn extras(args: &ModelArgs, memory_location: &MemoryLocation) -> Result<Extras> 
     Ok(Extras {
         mask: has(Feature::Mask).then(MaskConfig::default),
         review: has(Feature::Review),
-        reflect: has(Feature::Lessons),
+        reflect: false,
         rollouts,
         compact,
         context_window: args.context_window,
@@ -559,8 +445,7 @@ fn extras(args: &ModelArgs, memory_location: &MemoryLocation) -> Result<Extras> 
 }
 
 /// The folder the records of tokens used and of how runs went are kept
-/// under: the one given, or `~/.cortex`, where the brain is kept as
-/// well. `None` when no records are wanted.
+/// under: the one given, or `~/.cortex`. `None` when no records are wanted.
 pub fn records_folder(args: &ModelArgs) -> Option<PathBuf> {
     if args.no_records {
         return None;
@@ -574,83 +459,18 @@ pub fn default_records_folder() -> Option<PathBuf> {
     Some(std::env::home_dir()?.join(".cortex"))
 }
 
-/// Where the record of which attempt strategies worked is kept, for the
-/// memory at `memory`.
-pub fn strategies_file(memory: &std::path::Path) -> PathBuf {
-    memory.with_extension("strategies.json")
-}
-
-/// The brain. It is one for everything: the background service's when it
-/// can be reached or started, otherwise one shared by this process.
-fn brain() -> Option<Arc<Link>> {
-    let file = match brain_file() {
-        Some(file) => file,
-        None => {
-            eprintln!("brain: off, there is no home directory to keep it in");
-            return None;
-        }
-    };
-
-    #[cfg(all(unix, not(target_os = "ios"), not(target_os = "android")))]
-    let brain = match Link::connect(&file) {
-        Ok(brain) => brain,
-        Err(error) => {
-            eprintln!(
-                "brain: background service unavailable ({error}), so it lives in this process"
-            );
-            Link::shared(&file)
-        }
-    };
-    #[cfg(any(not(unix), target_os = "ios", target_os = "android"))]
-    let brain = Link::shared(&file);
-    let snapshot = brain.snapshot();
-
-    eprintln!(
-        "brain: {} cells, {} branches, {} synapses, {} memories ({})",
-        snapshot.cells,
-        snapshot.branches,
-        snapshot.synapses,
-        snapshot.engram_count,
-        file.display()
-    );
-
-    Some(brain)
-}
-
-/// Where the brain is kept: `~/.cortex/brain/brain.bin`.
-pub fn brain_file() -> Option<PathBuf> {
-    #[cfg(unix)]
-    return cortex_brain::service::default_file().ok();
-    #[cfg(not(unix))]
-    return Some(
-        std::env::home_dir()?
-            .join(".cortex")
-            .join("brain")
-            .join("brain.bin"),
-    );
-}
-
-/// With the router on, it alone decides what is gathered. Without it,
-/// memory is the only source and is always shown.
+/// Gather code context when the router is enabled.
 fn task_context_sources(
     use_router: bool,
-    memory: Option<Arc<MemorySystem>>,
     graph: Option<Arc<CodeGraph>>,
     semantic: Option<Arc<SemanticIndex>>,
     verifier: &Option<Arc<dyn Verifier>>,
 ) -> Vec<Arc<dyn ContextSource>> {
     if !use_router {
-        return memory
-            .map(|memory| memory as Arc<dyn ContextSource>)
-            .into_iter()
-            .collect();
+        return Vec::new();
     }
 
     let mut router = ContextRouter::new();
-
-    if let Some(memory) = memory {
-        router = router.with_memory(memory);
-    }
 
     if let Some(graph) = graph {
         router = router.with_graph(graph);
@@ -678,113 +498,6 @@ async fn semantic_index(client: &EmbeddingClient) -> Result<Arc<SemanticIndex>> 
     );
 
     Ok(cortex_tools::semantic_index(client.clone()))
-}
-
-/// Memory compares tasks with the embedding model when the service is
-/// running, and by shared words when it is not.
-/// The learned reranker, when `--with hope` asks for it.
-async fn hope_client(args: &ModelArgs) -> Result<Option<HopeClient>> {
-    if !args.features.contains(&Feature::Hope) {
-        return Ok(None);
-    }
-
-    let client = HopeClient::new(&args.hope_url);
-
-    // Started here when it is not running.
-    let health = match client.wake().await {
-        Ok(health) => health,
-
-        Err(reason) => bail!(
-            "the HOPE memory service at {} could not be reached: {reason}",
-            args.hope_url
-        ),
-    };
-
-    let state = if health.trained {
-        "trained"
-    } else {
-        "untrained, so it ranks like plain similarity"
-    };
-
-    eprintln!("hope: re-scoring memories ({state})");
-
-    Ok(Some(client))
-}
-
-async fn open_memory(
-    location: MemoryLocation,
-    client: &EmbeddingClient,
-    hope: Option<HopeClient>,
-    show_track_record: bool,
-    others: &[PathBuf],
-) -> Result<Arc<MemorySystem>> {
-    let config = MemoryConfig {
-        skip_identical: location.skip_identical,
-        show_track_record,
-        ..MemoryConfig::for_scope(location.scope)
-    };
-
-    let mut memory = MemorySystem::open(&location.path, config)
-        .with_context(|| format!("cannot open the memory at {}", location.path.display()))?;
-
-    let episodes = memory.store().episodes(memory.scope())?.len();
-
-    match client.health().await {
-        Ok(health) => {
-            eprintln!(
-                "memory: {episodes} earlier tasks in {}, compared with {}",
-                location.path.display(),
-                health.model
-            );
-
-            memory = memory.with_embedder(Arc::new(client.clone()));
-        }
-
-        Err(_) => {
-            eprintln!(
-                "memory: {episodes} earlier tasks in {}, compared by shared words (the \
-                 embedding service is not running)",
-                location.path.display()
-            );
-        }
-    }
-
-    if let Some(hope) = hope {
-        memory = memory.with_reranker(Arc::new(hope));
-    }
-
-    for folder in others {
-        // A project is known to its memory by its real path. One that has
-        // no memory yet has nothing to add.
-        let Ok(folder) = folder.canonicalize() else {
-            continue;
-        };
-
-        let file = folder.join(".cortex").join("memory.db");
-
-        if !file.is_file() {
-            continue;
-        }
-
-        let name = folder
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| folder.display().to_string());
-
-        match cortex_brain::memory::Store::open(&file) {
-            Ok(store) => memory = memory.with_other(store, &folder.display().to_string(), &name),
-            Err(error) => eprintln!("memory: {} is left out: {error}", file.display()),
-        }
-    }
-
-    if memory.others() > 0 {
-        eprintln!(
-            "memory: also recalling from {} other projects",
-            memory.others()
-        );
-    }
-
-    Ok(Arc::new(memory))
 }
 
 fn prune_config(args: &ModelArgs) -> Result<Option<PruneConfig>> {

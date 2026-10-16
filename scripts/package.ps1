@@ -26,7 +26,6 @@ function Check($what) {
 
 $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"' | Select-Object -First 1).Matches.Groups[1].Value
 
-$brain = if ($env:CORTEX_BRAIN_DIR) { $env:CORTEX_BRAIN_DIR } else { "..\brain" }
 $pythonVersion = "3.12"
 $model = "google/embeddinggemma-2"
 $modelFolder = "embeddinggemma-2"
@@ -39,7 +38,6 @@ $services = "$stage\services"
 $python = "$services\python\python.exe"
 
 if (-not (Get-Command uv -ErrorAction SilentlyContinue)) { throw "uv is needed to build the Python side: https://docs.astral.sh/uv/" }
-if (-not (Test-Path "$brain\cortex\brain\server.py")) { throw "the brain project was not found at $brain; set CORTEX_BRAIN_DIR" }
 
 # ---------------------------------------------------------------- programs
 
@@ -85,19 +83,16 @@ if ($Fresh -or $had.Trim() -ne $stamp) {
 }
 
 # The services' own code is small and changes often: copied every time.
-foreach ($folder in "$services\ml", "$services\brain") {
+foreach ($folder in "$services\ml") {
     if (Test-Path $folder) { Remove-Item -Recurse -Force $folder }
 }
 
-New-Item -ItemType Directory -Force "$services\ml", "$services\brain\cortex" | Out-Null
+New-Item -ItemType Directory -Force "$services\ml" | Out-Null
 
 Copy-Item -Recurse ml\cortex_ml "$services\ml\cortex_ml"
-Copy-Item ml\hope.pt "$services\ml\hope.pt"
 
-Copy-Item "$brain\cortex\__init__.py", "$brain\cortex\profile.py" "$services\brain\cortex\"
-Copy-Item -Recurse "$brain\cortex\brain" "$services\brain\cortex\brain"
 
-Get-ChildItem "$services\ml", "$services\brain" -Recurse -Directory -Filter __pycache__ | Remove-Item -Recurse -Force
+Get-ChildItem "$services\ml" -Recurse -Directory -Filter __pycache__ | Remove-Item -Recurse -Force
 
 # The embedding model's weights.
 if (-not (Test-Path "$services\models\$modelFolder\model.safetensors")) {
@@ -118,9 +113,9 @@ if (-not (Test-Path "$services\models\$modelFolder\model.safetensors")) {
     } else {
         Write-Host "downloading $model ..."
 
-        $target = "$services\models\$modelFolder" -replace '\\', '/'
+        $modelDestination = "$services\models\$modelFolder" -replace '\\', '/'
 
-        & $python -c "from huggingface_hub import snapshot_download; snapshot_download('$model', local_dir='$target')"
+        & $python -c "from huggingface_hub import snapshot_download; snapshot_download('$model', local_dir='$modelDestination')"
         Check "downloading the embedding model"
 
         if (Test-Path "$services\models\$modelFolder\.cache") { Remove-Item -Recurse -Force "$services\models\$modelFolder\.cache" }
@@ -131,7 +126,7 @@ if (-not (Test-Path "$services\models\$modelFolder\model.safetensors")) {
 # its compiled files as it goes. They are made here instead, and marked
 # as good whatever the dates on the files become when they are unpacked.
 & $python -m compileall -q -j 0 --invalidation-mode unchecked-hash `
-    "$services\python\Lib" "$services\ml" "$services\brain" | Out-Null
+    "$services\python\Lib" "$services\ml" | Out-Null
 
 # --------------------------------------------------------------- the package
 

@@ -16,7 +16,7 @@ use cortex_providers::{
 use crate::approver::InteractiveApprover;
 use crate::args::{ModelArgs, ProviderKind, SessionArgs};
 use crate::console::ConsoleSink;
-use crate::features::{self, MemoryLocation};
+use crate::features::{self, SessionLocation};
 
 /// Folder inside the project where Cortex keeps its own files.
 const STATE_DIRECTORY: &str = ".cortex";
@@ -86,16 +86,12 @@ pub async fn build_agent(args: &SessionArgs) -> Result<Agent> {
 
     let state_directory = workspace.root().join(STATE_DIRECTORY);
 
-    let memory_location = MemoryLocation {
-        path: model
-            .memory_db
-            .clone()
-            .unwrap_or_else(|| state_directory.join("memory.db")),
+    let location = SessionLocation {
+        directory: state_directory.clone(),
         scope: workspace.root().display().to_string(),
-        skip_identical: false,
     };
 
-    let setup = features::setup(&model, memory_location).await?;
+    let setup = features::setup(&model, location).await?;
 
     // The records name the session as its log does.
     if let Some(stem) = trajectory_file.file_stem() {

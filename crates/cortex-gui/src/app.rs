@@ -10,7 +10,6 @@ use eframe::egui::{self, Margin, RichText, Stroke};
 use crate::attachment::Attachment;
 use crate::engine::{Engine, Info, Launch, PendingApproval, Update};
 use crate::rehearsal::Rehearsal;
-use crate::remote;
 use crate::session::history::{self, PastSession};
 use crate::session::{Session, Tone};
 use crate::settings::Settings;
@@ -18,7 +17,6 @@ use crate::theme::{self, palette};
 use crate::views::composer::{self, Mode};
 use crate::views::conversation::{self, ChatView};
 use crate::views::files::Files;
-use crate::views::memory_space::MemoryView;
 use crate::views::settings::Form;
 use crate::views::sidebar::{self, Shelf};
 use crate::views::stats_strip::{self, Change, Reading};
@@ -98,19 +96,7 @@ pub struct CortexApp {
     /// The instruction being typed.
     draft: String,
 
-    /// The brain, once it has been reached, its view's tabs, and the
-    /// brain as last fetched for drawing.
-    brain: Option<std::sync::Arc<cortex_brain::Link>>,
-    brain_view: crate::views::brain::BrainView,
-
-    trading: crate::views::trading::TradingView,
-    /// The screen the trading screen's back button returns to.
-    trading_return: View,
     insights: crate::views::insights::InsightsView,
-
-    /// What the mind expects to be asked next. Shown in the empty
-    /// composer; Tab takes it.
-    suggestion: Option<String>,
 
     /// Pictures waiting to go with the next instruction.
     attachments: Vec<Attachment>,
@@ -122,8 +108,6 @@ pub struct CortexApp {
     /// The log of the live session, when it is one that was taken up
     /// again. A session started here has no log until its first run.
     live_log: Option<PathBuf>,
-
-    memory: MemoryView,
 
     /// The settings page, while it is open.
     form: Option<Form>,
@@ -154,16 +138,6 @@ impl CortexApp {
             .or_else(|| settings.projects.iter().find(|path| path.is_dir()).cloned())
             .unwrap_or_else(|| scratch.clone());
 
-        let view = if rehearsal.opens_trading().is_some() {
-            View::Trading
-        } else if rehearsal.opens_brain() || rehearsal.opens_memory() {
-            View::Brain
-        } else if rehearsal.opens_insights() {
-            View::Insights
-        } else {
-            View::Conversation
-        };
-
         let section = if place == scratch {
             Section::Chats
         } else {
@@ -177,7 +151,11 @@ impl CortexApp {
             scratch,
             place,
             status: Status::Starting,
-            view,
+            view: if rehearsal.opens_insights() {
+                View::Insights
+            } else {
+                View::Conversation
+            },
             section,
             sidebar_open: true,
             live: Session::default(),
@@ -191,19 +169,10 @@ impl CortexApp {
             approvals: VecDeque::new(),
             files: Files::opened(rehearsal.opens_files(), rehearsal.opens_file()),
             draft: String::new(),
-            brain: None,
-            brain_view: crate::views::brain::BrainView::on(match rehearsal.brain_tab() {
-                Some("metrics") => crate::views::brain::Tab::Metrics,
-                _ => crate::views::brain::Tab::Brain,
-            }),
-            trading: Default::default(),
-            trading_return: View::Conversation,
             insights: Default::default(),
-            suggestion: None,
             attachments: Vec::new(),
             queued: Vec::new(),
             live_log: None,
-            memory: MemoryView::default(),
             form: None,
             rehearsal,
             requested_session: None,
@@ -211,21 +180,11 @@ impl CortexApp {
             pending_settings: None,
         };
 
-        if let Some(tab) = app.rehearsal.opens_trading() {
-            app.trading.open_tab(tab);
-        }
-
         app.refresh_sessions();
         app.launch(true);
 
         if app.rehearsal.opens_settings() {
             app.open_settings();
-
-            if app.rehearsal.opens_remote()
-                && let Some(form) = &mut app.form
-            {
-                form.show_remote();
-            }
 
             if app.rehearsal.tries_theme()
                 && let Some(form) = &mut app.form
@@ -247,18 +206,12 @@ impl CortexApp {
     /// As [`Self::launch`], taking up the session logged in `open` once
     /// the agent is built.
     fn launch_into(&mut self, fresh: bool, open: Option<PathBuf>) {
-        if fresh || open.is_some() {
-            self.suggestion = None;
-        }
-
         if fresh {
-            self.show_phones(Vec::new());
-
             self.live = Session::default();
             self.chat.reset();
             self.viewing = None;
             self.approvals.clear();
-            self.memory = MemoryView::default();
+
             self.queued.clear();
             self.live_log = None;
         }
@@ -359,13 +312,7 @@ impl CortexApp {
                     self.refresh_sessions();
                 }
 
-                Update::Brain(brain) => self.brain = brain,
-
                 // One that arrives after the next run began is too late.
-                Update::Suggestion(suggestion) => {
-                    self.suggestion = suggestion.filter(|_| !self.live.running);
-                }
-
                 Update::Compacted((text, failed)) => {
                     let tone = if failed { Tone::Bad } else { Tone::Muted };
 
@@ -379,12 +326,6 @@ impl CortexApp {
 
                     self.live.notice(&text, tone);
                 }
-
-                Update::Memory(remembered) => {
-                    self.memory.load(remembered);
-                }
-
-                Update::MemoryFailed(problem) => self.memory.problem = Some(problem),
             }
         }
     }
@@ -406,7 +347,6 @@ impl CortexApp {
     fn submit(&mut self, instruction: &str, images: Vec<Image>) {
         self.viewing = None;
         self.live.running = true;
-        self.suggestion = None;
 
         self.engine.submit(instruction, images);
     }
@@ -422,13 +362,6 @@ impl CortexApp {
     /// Takes off the queue what `event` shows the model has now read.
     fn heard(&mut self, event: &cortex_core::Event) {
         match event {
-            cortex_core::Event::BrainObserved { source, detail, .. }
-                if source == "snn+dann conversation" && detail["kind"] == "user" =>
-            {
-                if let Some(text) = detail["text"].as_str() {
-                    self.queued.retain(|queued| queued != text);
-                }
-            }
             cortex_core::Event::UserInterjected { text, .. } => {
                 if let Some(position) = self.queued.iter().position(|queued| queued == text) {
                     self.queued.remove(position);
@@ -484,8 +417,6 @@ impl CortexApp {
 
             return;
         }
-
-        self.show_phones(Vec::new());
 
         self.viewing = None;
         self.live = Session::default();
@@ -565,8 +496,6 @@ impl CortexApp {
 
             self.engine.open(path.clone());
         }
-
-        self.show_phones(events);
 
         self.live = session;
         self.live_log = Some(path);
@@ -651,176 +580,6 @@ impl CortexApp {
         self.launch(false);
     }
 
-    /// Tells paired phones the chat now shows another session: a new
-    /// one, or an earlier one whose events these are.
-    fn show_phones(&self, events: Vec<cortex_core::Event>) {
-        remote::tell(
-            self.engine.agent_id(),
-            cortex_remote::wire::ChatDown::Replaced { events },
-        );
-    }
-
-    /// Carries out what paired phones asked for that only the window
-    /// can do, and drops the questions a phone has answered.
-    fn obey_phones(&mut self) {
-        use cortex_remote::wire::ChatUp;
-
-        let Some(bridge) = remote::bridge() else {
-            return;
-        };
-
-        self.approvals.retain(|approval| !approval.answered());
-
-        for ask in bridge.take_asks(self.engine.agent_id()) {
-            // A phone works with the settings as it was last shown them.
-            let mut settings = self
-                .pending_settings
-                .clone()
-                .unwrap_or_else(|| self.settings.clone());
-
-            match ask {
-                // Only where the sidebar could have started one.
-                ChatUp::NewSession { folder } => {
-                    let folder = folder.map(PathBuf::from).unwrap_or(self.place.clone());
-
-                    if self.sessions.contains_key(&folder) && !self.live.running {
-                        self.start_session(folder);
-                    }
-                }
-
-                // Only one the sidebar lists.
-                ChatUp::OpenSession { path } => {
-                    let path = PathBuf::from(path);
-
-                    let listed = self
-                        .sessions
-                        .values()
-                        .flatten()
-                        .any(|session| session.path == path);
-
-                    if listed && !self.live.running {
-                        self.open_past_session(path);
-                    }
-                }
-
-                ChatUp::SetCapability { name, on } => {
-                    if let Some(feature) = remote::view::feature(&name) {
-                        settings.set(feature, on);
-
-                        self.change_settings(settings);
-                    }
-                }
-
-                ChatUp::SetModel { provider, model } => {
-                    if let Some(provider) = remote::view::provider(&provider)
-                        && settings.of(provider).choices().contains(&model)
-                    {
-                        settings.provider = provider;
-                        settings.current_mut().model = model;
-
-                        self.change_settings(settings);
-                    }
-                }
-
-                ChatUp::SetEffort { effort } => {
-                    if let Some(effort) = remote::view::effort(&effort) {
-                        settings.effort = effort;
-
-                        self.change_settings(settings);
-                    }
-                }
-
-                ChatUp::SetApproveEverything { on } => {
-                    settings.approve_everything = on;
-
-                    self.change_settings(settings);
-                }
-
-                // These go straight to the agent and never wait here.
-                ChatUp::Submit { .. }
-                | ChatUp::Steer { .. }
-                | ChatUp::Stop
-                | ChatUp::Continue
-                | ChatUp::Approve { .. } => {}
-            }
-        }
-    }
-
-    /// Takes over settings changed from a phone, now or once the run in
-    /// progress has ended. Unlike [`Self::apply_settings`] it leaves the
-    /// window on the page it is showing.
-    fn change_settings(&mut self, settings: Settings) {
-        if self.live.running || self.preparing {
-            self.pending_settings = Some(settings);
-
-            return;
-        }
-
-        // A different provider cannot carry on another's conversation.
-        let fresh = settings.provider != self.settings.provider;
-
-        self.settings = settings;
-        self.form = None;
-
-        self.save_settings();
-        self.launch(fresh);
-    }
-
-    /// This chat as a paired phone lists it.
-    pub(crate) fn chat_info(&self) -> cortex_remote::wire::ChatInfo {
-        use cortex_remote::wire::{ChatInfo, ChatStatus};
-
-        let status = match &self.status {
-            Status::Starting => ChatStatus::Starting,
-            Status::Ready(_) => ChatStatus::Ready,
-
-            Status::Unavailable(reason) => ChatStatus::Unavailable {
-                reason: reason.clone(),
-            },
-        };
-
-        let settings = self.pending_settings.as_ref().unwrap_or(&self.settings);
-
-        ChatInfo {
-            id: self.engine.agent_id().to_string(),
-            title: self.label(),
-            place: self.place.display().to_string(),
-            status,
-            running: self.live.running,
-            log: self.live_log.as_ref().map(|log| log.display().to_string()),
-            settings: remote::view::settings_view(settings),
-        }
-    }
-
-    /// The sidebar's folders and their sessions, for a paired phone.
-    pub(crate) fn remote_projects(&self) -> Vec<cortex_remote::wire::Project> {
-        use cortex_remote::wire::{PastSession, Project};
-
-        let folders = [&self.scratch].into_iter().chain(&self.settings.projects);
-
-        folders
-            .map(|folder| Project {
-                path: folder.display().to_string(),
-                name: folder
-                    .file_name()
-                    .map(|name| name.to_string_lossy().to_string())
-                    .unwrap_or_else(|| folder.display().to_string()),
-                scratch: *folder == self.scratch,
-                sessions: self
-                    .sessions
-                    .get(folder)
-                    .into_iter()
-                    .flatten()
-                    .map(|session| PastSession {
-                        path: session.path.display().to_string(),
-                        title: session.title.clone(),
-                        updated_ms: session.updated_ms,
-                    })
-                    .collect(),
-            })
-            .collect()
-    }
-
     /// Puts the last thing the person said back in the composer, to send
     /// again or change. Asked for with the Up key in an empty composer.
     fn recall_last(&mut self) {
@@ -878,13 +637,6 @@ impl CortexApp {
             egui::containers::panel::PanelState::load(ui.ctx(), ui.id().with(id))
                 .map_or(width + 16.0, |state| state.size().x)
         });
-        // On the trading screen, the right-hand side is its chat.
-        let files_width = if self.view == View::Trading {
-            self.trading.docked_chat_width()
-        } else {
-            files_width
-        };
-
         // The bar is not a strip of its own: it is the top of whatever is
         // under it, so it takes the chat's colour.
         let frame = egui::Frame::new()
@@ -900,22 +652,10 @@ impl CortexApp {
             project: project.as_deref(),
             demo: self.demo,
             busy: self.live.running || self.preparing || matches!(self.status, Status::Starting),
-            // The trading chat reads as running the window's full height:
-            // the bar leaves its part empty, in its colour.
-            covered_right: if self.view == View::Trading {
-                self.trading.docked_chat_width().unwrap_or(0.0)
-            } else {
-                0.0
-            },
         };
 
-        let panel_view = self.view;
         let mut navigation = self.sidebar_visible();
-        let mut right = if self.view == View::Trading {
-            self.trading.chat_open()
-        } else {
-            self.files.visible
-        };
+        let mut right = self.files.visible;
         let result = egui::Panel::top(ui.id().with("top bar"))
             .exact_size(TOP_BAR_HEIGHT)
             .show_separator_line(false)
@@ -954,13 +694,8 @@ impl CortexApp {
                 )
             })
             .inner;
-        if panel_view == View::Trading {
-            self.trading.set_navigation(navigation);
-            self.trading.set_chat(right);
-        } else {
-            self.sidebar_open = navigation;
-            self.files.visible = right;
-        }
+        self.sidebar_open = navigation;
+        self.files.visible = right;
         result
     }
 
@@ -990,12 +725,6 @@ impl CortexApp {
 
     /// The files of the project, on the right, while they are switched on.
     pub(crate) fn files_panel(&mut self, ui: &mut egui::Ui) {
-        if self.view == View::Trading {
-            if ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::E)) {
-                self.trading.toggle_chat();
-            }
-            return;
-        }
         if ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::E)) {
             self.files.visible = !self.files.visible;
         }
@@ -1141,7 +870,6 @@ impl CortexApp {
                             mode,
                             can_continue,
                             queued,
-                            self.suggestion.as_deref(),
                         );
 
                         let stand_in = match &self.status {
@@ -1202,25 +930,11 @@ impl CortexApp {
             .fill(palette::background())
             .stroke(Stroke::NONE);
 
-        if self.view != View::Trading {
-            self.trading_return = self.view;
-        }
-
         egui::CentralPanel::default()
             .frame(frame)
             .show(ui, |ui| match self.view {
                 View::Conversation => self.conversation(ui),
-                View::Brain => self.brain_space(ui),
-                View::Trading => {
-                    if let Some(crate::views::trading::Action::Back) = crate::views::trading::show(
-                        ui,
-                        &mut self.trading,
-                        &self.settings,
-                        &self.place,
-                    ) {
-                        self.view = self.trading_return;
-                    }
-                }
+
                 View::Insights => crate::views::insights::show(ui, &mut self.insights),
                 View::Settings => self.settings_page(ui),
             });
@@ -1233,7 +947,6 @@ impl CortexApp {
         let form = self.form.get_or_insert_with(|| Form::new(&self.settings));
 
         let workspace = settings_page::Workspace {
-            memories: self.memory.episode_count(),
             can_prepare: matches!(self.status, Status::Ready(_))
                 && !self.live.running
                 && !self.preparing,
@@ -1245,7 +958,6 @@ impl CortexApp {
                 self.apply_settings(*settings);
             }
             Some(settings_page::Action::Back) => self.show_chat(),
-            Some(settings_page::Action::OpenBrain) => self.view = View::Brain,
 
             // Only what the window draws changes: the agent is left alone.
             Some(settings_page::Action::Theme(name)) => {
@@ -1256,31 +968,11 @@ impl CortexApp {
                 self.save_settings();
             }
 
-            Some(settings_page::Action::Prepare) => {
-                if self.can_prepare() {
-                    self.prepare();
-                }
-            }
+            Some(settings_page::Action::Prepare) if self.can_prepare() => self.prepare(),
+            Some(settings_page::Action::Prepare) => {}
 
             // Nothing about the agent changes, so it is left alone.
-            Some(settings_page::Action::RemoteControl(on)) => {
-                self.settings.remote_control = on;
-                self.save_settings();
-
-                if let Some(bridge) = remote::bridge() {
-                    bridge.switch(on);
-                }
-            }
             None => {}
-        }
-    }
-
-    fn brain_space(&mut self, ui: &mut egui::Ui) {
-        use crate::views::brain::{self, Tab};
-
-        match brain::tabs(ui, &mut self.brain_view) {
-            Tab::Brain => brain::show_brain(ui, &mut self.brain_view),
-            Tab::Metrics => brain::show_metrics(ui, &mut self.brain_view),
         }
     }
 
@@ -1392,18 +1084,12 @@ impl CortexApp {
 
         let revision = self.history_revision;
         self.absorb_updates();
-        self.obey_phones();
+        self.approvals.retain(|approval| !approval.answered());
         if !self.live.running
             && !self.preparing
             && let Some(settings) = self.pending_settings.take()
         {
-            // Asked for on the settings page, which is left once they
-            // apply; asked for from a phone, the window stays as it is.
-            if self.view == View::Settings {
-                self.apply_settings(settings);
-            } else {
-                self.change_settings(settings);
-            }
+            self.apply_settings(settings);
         }
 
         // The rehearsed instruction waits until there is an agent for it.
@@ -1458,9 +1144,8 @@ impl CortexApp {
     }
 
     pub(crate) fn render_pane(&mut self, ui: &mut egui::Ui) {
-        // The composer belongs to the chat; trading and insights have
-        // their own controls.
-        if !matches!(self.view, View::Settings | View::Trading | View::Insights) {
+        // The composer is shown only in the conversation.
+        if !matches!(self.view, View::Settings | View::Insights) {
             self.footer(ui);
         }
         self.centre(ui);
@@ -1479,19 +1164,12 @@ impl CortexApp {
     pub(crate) fn refresh_history(&mut self) {
         self.refresh_sessions();
     }
+
     pub(crate) fn toggle_sidebar(&mut self) {
-        if self.view == View::Trading {
-            self.trading.set_navigation(!self.trading.navigation_open());
-        } else {
-            self.sidebar_open = !self.sidebar_open;
-        }
+        self.sidebar_open = !self.sidebar_open;
     }
     pub(crate) fn sidebar_visible(&self) -> bool {
-        if self.view == View::Trading {
-            self.trading.navigation_open()
-        } else {
-            self.sidebar_open
-        }
+        self.sidebar_open
     }
     pub(crate) fn running(&self) -> bool {
         self.live.running

@@ -7,9 +7,9 @@
 //! - [`tool::Tool`] is implemented by `cortex-tools`.
 //! - [`trajectory::TrajectorySink`] is implemented by loggers and by the CLI.
 //! - [`approval::Approver`] is implemented by whoever decides what may run.
-//! - [`briefing::ContextSource`] is implemented by memory and the router.
+//! - [`briefing::ContextSource`] is implemented by the context router.
 //! - [`verify::Verifier`] is implemented by `cortex-verify`.
-//! - [`advice::Adviser`] is implemented by the brain (`Counsel` in `cortex-brain`).
+//! - [`advice::Adviser`] allows optional between-step guidance.
 //! - [`rollout::StrategyPolicy`] is implemented by the strategy bandit in `cortex-cli`.
 
 pub mod advice;

@@ -13,7 +13,6 @@ mod capabilities;
 mod models;
 mod permissions;
 mod provider;
-mod remote;
 mod rows;
 mod workspace;
 
@@ -30,7 +29,7 @@ use crate::settings::{Provider, Settings};
 use crate::theme::{self, palette, radius, size, space};
 
 use rows::Filter;
-pub(super) use rows::{caption, section, switch_row};
+pub(super) use rows::caption;
 
 /// Widest the page grows.
 const PAGE_WIDTH: f32 = 880.0;
@@ -56,19 +55,17 @@ enum Section {
     Permissions,
     Capabilities,
     Workspace,
-    Remote,
     About,
 }
 
 impl Section {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 7] = [
         Self::Provider,
         Self::Models,
         Self::Appearance,
         Self::Permissions,
         Self::Capabilities,
         Self::Workspace,
-        Self::Remote,
         Self::About,
     ];
 
@@ -80,7 +77,6 @@ impl Section {
             Self::Permissions => "Permissions",
             Self::Capabilities => "Capabilities",
             Self::Workspace => "Workspace",
-            Self::Remote => "Remote control",
             Self::About => "About",
         }
     }
@@ -150,11 +146,6 @@ impl Form {
         }
     }
 
-    /// Opens the page on remote control.
-    pub fn show_remote(&mut self) {
-        self.section = Section::Remote;
-    }
-
     /// Opens the page on its themes.
     pub fn show_appearance(&mut self) {
         self.section = Section::Appearance;
@@ -192,25 +183,15 @@ pub enum Action {
     Apply(Box<Settings>),
     Back,
 
-    /// Show the brain.
-    OpenBrain,
-
     /// Use this colour theme, from now on.
     Theme(&'static str),
 
     /// Get the project ready ahead of any task.
     Prepare,
-
-    /// Let paired phones connect, or stop letting them. Takes effect at
-    /// once.
-    RemoteControl(bool),
 }
 
 /// What the page shows about the session, besides the settings.
 pub struct Workspace {
-    /// How many earlier tasks are remembered.
-    pub memories: usize,
-
     /// The agent is free, so the project can be got ready.
     pub can_prepare: bool,
 }
@@ -497,7 +478,6 @@ fn draw(
         Section::Permissions => permissions::show(ui, form, filter),
         Section::Capabilities => capabilities::show(ui, form, filter),
         Section::Workspace => workspace::show(ui, form, workspace, filter),
-        Section::Remote => remote::show(ui, form, filter),
         Section::About => about::show(ui, filter),
     }
 }
@@ -510,18 +490,13 @@ fn apply_row(ui: &mut Ui, form: &mut Form) -> bool {
 
         let pressed = ui.add(apply).clicked();
 
-        match &form.notice {
-            Some((text, good)) => {
-                let color = if *good {
-                    palette::good()
-                } else {
-                    palette::bad()
-                };
-
-                ui.label(RichText::new(text).font(theme::small()).color(color));
-            }
-
-            None => {}
+        if let Some((text, good)) = &form.notice {
+            let color = if *good {
+                palette::good()
+            } else {
+                palette::bad()
+            };
+            ui.label(RichText::new(text).font(theme::small()).color(color));
         }
 
         pressed
@@ -533,10 +508,7 @@ fn apply_row(ui: &mut Ui, form: &mut Form) -> bool {
 mod tests {
     use super::*;
 
-    const NOTHING: Workspace = Workspace {
-        memories: 0,
-        can_prepare: false,
-    };
+    const NOTHING: Workspace = Workspace { can_prepare: false };
 
     /// Draws the page in a window of `size` and returns what was asked
     /// for and everything that was drawn.
@@ -717,7 +689,6 @@ mod tests {
 
         let mut settings = Settings {
             max_steps: 25,
-            combine_memory: true,
             theme: "Nord".to_string(),
             ..Settings::default()
         };

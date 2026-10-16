@@ -6,11 +6,10 @@ use super::Action;
 use super::rows::{self, Filter};
 use crate::theme::{self, palette};
 
-const SHORTCUTS: [(&str, &str); 10] = [
+const SHORTCUTS: [(&str, &str); 9] = [
     ("Return", "Send the message"),
     ("Shift+Return", "Start a new line"),
     ("Up, in an empty box", "Bring back your last message"),
-    ("Tab", "Take the suggested next request"),
     ("Esc", "Stop the run in progress"),
     ("⌘N", "New chat"),
     ("⌘B", "Show or hide the sidebar"),
@@ -24,7 +23,7 @@ pub fn show(ui: &mut Ui, filter: &Filter) -> Option<Action> {
         ui,
         filter,
         "Cortex",
-        "An experimental coding agent, with a memory you can look into.",
+        "A coding harness with a native desktop interface.",
         |ui| {
             ui.label(
                 RichText::new(concat!("Version ", env!("CARGO_PKG_VERSION")))

@@ -4,9 +4,6 @@
 //! can change anything, and how to run.
 
 mod affected_tests;
-#[cfg(unix)]
-mod brain_chat;
-mod brain_state;
 mod browser;
 mod calculate;
 mod checks;
@@ -19,8 +16,6 @@ mod list_files;
 mod outline;
 mod read_file;
 mod read_symbol;
-mod recall;
-mod remember;
 mod search;
 mod semantic_search;
 mod shell;
@@ -28,15 +23,11 @@ mod write_file;
 
 use std::sync::Arc;
 
-use cortex_brain::memory::MemorySystem;
 use cortex_core::ToolRegistry;
 use cortex_index::{CodeGraph, CodeIndex};
 use cortex_retrieval::{EmbeddingClient, SemanticIndex};
 
 pub use affected_tests::AffectedTests;
-#[cfg(unix)]
-pub use brain_chat::{BrainChat, TeachBrain};
-pub use brain_state::BrainState;
 pub use browser::{Browser, BrowserOptions, BrowserView};
 pub use edit_file::EditFile;
 pub use file_dependencies::FileDependencies;
@@ -46,8 +37,6 @@ pub use list_files::ListFiles;
 pub use outline::Outline;
 pub use read_file::ReadFile;
 pub use read_symbol::ReadSymbol;
-pub use recall::Recall;
-pub use remember::Remember;
 pub use search::Search;
 pub use semantic_search::SemanticSearch;
 pub use shell::Shell;
@@ -113,12 +102,6 @@ pub fn add_browser_tools(registry: &mut ToolRegistry, options: BrowserOptions) {
 
     registry.register(browser);
     registry.register(view);
-}
-
-/// Adds `remember` and `recall`, the agent's own access to memory.
-pub fn add_memory_tools(registry: &mut ToolRegistry, memory: Arc<MemorySystem>) {
-    registry.register(Remember::new(memory.clone()));
-    registry.register(Recall::new(memory));
 }
 
 /// Adds `semantic_search`, which needs the embedding service to be running.

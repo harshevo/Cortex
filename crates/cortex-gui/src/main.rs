@@ -7,13 +7,10 @@
 mod app;
 mod args;
 mod attachment;
-mod circuit;
 mod engine;
 mod environment;
 mod format;
-mod memory;
 mod rehearsal;
-mod remote;
 mod session;
 mod settings;
 mod theme;
@@ -35,16 +32,6 @@ use crate::rehearsal::Rehearsal;
 use crate::settings::Settings;
 
 fn main() -> ExitCode {
-    #[cfg(unix)]
-    if let Some(result) = cortex_brain::service::serve_argument() {
-        return match result {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(error) => {
-                eprintln!("error: {error}");
-                ExitCode::FAILURE
-            }
-        };
-    }
     environment::adopt_shell_path();
 
     match run() {
@@ -91,8 +78,6 @@ fn run() -> Result<()> {
         .build()
         .context("cannot start the async runtime")?;
 
-    let remote_control = settings.remote_control || args.rehearsal.remote;
-    let pairing_code = args.rehearsal.pairing_code.clone();
     let tried_theme = args.rehearsal.theme.clone();
     let window_size = args.rehearsal.window_size.as_deref().and_then(|size| {
         let (width, height) = size.split_once('x')?;
@@ -144,19 +129,6 @@ fn run() -> Result<()> {
             }
 
             theme::apply(&creation.egui_ctx);
-
-            // Before the first chat, so that its agent can be reached.
-            remote::install(&handle, creation.egui_ctx.clone());
-
-            if let Some(bridge) = remote::bridge() {
-                if remote_control {
-                    bridge.switch(true);
-                }
-
-                if let Some(file) = pairing_code.clone() {
-                    bridge.write_code(file);
-                }
-            }
 
             let engine = Engine::start(&handle, creation.egui_ctx.clone());
 

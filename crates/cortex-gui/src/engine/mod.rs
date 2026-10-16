@@ -30,7 +30,6 @@ use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
 pub use approver::{Decision, PendingApproval};
 
-use crate::memory::Remembered;
 use crate::settings::Settings;
 
 /// Everything that decides which agent is built.
@@ -87,7 +86,7 @@ pub enum Command {
     Reset,
 
     /// Get the project ready ahead of any task: parse it, embed it, and
-    /// have the model write the description every later task is shown.
+    /// have the model write a short overview to show in the chat.
     Prepare,
 
     /// Replace the older part of the conversation with a summary the
@@ -147,26 +146,12 @@ pub enum Update {
     /// The agent is ready for the next instruction.
     Idle,
 
-    /// The brain, for drawing. `None` when it cannot be reached.
-    Brain(Option<Arc<cortex_brain::Link>>),
-
-    /// What the brain expects the person to ask for next, now that a run
-    /// has ended. `None` when it has no clear guess.
-    Suggestion(Option<String>),
-
     /// Getting the project ready has ended. `text` says what was done,
     /// or what went wrong.
     Prepared {
         text: String,
         failed: bool,
     },
-
-    /// What the engine remembers, read when the agent is built and again
-    /// after every run.
-    Memory(Remembered),
-
-    /// The engine's memory could not be read.
-    MemoryFailed(String),
 
     /// A compaction ended: what came of it, and whether it failed.
     Compacted((String, bool)),
@@ -190,25 +175,11 @@ pub struct Info {
 pub struct Outbox {
     updates: Sender<Update>,
     window: egui::Context,
-
-    /// The name paired phones know this chat by.
-    chat: Arc<str>,
 }
 
 impl Outbox {
-    /// Has the window draw again, for something that changed without an
-    /// update of its own.
-    pub fn wake(&self) {
-        self.window.request_repaint();
-    }
-
-    pub fn chat(&self) -> &str {
-        &self.chat
-    }
-
+    /// Send an update and schedule a repaint.
     pub fn send(&self, update: Update) {
-        crate::remote::mirror(&self.chat, &update);
-
         // The receiver is gone only when the window has closed.
         let _ = self.updates.send(update);
 
@@ -265,12 +236,7 @@ impl Engine {
         let outbox = Outbox {
             updates: update_sender,
             window: window.clone(),
-            chat: member.id.as_str().into(),
         };
-
-        if let Some(bridge) = crate::remote::bridge() {
-            bridge.join(&member.id, commands.clone());
-        }
 
         runtime.spawn(worker::run(
             command_receiver,
@@ -350,10 +316,6 @@ impl Engine {
 
 impl Drop for Engine {
     fn drop(&mut self) {
-        if let Some(bridge) = crate::remote::bridge() {
-            bridge.leave(&self.member.id);
-        }
-
         self.member.close();
         let _ = self.commands.send(Command::Stop);
     }

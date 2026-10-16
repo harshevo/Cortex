@@ -24,13 +24,13 @@ pub enum Command {
     /// Search a project's code by meaning, without a model.
     Search(SearchArgs),
 
-    /// Show what memory and the router would put in front of an
+    /// Show what the context router would put in front of an
     /// instruction, without calling a model.
     Context(ContextArgs),
 
     /// Get a project ready ahead of any task: build the code graph, embed
     /// the code, and have the model write a short description of the
-    /// project that every later task is shown.
+    /// project to show now.
     Prepare(PrepareArgs),
 
     /// Measure the agent on a suite of tasks.
@@ -158,17 +158,13 @@ pub struct ModelArgs {
     pub features: Vec<Feature>,
 
     /// Turn off a capability, including one that is on unless turned off:
-    /// `run` and `chat` start with `brain`. Repeat to turn off several.
+    /// Repeat to turn off several.
     #[arg(long = "without", value_enum, value_name = "FEATURE")]
     pub without: Vec<Feature>,
 
     /// Address of the embedding service used by `--with semantic`.
     #[arg(long, default_value = cortex_retrieval::client::DEFAULT_URL)]
     pub embedding_url: String,
-
-    /// Address of the HOPE memory service used by `--with hope`.
-    #[arg(long, default_value = cortex_brain::memory::hope::DEFAULT_URL)]
-    pub hope_url: String,
 
     /// A command the verification gate runs instead of detecting the
     /// project's checks. Repeat to run several. Used with `--with gate`.
@@ -179,17 +175,6 @@ pub struct ModelArgs {
     /// run ends unverified.
     #[arg(long, default_value_t = 2)]
     pub max_check_rounds: u32,
-
-    /// Where `--with memory` keeps what it has learned. Defaults to
-    /// `.cortex/memory.db` in the project, or a new file per eval run.
-    #[arg(long, value_name = "FILE")]
-    pub memory_db: Option<PathBuf>,
-
-    /// Another project whose memory `--with memory` also recalls from:
-    /// its tasks most like the one at hand, and its advice that is not
-    /// about any one file. Repeat for several.
-    #[arg(long = "memory-from", value_name = "FOLDER")]
-    pub memory_from: Vec<PathBuf>,
 
     /// Attempts made at most with `--with rollouts`.
     #[arg(long, default_value_t = 3, value_name = "COUNT")]
@@ -236,15 +221,15 @@ pub struct ModelArgs {
     #[arg(long, default_value_t = cortex_core::compact::DEFAULT_KEEP_RECENT, value_name = "RESPONSES")]
     pub compact_keep: usize,
 
-    /// The share of runs the brain, as an adviser, is held out of: it watches and learns, and what it would
+    /// The share of runs an adviser is held out of: what it would
     /// have said is recorded and not shown to the model, so that
     /// `cortex effect` can compare runs with and without it. 0 for none.
     #[arg(long, default_value_t = cortex_core::effect::DEFAULT_SHARE, value_name = "SHARE")]
     pub holdout: f64,
 
-    /// The same for what is put before a task: memory, lessons, the
+    /// The same for what is put before a task: the
     /// router's findings. Off unless given, because a run without its
-    /// memory differs more. A skill asked for by name is never held out.
+    /// context differs more. A skill asked for by name is never held out.
     #[arg(long, default_value_t = 0.0, value_name = "SHARE")]
     pub holdout_briefings: f64,
 
@@ -317,11 +302,6 @@ pub struct ContextArgs {
     /// Project directory.
     #[arg(long, default_value = ".")]
     pub dir: PathBuf,
-
-    /// Memory scope to read. Defaults to the project directory; an eval
-    /// run's memory uses the suite name.
-    #[arg(long)]
-    pub scope: Option<String>,
 
     /// Also run the verification gate's checks and show the result.
     #[arg(long)]

@@ -27,9 +27,6 @@ pub enum TaskKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Source {
-    /// Earlier tasks in this repository and facts learned from them.
-    Memory,
-
     /// Definitions and call sites of the names the task mentions.
     Symbols,
 
@@ -43,7 +40,6 @@ pub enum Source {
 /// Which sources are switched on for this run.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Available {
-    pub memory: bool,
     pub graph: bool,
     pub semantic: bool,
     pub verifier: bool,
@@ -147,10 +143,6 @@ pub fn classify(instruction: &str) -> TaskKind {
 pub fn route(kind: TaskKind, names_code: bool, available: Available) -> Route {
     let mut sources = Vec::new();
 
-    if available.memory {
-        sources.push(Source::Memory);
-    }
-
     if available.verifier && kind == TaskKind::FailingChecks {
         sources.push(Source::CheckOutput);
     }
@@ -174,7 +166,6 @@ mod tests {
     use super::*;
 
     const EVERYTHING: Available = Available {
-        memory: true,
         graph: true,
         semantic: true,
         verifier: true,
@@ -216,21 +207,21 @@ mod tests {
     fn a_described_bug_is_searched_by_meaning() {
         let route = route(TaskKind::BugFix, false, EVERYTHING);
 
-        assert_eq!(route.sources, [Source::Memory, Source::SemanticSearch]);
+        assert_eq!(route.sources, [Source::SemanticSearch]);
     }
 
     #[test]
     fn a_named_symbol_replaces_the_search() {
         let route = route(TaskKind::Feature, true, EVERYTHING);
 
-        assert_eq!(route.sources, [Source::Memory, Source::Symbols]);
+        assert_eq!(route.sources, [Source::Symbols]);
     }
 
     #[test]
     fn failing_checks_are_run_up_front() {
         let route = route(TaskKind::FailingChecks, false, EVERYTHING);
 
-        assert_eq!(route.sources, [Source::Memory, Source::CheckOutput]);
+        assert_eq!(route.sources, [Source::CheckOutput]);
     }
 
     #[test]

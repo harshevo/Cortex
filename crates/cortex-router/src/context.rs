@@ -4,7 +4,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use cortex_brain::memory::MemorySystem;
 use cortex_core::{Briefing, ContextSource, Verifier, Workspace};
 use cortex_index::{CodeGraph, walk};
 use cortex_retrieval::SemanticIndex;
@@ -32,7 +31,6 @@ const SEMANTIC_WAIT: Duration = Duration::from_secs(5);
 /// ones that are present and that its rules pick for the task.
 #[derive(Default)]
 pub struct ContextRouter {
-    memory: Option<Arc<MemorySystem>>,
     graph: Option<Arc<CodeGraph>>,
     semantic: Option<Arc<SemanticIndex>>,
     verifier: Option<Arc<dyn Verifier>>,
@@ -41,12 +39,6 @@ pub struct ContextRouter {
 impl ContextRouter {
     pub fn new() -> Self {
         Self::default()
-    }
-
-    pub fn with_memory(mut self, memory: Arc<MemorySystem>) -> Self {
-        self.memory = Some(memory);
-
-        self
     }
 
     pub fn with_graph(mut self, graph: Arc<CodeGraph>) -> Self {
@@ -69,7 +61,6 @@ impl ContextRouter {
 
     fn available(&self) -> Available {
         Available {
-            memory: self.memory.is_some(),
             graph: self.graph.is_some(),
             semantic: self.semantic.is_some(),
             verifier: self.verifier.is_some(),
@@ -93,15 +84,6 @@ impl ContextRouter {
             })
             .take(MAX_SYMBOLS)
             .collect()
-    }
-
-    async fn memory_section(&self, instruction: &str, workspace: &Workspace) -> Option<Section> {
-        let briefing = self.memory.as_ref()?.brief(instruction, workspace).await?;
-
-        Some(Section {
-            text: briefing.text,
-            detail: briefing.detail,
-        })
     }
 
     fn symbols_section(&self, names: &[String], workspace: &Workspace) -> Option<Section> {
@@ -260,7 +242,6 @@ impl ContextSource for ContextRouter {
 
         for source in &route.sources {
             let section = match source {
-                Source::Memory => self.memory_section(instruction, workspace).await,
                 Source::Symbols => self.symbols_section(&names, workspace),
                 Source::SemanticSearch => self.semantic_section(instruction, workspace).await,
                 Source::CheckOutput => self.checks_section(workspace).await,

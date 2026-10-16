@@ -1,23 +1,4 @@
-//! Where the Python services are, and how one is started.
-//!
-//! Three parts of Cortex are Python programs that answer on a local port:
-//! the embedding model, the HOPE memory model and the mind. A packaged app
-//! carries all of them in a `services` folder next to its program:
-//!
-//! ```text
-//! services/
-//!   python/    an interpreter of its own, with every library installed
-//!   ml/        `cortex_ml` and the trained HOPE weights
-//!   brain/     the `cortex.brain` package the mind is
-//!   models/    the embedding model's weights
-//! ```
-//!
-//! Nothing in there is written to while the app runs, so the folder can
-//! sit somewhere read-only and be moved with the app to another machine.
-//!
-//! Run from a checkout, there is no such folder. Then the services are
-//! started from `ml/` and from the `brain` project beside the checkout,
-//! with the Python environment those keep.
+//! Locate and start the optional code embedding service.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -32,22 +13,18 @@ pub const PYTHON_VARIABLE: &str = "CORTEX_PYTHON";
 const EMBEDDING_MODEL: &str = "embeddinggemma-2";
 
 /// How far up from the program a checkout is looked for. A test binary
-/// sits five folders below the folder that holds `cortex` and `brain`.
+/// can sit several folders below the checkout.
 const CHECKOUT_DEPTH: usize = 6;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Service {
     Embedding,
-    Hope,
-    Mind,
 }
 
 impl Service {
     fn module(self) -> &'static str {
         match self {
             Self::Embedding => "cortex_ml.embedding.server",
-            Self::Hope => "cortex_ml.hope.server",
-            Self::Mind => "cortex.brain.server",
         }
     }
 
@@ -55,8 +32,6 @@ impl Service {
     fn mark(self) -> &'static str {
         match self {
             Self::Embedding => "cortex_ml/embedding/server.py",
-            Self::Hope => "cortex_ml/hope/server.py",
-            Self::Mind => "cortex/brain/server.py",
         }
     }
 
@@ -66,8 +41,6 @@ impl Service {
 
         Some(match self {
             Self::Embedding => home.join("logs/embedding-service.log"),
-            Self::Hope => home.join("logs/hope-service.log"),
-            Self::Mind => home.join("mind/server.log"),
         })
     }
 
@@ -75,19 +48,12 @@ impl Service {
     /// environment, else the packaged one, else the checkout's.
     pub fn folder(self) -> Result<PathBuf, String> {
         let (variable, packaged_name, checkout_name) = match self {
-            Self::Embedding | Self::Hope => ("CORTEX_ML_DIR", "ml", "ml"),
-            Self::Mind => ("CORTEX_BRAIN_DIR", "brain", "brain"),
+            Self::Embedding => ("CORTEX_ML_DIR", "ml", "ml"),
         };
 
         let named = std::env::var_os(variable).map(PathBuf::from);
 
         let shipped = packaged().map(|services| services.join(packaged_name));
-
-        // Where the mind was kept before the app carried it.
-        let installed = (self == Self::Mind)
-            .then(std::env::home_dir)
-            .flatten()
-            .map(|home| home.join(".cortex/brain"));
 
         let checkout = std::env::current_exe()
             .ok()
@@ -104,7 +70,6 @@ impl Service {
         named
             .into_iter()
             .chain(shipped)
-            .chain(installed)
             .chain(checkout)
             .find(|folder| folder.join(self.mark()).is_file())
             .ok_or_else(|| {
@@ -150,22 +115,6 @@ impl Service {
                         .env("TRANSFORMERS_OFFLINE", "1");
                 }
             }
-
-            Self::Hope => {
-                let weights = folder.join("hope.pt");
-
-                if weights.is_file() {
-                    command.arg("--weights").arg(weights);
-                }
-            }
-
-            Self::Mind => {
-                // The package is not written to, so what the mind would
-                // keep beside its own code goes with its memory instead.
-                if let Some(home) = std::env::home_dir().filter(|_| packaged.is_some()) {
-                    command.env("CORTEX_RUNS", home.join(".cortex/mind/runs"));
-                }
-            }
         }
 
         if packaged.is_some() {
@@ -191,10 +140,6 @@ impl Service {
 
         if let Some(services) = packaged {
             return Command::new(packaged_python(services));
-        }
-
-        if self == Self::Mind {
-            return Command::new(if cfg!(windows) { "python" } else { "python3" });
         }
 
         let own = folder.join(if cfg!(windows) {
@@ -338,20 +283,6 @@ mod tests {
             "8765".to_string(),
         ]));
         assert_eq!(command.get_current_dir(), Some(folder.as_path()));
-    }
-
-    #[test]
-    fn the_hope_service_is_given_its_trained_weights() {
-        let folder = Service::Hope.folder().unwrap();
-
-        if !folder.join("hope.pt").is_file() {
-            return;
-        }
-
-        let arguments = arguments(&Service::Hope.command(8766).unwrap());
-
-        assert!(arguments.contains(&"--weights".to_string()));
-        assert!(arguments.last().unwrap().ends_with("hope.pt"));
     }
 
     #[test]

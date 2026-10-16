@@ -7,7 +7,6 @@ license.workspace = true
 
 [dependencies]
 cortex-core.workspace = true
-cortex-brain.workspace = true
 cortex-index.workspace = true
 cortex-retrieval.workspace = true
 cortex-verify.workspace = true

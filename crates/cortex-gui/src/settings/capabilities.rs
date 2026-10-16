@@ -18,20 +18,16 @@ use super::{capability_help, capability_name};
 pub enum Group {
     Understanding,
     Spending,
-    Memory,
     Checking,
-    Learning,
     Tools,
     Experimental,
 }
 
 impl Group {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 5] = [
         Self::Understanding,
         Self::Spending,
-        Self::Memory,
         Self::Checking,
-        Self::Learning,
         Self::Tools,
         Self::Experimental,
     ];
@@ -40,9 +36,7 @@ impl Group {
         match self {
             Self::Understanding => "Understanding the project",
             Self::Spending => "Spending less",
-            Self::Memory => "Memory",
             Self::Checking => "Checking the work",
-            Self::Learning => "Learning",
             Self::Tools => "Tools",
             Self::Experimental => "Experimental",
         }
@@ -151,34 +145,6 @@ const ROWS: &[Row] = &[
         false,
     ),
     (
-        "memory",
-        "Memory",
-        "Remember earlier tasks in this project and show them before a new one.",
-        Group::Memory,
-        false,
-    ),
-    (
-        "hope",
-        "HOPE re-ranking",
-        "Let the HOPE memory model re-score recalled memories. Needs its service running.",
-        Group::Memory,
-        true,
-    ),
-    (
-        "lessons",
-        "Lessons",
-        "After each task, write down what a later task should know. One extra model call.",
-        Group::Memory,
-        false,
-    ),
-    (
-        "priors",
-        "Priors",
-        "Tell the model how often a first answer has passed the checks here.",
-        Group::Memory,
-        true,
-    ),
-    (
         "gate",
         "Checks gate",
         "Run the project's checks before a task counts as done; failures go back to the model.",
@@ -204,14 +170,6 @@ const ROWS: &[Row] = &[
         "Several attempts",
         "Make several attempts, each in its own copy of the project, and keep the best.",
         Group::Checking,
-        false,
-    ),
-    (
-        "brain",
-        "Brain",
-        "The one brain shared by chat, code and trading: it lives each run, learns what \
-         comes next and what goes well, and advises between steps when it is sure.",
-        Group::Learning,
         false,
     ),
     (

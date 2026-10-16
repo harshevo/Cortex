@@ -26,7 +26,7 @@ pub struct Theme {
     /// Code set inside a sentence.
     pub code: Color32,
 
-    /// What the agent does (send, the newest memory).
+    /// What the agent does (send and other primary actions).
     pub accent: Color32,
 
     pub good: Color32,
@@ -420,11 +420,6 @@ pub fn index() -> usize {
 pub fn background() -> Color32 {
     current().background
 }
-
-/// A pairing code is drawn dark on white whatever the theme: that is
-/// what cameras read best.
-pub const CODE_PAPER: Color32 = Color32::WHITE;
-pub const CODE_INK: Color32 = Color32::BLACK;
 
 pub fn sidebar() -> Color32 {
     current().sidebar

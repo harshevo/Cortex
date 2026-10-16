@@ -38,11 +38,6 @@ pub struct Place<'a> {
     /// The agent is the scripted stand-in, not a real model.
     pub demo: bool,
     pub busy: bool,
-
-    /// Width at the right-hand end that belongs to a panel running the
-    /// full height of the window, such as the trading chat: the bar
-    /// leaves it empty, in that panel's colour.
-    pub covered_right: f32,
 }
 
 /// Draws the bar. `files_open` is whether the files of the project are
@@ -134,14 +129,13 @@ pub fn show(
             badge(ui, "Demo");
         }
 
-        let narrow = ui.available_width() - place.covered_right < NARROW_WIDTH;
+        let narrow = ui.available_width() < NARROW_WIDTH;
 
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = space::XS;
-            ui.add_space(space::XS + place.covered_right);
+            ui.add_space(space::XS);
 
-            // The trading screen has its own chat switch in its header.
-            if *view != View::Trading {
+            {
                 let tooltip = if *files_open {
                     "Hide the files  ⌘E"
                 } else {
@@ -178,23 +172,9 @@ pub fn show(
 /// on screen and opens a menu of the others. In a narrow window all of
 /// them go into one menu.
 fn views(ui: &mut Ui, view: &mut View, narrow: bool) {
-    if ui.input_mut(|input| {
-        input.consume_key(
-            egui::Modifiers {
-                shift: true,
-                ..egui::Modifiers::COMMAND
-            },
-            egui::Key::L,
-        )
-    }) {
-        *view = View::Brain;
-    }
-    const SHOWN: [(View, &str, &str); 2] = [
-        (View::Conversation, "Chat", "The conversation"),
-        (View::Brain, "Brain", "The one brain, drawn live (⌘⇧L)"),
-    ];
+    const SHOWN: [(View, &str, &str); 1] = [(View::Conversation, "Chat", "The conversation")];
 
-    const TUCKED: [(View, &str); 2] = [(View::Trading, "Trading"), (View::Insights, "Insights")];
+    const TUCKED: [(View, &str); 1] = [(View::Insights, "Insights")];
 
     // Settings belong to the chat they were opened from.
     let on_screen = if *view == View::Settings {

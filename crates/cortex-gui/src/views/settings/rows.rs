@@ -206,12 +206,6 @@ pub fn switch(
     .unwrap_or(false)
 }
 
-/// A switch with a title and a line of explanation, outside any search:
-/// for the parts of the page that are not rows of settings.
-pub fn switch_row(ui: &mut Ui, on: &mut bool, title: RichText, help: &str, enabled: bool) -> bool {
-    switch(ui, &Filter::everything(), title.text(), help, on, enabled)
-}
-
 /// An on/off switch. Returns whether it was flipped.
 pub fn toggle(ui: &mut Ui, on: &mut bool) -> bool {
     const SIZE: egui::Vec2 = vec2(30.0, 18.0);

@@ -9,42 +9,10 @@ use super::rows::{self, Filter};
 use super::{Action, Form};
 use crate::settings::capabilities::{self, About, Group};
 use crate::theme::{self, palette, space};
-use crate::views::menu::{self, Opens};
 use crate::views::tool_card;
-
-/// How often each adviser is held out, to choose from.
-const HOLDOUTS: [(u8, &str); 4] = [(0, "Never"), (10, "10%"), (25, "25%"), (50, "50%")];
 
 pub fn show(ui: &mut Ui, form: &mut Form, filter: &Filter) -> Option<Action> {
     let all = capabilities::all();
-
-    rows::row(
-        ui,
-        filter,
-        "Measure whether advisers help",
-        "Share of runs in which each adviser is held out at random, so that Insights → \
-         Does it help? can compare. It still watches and learns.",
-        |ui| {
-            let current = form.draft.holdout_percent;
-            let label = HOLDOUTS
-                .iter()
-                .find(|(share, _)| *share == current)
-                .map_or("Custom".to_string(), |(_, name)| name.to_string());
-
-            let (_, chosen) = menu::dropdown(ui, None, &label, false, Opens::DownLeft, |ui| {
-                HOLDOUTS
-                    .into_iter()
-                    .find(|(share, name)| {
-                        menu::item(ui, None, name, "", *share == current).clicked()
-                    })
-                    .map(|(share, _)| share)
-            });
-
-            if let Some(Some(share)) = chosen {
-                form.draft.holdout_percent = share;
-            }
-        },
-    );
 
     // A search looks through the folded ones too.
     let (usual, rare): (Vec<&About>, Vec<&About>) = all
@@ -94,10 +62,7 @@ pub fn show(ui: &mut Ui, form: &mut Form, filter: &Filter) -> Option<Action> {
 
 /// One capability's switch, and under it the choices it brings.
 fn capability(ui: &mut Ui, form: &mut Form, about: &About, filter: &Filter) {
-    // The memory space shows the agent's memory, so it is always kept.
-    let always_on = about.feature == Feature::Memory;
-
-    let mut on = always_on || form.draft.has(about.feature);
+    let mut on = form.draft.has(about.feature);
 
     // Found by its `--with` name as well as by what it is called.
     let label = about.label.as_ref();
@@ -111,7 +76,7 @@ fn capability(ui: &mut Ui, form: &mut Form, about: &About, filter: &Filter) {
 
     let help = format!("{}  ·  {}", about.help, about.name);
 
-    if rows::switch(ui, filter, label, &help, &mut on, !always_on) {
+    if rows::switch(ui, filter, label, &help, &mut on, true) {
         form.draft.set(about.feature, on);
     }
 

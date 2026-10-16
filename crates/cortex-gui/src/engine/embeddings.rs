@@ -171,7 +171,6 @@ mod tests {
         Outbox {
             updates,
             window: eframe::egui::Context::default(),
-            chat: "agent-1".into(),
         }
     }
 

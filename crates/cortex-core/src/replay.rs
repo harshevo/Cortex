@@ -49,15 +49,7 @@ struct Replay {
 impl Replay {
     fn apply(&mut self, event: &Event) {
         match event {
-            Event::BrainObserved { source, detail, .. } => {
-                if source == "snn+dann conversation" && let Some(text) = detail["text"].as_str() {
-                    match detail["kind"].as_str() {
-                        Some("user") => { self.settle(); self.conversation.push(Message::user_text(text)); }
-                        Some("reply") => self.conversation.push(Message::assistant_text(text)),
-                        _ => {}
-                    }
-                }
-            }
+            Event::AdviserObserved { .. } => {},
             Event::RunStarted { instruction, .. } => {
                 self.settle();
 

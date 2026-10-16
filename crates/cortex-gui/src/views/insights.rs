@@ -1,23 +1,12 @@
-//! What the agent has cost and whether its learning parts help: tokens
-//! by day, session and model on a calendar, and the experiment that
-//! compares runs in which each adviser spoke with runs it was held out
-//! of.
-//!
-//! Both read the records every session keeps under `~/.cortex`. They are
-//! read on a thread of their own, since a long history is many lines.
+//! Token usage, cost estimates, and session activity.
 
 use std::sync::mpsc::{Receiver, channel};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use cortex_core::effect::{
-    EffectLedger, EffectReport, Filter, MetricEffect, SourceEffect, Verdict,
-};
 use cortex_core::ledger::{
     self, CostEstimate, DayUse, Ledger, MonthReport, PriceTable, SessionUse,
 };
-use eframe::egui::{
-    self, Align2, Color32, Rect, RichText, ScrollArea, Sense, Stroke, Ui, pos2, vec2,
-};
+use eframe::egui::{self, Align2, Rect, RichText, ScrollArea, Sense, Stroke, Ui, pos2, vec2};
 
 use crate::theme::{self, palette};
 
@@ -42,22 +31,13 @@ const WEEKDAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 /// view is open.
 const FRESH_FOR: f64 = 30.0;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Tab {
-    Usage,
-    Effect,
-}
-
 /// Everything read from the records at once.
 struct Read {
     month: MonthReport,
     streak: u32,
-    effect: EffectReport,
 }
 
 pub struct InsightsView {
-    pub tab: Tab,
-
     /// The month shown, on the person's own calendar.
     year: i32,
     month: u32,
@@ -73,9 +53,6 @@ pub struct InsightsView {
 
     /// The day picked on the calendar, `YYYY-MM-DD`.
     day: Option<String>,
-
-    /// The adviser whose weeks are drawn.
-    adviser: usize,
 }
 
 impl Default for InsightsView {
@@ -84,7 +61,6 @@ impl Default for InsightsView {
         let (year, month) = ledger::local_month(now_ms(), offset);
 
         Self {
-            tab: Tab::Usage,
             year,
             month,
             offset,
@@ -92,7 +68,6 @@ impl Default for InsightsView {
             reading: None,
             read_at: f64::NEG_INFINITY,
             day: None,
-            adviser: 0,
         }
     }
 }
@@ -156,16 +131,7 @@ fn read(year: i32, month: u32, offset: i32) -> Read {
         None => (MonthReport::default(), 0),
     };
 
-    let effect = match EffectLedger::at_home() {
-        Some(ledger) => ledger.report(0, u64::MAX, &Filter::default(), offset),
-        None => cortex_core::effect::analyse(&[], offset),
-    };
-
-    Read {
-        month,
-        streak,
-        effect,
-    }
+    Read { month, streak }
 }
 
 fn now_ms() -> u64 {
@@ -199,40 +165,15 @@ pub fn show(ui: &mut Ui, view: &mut InsightsView) {
             ui.vertical(|ui| {
                 ui.set_width(width - 2.0 * theme::space::L);
 
-                // The top bar already says this is Insights; the page
-                // starts with its two parts.
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = theme::space::XS;
-
-                    for (tab, name) in [(Tab::Usage, "Tokens"), (Tab::Effect, "Does it help?")] {
-                        if tab_button(ui, name, view.tab == tab).clicked() {
-                            view.tab = tab;
-                        }
-                    }
-                });
-
-                ui.add_space(theme::space::L);
-
                 let Some(read) = &view.read else {
                     ui.label(RichText::new("Reading the records…").color(palette::text_muted()));
 
                     return;
                 };
 
-                match view.tab {
-                    Tab::Usage => {
-                        let month = read.month.clone();
-                        let streak = read.streak;
-
-                        usage(ui, view, &month, streak, now);
-                    }
-
-                    Tab::Effect => {
-                        let effect = read.effect.clone();
-
-                        effect_tab(ui, view, &effect);
-                    }
-                }
+                let month = read.month.clone();
+                let streak = read.streak;
+                usage(ui, view, &month, streak, now);
 
                 ui.add_space(30.0);
             });
@@ -652,295 +593,6 @@ fn session_row(ui: &mut Ui, session: &SessionUse) {
     });
 }
 
-fn effect_tab(ui: &mut Ui, view: &mut InsightsView, report: &EffectReport) {
-    ui.label(
-        RichText::new(format!(
-            "{} runs · {} in the experiment · a verdict needs {} a side",
-            report.runs, report.runs_in_experiment, report.min_per_arm
-        ))
-        .font(theme::small())
-        .color(palette::text_secondary()),
-    )
-    .on_hover_text(
-        "In about a quarter of runs each adviser is held out at random: it still watches and \
-         learns, but the model is not shown what it says. Runs it spoke in are compared with \
-         runs it was held out of.",
-    );
-
-    if report.comparisons > 0 {
-        muted(
-            ui,
-            &format!(
-                "{} comparisons have enough runs. At 95% about one in twenty differs by chance, \
-                 so one isolated \"helps\" or \"hurts\" proves little.",
-                report.comparisons
-            ),
-        );
-    }
-
-    section(ui, "All advisers together");
-    source(ui, &report.overall);
-
-    for adviser in &report.advisers {
-        section(ui, &adviser.source);
-        source(ui, adviser);
-    }
-
-    for briefing in &report.briefings {
-        section(ui, &format!("Briefing: {}", briefing.source));
-        source(ui, briefing);
-    }
-
-    if report.advisers.is_empty() {
-        ui.add_space(8.0);
-        muted(
-            ui,
-            "No adviser has spoken in a recorded run yet. Turn one on in Settings → Capabilities; \
-             the comparison fills as runs finish.",
-        );
-
-        return;
-    }
-
-    let names: Vec<&str> = report
-        .advisers
-        .iter()
-        .map(|adviser| adviser.source.as_str())
-        .collect();
-
-    view.adviser = view.adviser.min(names.len() - 1);
-
-    section(ui, "By week");
-
-    ui.horizontal_wrapped(|ui| {
-        for (at, name) in names.iter().enumerate() {
-            ui.selectable_value(&mut view.adviser, at, *name);
-        }
-    });
-
-    weeks(ui, &report.advisers[view.adviser]);
-}
-
-/// One adviser: how often it spoke, then each metric as a row with the
-/// difference and its interval drawn about zero.
-fn source(ui: &mut Ui, of: &SourceEffect) {
-    muted(
-        ui,
-        &format!(
-            "Spoke in {} runs, held out of {} in which it had something to say, nothing to say \
-             in {}.",
-            of.runs_spoke, of.runs_held_out, of.runs_nothing_to_say
-        ),
-    );
-
-    for metric in &of.metrics {
-        metric_row(ui, metric);
-    }
-
-    if of.comparable_observational > 0 {
-        muted(
-            ui,
-            &format!(
-                "Not causal: of {} pieces of advice that named something checkable, the model \
-                 did it next {} times ({:.0}%).",
-                of.comparable_observational,
-                of.followed_observational,
-                of.followed_observational as f64 / of.comparable_observational as f64 * 100.0
-            ),
-        );
-    }
-}
-
-fn metric_row(ui: &mut Ui, metric: &MetricEffect) {
-    let rate = metric.metric.is_rate();
-
-    let value = |mean: Option<f64>| match mean {
-        None => "—".to_string(),
-        Some(mean) if rate => format!("{:.0}%", mean * 100.0),
-        Some(mean) => count(mean.round() as u64),
-    };
-
-    let (verdict, colour) = match metric.verdict {
-        Verdict::Helps => ("helps", palette::good()),
-        Verdict::Hurts => ("hurts", palette::bad()),
-        Verdict::NoDifferenceSeen => ("no difference seen", palette::text_secondary()),
-        Verdict::TooFewRuns => ("too few runs", palette::text_muted()),
-    };
-
-    ui.horizontal(|ui| {
-        ui.add_sized(
-            vec2(120.0, 18.0),
-            egui::Label::new(RichText::new(metric.metric.label()).color(palette::text())),
-        );
-
-        ui.add_sized(
-            vec2(170.0, 18.0),
-            egui::Label::new(
-                RichText::new(format!(
-                    "{} with ({}) · {} without ({})",
-                    value(metric.spoke.mean),
-                    metric.spoke.n,
-                    value(metric.held_out.mean),
-                    metric.held_out.n
-                ))
-                .font(theme::small())
-                .color(palette::text_secondary()),
-            ),
-        );
-
-        let width = (ui.available_width() - 130.0).max(80.0);
-        let (rect, _) = ui.allocate_exact_size(vec2(width, 14.0), Sense::hover());
-
-        interval(ui, rect, metric, colour);
-
-        ui.label(RichText::new(verdict).font(theme::small()).color(colour));
-    });
-}
-
-/// The difference and its interval on an axis centred on no difference.
-/// Better is drawn to the right whichever way the metric runs.
-fn interval(ui: &Ui, rect: Rect, metric: &MetricEffect, colour: Color32) {
-    let painter = ui.painter_at(rect);
-
-    painter.rect_filled(rect, 3.0, palette::sunken());
-
-    let middle = rect.center().x;
-
-    painter.line_segment(
-        [pos2(middle, rect.top()), pos2(middle, rect.bottom())],
-        Stroke::new(1.0, palette::text_muted()),
-    );
-
-    let (Some(difference), Some([low, high])) = (metric.difference, metric.interval) else {
-        return;
-    };
-
-    let flip = if metric.higher_is_better { 1.0 } else { -1.0 };
-
-    // A rate's difference is at most one; a count's is scaled to the
-    // widest end of its own interval.
-    let reach = if metric.metric.is_rate() {
-        1.0
-    } else {
-        low.abs().max(high.abs()).max(1e-9)
-    };
-
-    let at = |value: f64| {
-        let along = (value * flip / reach).clamp(-1.0, 1.0) as f32;
-
-        middle + along * (rect.width() / 2.0 - 4.0)
-    };
-
-    let (left, right) = (at(low).min(at(high)), at(low).max(at(high)));
-
-    painter.rect_filled(
-        Rect::from_x_y_ranges(left..=right, rect.y_range().shrink(3.0)),
-        2.0,
-        colour.gamma_multiply(0.45),
-    );
-
-    painter.circle_filled(pos2(at(difference), rect.center().y), 4.0, colour);
-}
-
-/// The checks pass rate by week, with the adviser speaking and without.
-fn weeks(ui: &mut Ui, of: &SourceEffect) {
-    use cortex_core::effect::Metric;
-
-    let points: Vec<_> = of
-        .weekly
-        .iter()
-        .filter(|point| point.metric == Metric::ChecksPassed)
-        .collect();
-
-    if points.len() < 2 {
-        muted(
-            ui,
-            "Fewer than two weeks with checked runs: nothing to draw yet.",
-        );
-
-        return;
-    }
-
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 120.0), Sense::hover());
-    let painter = ui.painter_at(rect);
-
-    painter.rect_filled(rect, 6.0, palette::sunken());
-
-    let x = |at: usize| {
-        rect.left() + 10.0 + at as f32 / (points.len() - 1) as f32 * (rect.width() - 20.0)
-    };
-    let y = |share: f64| rect.bottom() - 18.0 - share as f32 * (rect.height() - 30.0);
-
-    let line = |pick: &dyn Fn(usize) -> Option<f64>, colour: Color32| {
-        let drawn: Vec<_> = (0..points.len())
-            .filter_map(|at| Some(pos2(x(at), y(pick(at)?))))
-            .collect();
-
-        if drawn.len() > 1 {
-            painter.add(egui::Shape::line(drawn.clone(), Stroke::new(2.0, colour)));
-        }
-
-        for point in drawn {
-            painter.circle_filled(point, 3.0, colour);
-        }
-    };
-
-    line(&|at| points[at].spoke.mean, palette::accent());
-    line(&|at| points[at].held_out.mean, palette::text_muted());
-
-    painter.text(
-        pos2(rect.left() + 10.0, rect.top() + 6.0),
-        Align2::LEFT_TOP,
-        "checks passed · with it",
-        theme::small(),
-        palette::accent(),
-    );
-
-    painter.text(
-        pos2(rect.right() - 10.0, rect.top() + 6.0),
-        Align2::RIGHT_TOP,
-        "without it",
-        theme::small(),
-        palette::text_muted(),
-    );
-
-    painter.text(
-        pos2(x(0), rect.bottom() - 4.0),
-        Align2::LEFT_BOTTOM,
-        &points[0].week,
-        theme::small(),
-        palette::text_muted(),
-    );
-
-    painter.text(
-        pos2(x(points.len() - 1), rect.bottom() - 4.0),
-        Align2::RIGHT_BOTTOM,
-        &points[points.len() - 1].week,
-        theme::small(),
-        palette::text_muted(),
-    );
-}
-
-/// One of the page's two parts, as a pill that is filled while chosen.
-fn tab_button(ui: &mut Ui, name: &str, chosen: bool) -> egui::Response {
-    let button = egui::Button::new(RichText::new(name).font(theme::ui()).color(if chosen {
-        palette::text()
-    } else {
-        palette::text_secondary()
-    }))
-    .fill(if chosen {
-        palette::raised()
-    } else {
-        egui::Color32::TRANSPARENT
-    })
-    .stroke(egui::Stroke::NONE)
-    .corner_radius(egui::CornerRadius::same(theme::radius::M))
-    .min_size(vec2(0.0, theme::control::MEDIUM));
-
-    ui.add(button)
-}
-
-/// The width of each figure, so that they fill whole rows of up to four.
 fn figure(figures: &mut Vec<[String; 3]>, name: &str, value: &str, note: &str) {
     figures.push([name.to_string(), value.to_string(), note.to_string()]);
 }

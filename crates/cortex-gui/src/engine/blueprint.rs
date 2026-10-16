@@ -4,12 +4,12 @@
 //! the same [`features::setup`], so every capability works here as it
 //! does there.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use cortex_cli::args::{ModelArgs, ProviderKind};
-use cortex_cli::features::{self, Feature, MemoryLocation, Setup};
+use cortex_cli::features::{self, Feature, SessionLocation, Setup};
 use cortex_core::{AgentConfig, ModelProvider, Workspace, prompt};
 use cortex_providers::{
     AnthropicConfig, AnthropicProvider, CodexConfig, CodexProvider, OpenAiCompatConfig,
@@ -18,7 +18,6 @@ use cortex_providers::{
 
 use super::demo::{self, DemoProvider};
 use super::{Info, Launch};
-use crate::memory::MemoryReader;
 use crate::settings::{Provider, Settings};
 
 /// Folder inside the project where Cortex keeps its own files.
@@ -30,16 +29,12 @@ pub struct Blueprint {
     pub workspace: Workspace,
     pub config: AgentConfig,
 
-    /// The arguments the agent was built from, with the memory file
-    /// filled in.
+    /// The arguments the agent was built from.
     pub model: ModelArgs,
 
     /// Tools, context sources, sinks, verifier and advisers: what the
     /// chosen capabilities add up to.
     pub setup: Setup,
-
-    /// Reads the memory the agent writes, for the memory space.
-    pub memory: Arc<MemoryReader>,
 
     pub approve_everything: bool,
 }
@@ -49,9 +44,6 @@ impl Blueprint {
     /// launch is a demo.
     pub async fn prepare(launch: &Launch, demo_project: Option<&Path>) -> Result<Self> {
         let mut model = launch.settings.model_args()?;
-
-        // The memory space shows the agent's memory, so the agent keeps one.
-        switch_on(&mut model, Feature::Memory);
 
         let place = match demo_project {
             Some(project) => {
@@ -77,35 +69,14 @@ impl Blueprint {
             }
         };
 
-        let location = memory_location(&model, &workspace);
-        let memory_file = location.path.clone();
-        let scope = location.scope.clone();
-
-        let mut setup = features::setup(&model, location).await?;
-        if demo_project.is_none() {
-            match cortex_market::learning::Learning::shared(
-                &cortex_market::learning::desktop_folder(),
-            ) {
-                Ok(learning) => {
-                    let scoped = learning.scoped(&workspace.root().to_string_lossy());
-                    setup.sinks.push(scoped.clone());
-                    setup.context_sources.push(scoped);
-                }
-                Err(error) => eprintln!("warning: shared experience unavailable: {error}"),
-            }
-        }
-
-        model.memory_db = Some(memory_file.clone());
-
-        let mut memory = MemoryReader::open(&memory_file, &scope, &model.embedding_url).await?;
-
-        if launch.settings.combine_memory && demo_project.is_none() {
-            let mut folders = launch.settings.projects.clone();
-
-            folders.extend(crate::settings::scratch_folder().ok());
-
-            memory = memory.combined_with(&folders, STATE_DIRECTORY);
-        }
+        let setup = features::setup(
+            &model,
+            SessionLocation {
+                directory: workspace.root().join(STATE_DIRECTORY),
+                scope: workspace.root().display().to_string(),
+            },
+        )
+        .await?;
 
         // With a verifier, the model is told which checks it answers to.
         let notes = setup.notes(&workspace);
@@ -133,7 +104,6 @@ impl Blueprint {
             config,
             model,
             setup,
-            memory: Arc::new(memory),
             approve_everything: launch.settings.approve_everything,
         })
     }
@@ -229,9 +199,6 @@ fn prepare_demo(model: &mut ModelArgs) {
 
     switch_on(model, Feature::Gate);
 
-    // The stand-in's made-up runs are nothing for the brain to learn from.
-    model.features.retain(|feature| *feature != Feature::Brain);
-
     if model.checks.is_empty() {
         model.checks = vec![demo::CHECK.to_string()];
     }
@@ -240,17 +207,5 @@ fn prepare_demo(model: &mut ModelArgs) {
 fn switch_on(model: &mut ModelArgs, feature: Feature) {
     if !model.features.contains(&feature) {
         model.features.push(feature);
-    }
-}
-
-/// The same place the `cortex` command keeps a project's memory, so both
-/// build on what the other has learned.
-pub fn memory_location(model: &ModelArgs, workspace: &Workspace) -> MemoryLocation {
-    let default: PathBuf = workspace.root().join(STATE_DIRECTORY).join("memory.db");
-
-    MemoryLocation {
-        path: model.memory_db.clone().unwrap_or(default),
-        scope: workspace.root().display().to_string(),
-        skip_identical: false,
     }
 }
