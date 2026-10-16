@@ -6,6 +6,8 @@ use std::process::Stdio;
 use std::sync::OnceLock;
 use std::time::Duration;
 
+use std::collections::VecDeque;
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
 
 use crate::workspace::Workspace;
@@ -14,6 +16,7 @@ use crate::workspace::Workspace;
 pub struct CommandOutput {
     /// `None` when the command timed out or was killed by a signal.
     pub exit_code: Option<i32>,
+    /// Bounded head and tail, with an omission marker for large output.
     pub stdout: String,
     pub stderr: String,
     pub timed_out: bool,
@@ -134,7 +137,7 @@ async fn run(
     #[cfg(windows)]
     shell_command.creation_flags(0x0800_0000);
 
-    let child = shell_command
+    let mut child = shell_command
         .current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -142,23 +145,116 @@ async fn run(
         .kill_on_drop(true)
         .spawn()?;
 
-    let waited = tokio::time::timeout(timeout, child.wait_with_output()).await;
-
-    let Ok(result) = waited else {
-        return Ok(CommandOutput {
-            exit_code: None,
-            stdout: String::new(),
-            stderr: String::new(),
-            timed_out: true,
-        });
-    };
-
-    let output = result?;
-
-    Ok(CommandOutput {
-        exit_code: output.status.code(),
-        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        timed_out: false,
+    let mut stdout = child.stdout.take().expect("piped stdout");
+    let mut stderr = child.stderr.take().expect("piped stderr");
+    let mut out = Capture::default();
+    let mut err = Capture::default();
+    let waited = tokio::time::timeout(timeout, async {
+        let (status, (), ()) =
+            tokio::try_join!(child.wait(), out.drain(&mut stdout), err.drain(&mut stderr))?;
+        Ok::<_, io::Error>(status)
     })
+    .await;
+    let (exit_code, timed_out) = match waited {
+        Ok(status) => (status?.code(), false),
+        Err(_) => {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            (None, true)
+        }
+    };
+    Ok(CommandOutput {
+        exit_code,
+        stdout: out.finish(),
+        stderr: err.finish(),
+        timed_out,
+    })
+}
+
+const CAPTURE_BYTES: usize = 256 * 1024;
+
+#[derive(Default)]
+struct Capture {
+    head: Vec<u8>,
+    tail: VecDeque<u8>,
+    total: u64,
+}
+
+impl Capture {
+    async fn drain(&mut self, reader: &mut (impl AsyncRead + Unpin)) -> io::Result<()> {
+        let mut buffer = [0; 16 * 1024];
+        loop {
+            let read = reader.read(&mut buffer).await?;
+            if read == 0 {
+                return Ok(());
+            }
+            self.total = self.total.saturating_add(read as u64);
+            let head = (CAPTURE_BYTES / 2 - self.head.len()).min(read);
+            self.head.extend_from_slice(&buffer[..head]);
+            self.tail.extend(&buffer[head..read]);
+            let excess = self.tail.len().saturating_sub(CAPTURE_BYTES / 2);
+            self.tail.drain(..excess);
+        }
+    }
+
+    fn finish(self) -> String {
+        let omitted = self
+            .total
+            .saturating_sub((self.head.len() + self.tail.len()) as u64);
+        if omitted == 0 {
+            let mut bytes = self.head;
+            bytes.extend(self.tail);
+            return String::from_utf8_lossy(&bytes).into_owned();
+        }
+        let mut output = String::from_utf8_lossy(&self.head).into_owned();
+        if omitted > 0 {
+            output.push_str(&format!("\n... {omitted} output bytes omitted ...\n"));
+        }
+        output.push_str(&String::from_utf8_lossy(
+            &self.tail.into_iter().collect::<Vec<_>>(),
+        ));
+        output
+    }
+}
+
+#[cfg(all(test, unix))]
+mod capture_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn capture_preserves_unicode_across_the_head_boundary() {
+        let text = "€".repeat(CAPTURE_BYTES / 4);
+        let mut input = text.as_bytes();
+        let mut capture = Capture::default();
+        capture.drain(&mut input).await.unwrap();
+        assert_eq!(capture.finish(), text);
+    }
+
+    #[tokio::test]
+    async fn noisy_commands_keep_both_ends_and_drain_both_pipes() {
+        let result = run_shell("printf BEGIN; head -c 2097152 /dev/zero; printf END; head -c 2097152 /dev/zero >&2; printf ERROR >&2", Path::new("/tmp"), Duration::from_secs(10)).await.unwrap();
+        assert!(result.succeeded());
+        assert!(result.stdout.starts_with("BEGIN"));
+        assert!(result.stdout.ends_with("END"));
+        assert!(result.stderr.ends_with("ERROR"));
+        for output in [&result.stdout, &result.stderr] {
+            assert!(output.len() < CAPTURE_BYTES + 100);
+            assert!(output.contains("output bytes omitted"));
+        }
+    }
+
+    #[tokio::test]
+    async fn timeout_keeps_output_and_does_not_wait_for_inherited_pipes() {
+        let start = std::time::Instant::now();
+        let result = run_shell(
+            "printf before; sleep 2",
+            Path::new("/tmp"),
+            Duration::from_millis(100),
+        )
+        .await
+        .unwrap();
+        assert!(result.timed_out);
+        assert_eq!(result.stdout, "before");
+        assert!(start.elapsed() < Duration::from_secs(1));
+    }
 }

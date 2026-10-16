@@ -49,6 +49,10 @@ pub struct RehearsalArgs {
     #[arg(long, hide = true)]
     pub open_file: Option<PathBuf>,
 
+    /// Open a saved session without sending an instruction.
+    #[arg(long, hide = true)]
+    pub open_session: Option<PathBuf>,
+
     /// Start on the settings page.
     #[arg(long, hide = true)]
     pub open_settings: bool,

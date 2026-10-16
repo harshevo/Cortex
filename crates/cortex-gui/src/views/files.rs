@@ -1,8 +1,13 @@
 //! The files of the project, on the right: a tree to look around in and,
 //! beside it, the file that was picked.
 
+use crate::background::Background;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Align2, CornerRadius, RichText, ScrollArea, Sense, Stroke, Ui, vec2};
@@ -28,7 +33,14 @@ const MAX_SEARCHED: usize = 20_000;
 const MAX_MATCHES: usize = 200;
 
 /// Folders a filter does not look into: build output and the like.
-const SKIPPED_IN_SEARCH: [&str; 5] = [".git", "target", "node_modules", ".venv", "__pycache__"];
+const SKIPPED_IN_SEARCH: [&str; 6] = [
+    ".git",
+    ".cortex",
+    "target",
+    "node_modules",
+    ".venv",
+    "__pycache__",
+];
 
 /// Never listed.
 const HIDDEN: [&str; 2] = [".git", ".DS_Store"];
@@ -38,6 +50,7 @@ struct Entry {
     path: PathBuf,
     name: String,
     folder: bool,
+    symlink: bool,
 }
 
 /// What the viewer shows of the file that was picked.
@@ -53,6 +66,13 @@ struct Open {
     shown: Shown,
 }
 
+#[derive(Default)]
+struct Listing {
+    read_at: Option<Instant>,
+    entries: Arc<Vec<Entry>>,
+    job: Background<Vec<Entry>>,
+}
+
 /// The state of the panel, kept between frames.
 #[derive(Default)]
 pub struct Files {
@@ -65,7 +85,11 @@ pub struct Files {
     expanded: HashSet<PathBuf>,
 
     /// What each folder holds, and when that was read.
-    listings: HashMap<PathBuf, (Instant, Vec<Entry>)>,
+    listings: HashMap<PathBuf, Listing>,
+    search_job: Background<Vec<Entry>>,
+    search_query: String,
+    search_changed: Option<Instant>,
+    file_job: Background<(PathBuf, Shown)>,
 
     filter: String,
 
@@ -111,10 +135,21 @@ impl Files {
             };
         }
 
-        if let Some(path) = self.pending.take() {
+        if let Some((path, shown)) = self.file_job.poll()
+            && self.open.as_ref().is_some_and(|open| open.path == path)
+        {
+            self.open = Some(Open { path, shown });
+        }
+        if let Some(path) = self.pending.clone()
+            && self.file_job.start(ui.ctx(), move |_| {
+                let shown = read(&path);
+                (path, shown)
+            })
+        {
+            let path = self.pending.take().unwrap();
             self.open = Some(Open {
-                shown: read(&path),
                 path,
+                shown: Shown::Not("Opening file…".into()),
             });
         }
 
@@ -155,14 +190,15 @@ impl Files {
         });
 
         if closed {
+            self.file_job.cancel();
+            self.pending = None;
             self.open = None;
         }
 
         if let Some(path) = picked {
-            self.open = Some(Open {
-                shown: read(&path),
-                path,
-            });
+            self.file_job.cancel();
+            self.pending = Some(path);
+            ui.ctx().request_repaint();
         }
     }
 
@@ -181,6 +217,71 @@ impl Files {
 
         let query = self.filter.trim().to_lowercase();
         let mut picked = None;
+        if query != self.search_query {
+            self.search_job.cancel();
+            self.search_query = query.clone();
+            self.search_changed = Some(Instant::now());
+            self.matches = None;
+        }
+        if let Some(matches) = self.search_job.poll() {
+            self.matches = Some((query.clone(), matches));
+        }
+        if !query.is_empty() && self.matches.is_none() && !self.search_job.pending() {
+            let remaining = Duration::from_millis(150).saturating_sub(
+                self.search_changed
+                    .map_or(Duration::ZERO, |changed| changed.elapsed()),
+            );
+            if remaining.is_zero() {
+                let root = self.root.clone();
+                let query = query.clone();
+                self.search_job.start(ui.ctx(), move |cancelled| {
+                    search_cancelled(&root, &query, cancelled)
+                });
+            } else {
+                ui.ctx().request_repaint_after(remaining);
+            }
+        }
+
+        if query.is_empty() {
+            self.matches = None;
+            let mut rows = Vec::new();
+            let root = self.root.clone();
+            self.collect_rows(ui.ctx(), &root, 0, &mut rows);
+            if self
+                .listings
+                .get(&root)
+                .is_some_and(|listing| listing.read_at.is_none())
+            {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("Loading files…");
+                });
+            }
+            ScrollArea::vertical()
+                .id_salt("file tree")
+                .auto_shrink(false)
+                .show_rows(ui, ROW_HEIGHT, rows.len(), |ui, visible| {
+                    for index in visible {
+                        let (entries, index, depth) = &rows[index];
+                        let entry = &entries[*index];
+                        if entry.folder {
+                            let open = self.expanded.contains(&entry.path);
+                            if row(ui, &entry.name, *depth, Some(open), false).clicked() {
+                                if open {
+                                    self.expanded.remove(&entry.path);
+                                } else {
+                                    self.expanded.insert(entry.path.clone());
+                                }
+                            }
+                        } else if row(ui, &entry.name, *depth, None, self.is_open(&entry.path))
+                            .clicked()
+                        {
+                            picked = Some(entry.path.clone());
+                        }
+                    }
+                });
+            return picked;
+        }
 
         ScrollArea::vertical()
             .id_salt("file tree")
@@ -188,18 +289,12 @@ impl Files {
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 1.0;
 
-                if query.is_empty() {
-                    self.matches = None;
-
-                    let root = self.root.clone();
-
-                    self.folder(ui, &root, 0, &mut picked);
-
+                if self.matches.is_none() {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label("Searching files…");
+                    });
                     return;
-                }
-
-                if self.matches.as_ref().is_none_or(|(kept, _)| *kept != query) {
-                    self.matches = Some((query.clone(), search(&self.root, &query)));
                 }
 
                 let matches = self
@@ -235,26 +330,18 @@ impl Files {
         picked
     }
 
-    /// Draws what `folder` holds, and under each open folder what that
-    /// one holds.
-    fn folder(&mut self, ui: &mut Ui, folder: &Path, depth: usize, picked: &mut Option<PathBuf>) {
-        for entry in self.listing(folder) {
-            if entry.folder {
-                let open = self.expanded.contains(&entry.path);
-
-                if row(ui, &entry.name, depth, Some(open), false).clicked() {
-                    if open {
-                        self.expanded.remove(&entry.path);
-                    } else {
-                        self.expanded.insert(entry.path.clone());
-                    }
-                }
-
-                if open {
-                    self.folder(ui, &entry.path, depth + 1, picked);
-                }
-            } else if row(ui, &entry.name, depth, None, self.is_open(&entry.path)).clicked() {
-                *picked = Some(entry.path.clone());
+    fn collect_rows(
+        &mut self,
+        context: &egui::Context,
+        folder: &Path,
+        depth: usize,
+        rows: &mut Vec<(Arc<Vec<Entry>>, usize, usize)>,
+    ) {
+        let entries = self.listing(context, folder);
+        for (index, entry) in entries.iter().enumerate() {
+            rows.push((entries.clone(), index, depth));
+            if entry.folder && self.expanded.contains(&entry.path) {
+                self.collect_rows(context, &entry.path, depth + 1, rows);
             }
         }
     }
@@ -264,58 +351,85 @@ impl Files {
     }
 
     /// What `folder` holds: folders first, then files, each by name.
-    fn listing(&mut self, folder: &Path) -> Vec<Entry> {
-        if let Some((read, entries)) = self.listings.get(folder)
-            && read.elapsed() < LISTING_AGE
-        {
-            return entries.clone();
+    fn listing(&mut self, context: &egui::Context, folder: &Path) -> Arc<Vec<Entry>> {
+        let listing = self.listings.entry(folder.to_path_buf()).or_default();
+        if let Some(entries) = listing.job.poll() {
+            listing.entries = Arc::new(entries);
+            listing.read_at = Some(Instant::now());
         }
-
-        let entries = list(folder);
-
-        self.listings
-            .insert(folder.to_path_buf(), (Instant::now(), entries.clone()));
-
-        entries
+        let elapsed = listing.read_at.map_or(LISTING_AGE, |at| at.elapsed());
+        if elapsed >= LISTING_AGE && !listing.job.pending() {
+            let folder = folder.to_path_buf();
+            listing.job.start(context, move |cancelled| {
+                list_cancelled(&folder, usize::MAX, cancelled)
+            });
+        }
+        context.request_repaint_after(
+            LISTING_AGE
+                .saturating_sub(elapsed)
+                .max(Duration::from_millis(100)),
+        );
+        if listing.read_at.is_none() {
+            context.request_repaint_after(Duration::from_millis(50));
+        }
+        listing.entries.clone()
     }
 }
 
+#[cfg(test)]
 fn list(folder: &Path) -> Vec<Entry> {
+    list_cancelled(folder, MAX_SEARCHED, &AtomicBool::new(false))
+}
+
+fn list_cancelled(folder: &Path, limit: usize, cancelled: &AtomicBool) -> Vec<Entry> {
     let Ok(read) = std::fs::read_dir(folder) else {
         return Vec::new();
     };
-
-    let mut entries: Vec<Entry> = read
+    let mut entries: Vec<_> = read
+        .take(limit)
+        .take_while(|_| !cancelled.load(Ordering::Relaxed))
         .flatten()
-        .map(|entry| Entry {
-            name: entry.file_name().to_string_lossy().into_owned(),
-            folder: entry.path().is_dir(),
-            path: entry.path(),
+        .map(|entry| {
+            let kind = entry.file_type().ok();
+            let symlink = kind.as_ref().is_some_and(|kind| kind.is_symlink());
+            Entry {
+                name: entry.file_name().to_string_lossy().into_owned(),
+                folder: kind.as_ref().is_some_and(|kind| kind.is_dir())
+                    || (symlink && entry.path().is_dir()),
+                symlink,
+                path: entry.path(),
+            }
         })
         .filter(|entry| !HIDDEN.contains(&entry.name.as_str()))
         .collect();
-
-    entries.sort_by_key(|entry| (!entry.folder, entry.name.to_lowercase()));
-
+    entries.sort_by_cached_key(|entry| (!entry.folder, entry.name.to_lowercase()));
     entries
 }
 
 /// The files under `root` whose path has `query` in it, nearest first.
+#[cfg(test)]
 fn search(root: &Path, query: &str) -> Vec<Entry> {
+    search_cancelled(root, query, &AtomicBool::new(false))
+}
+
+fn search_cancelled(root: &Path, query: &str, cancelled: &AtomicBool) -> Vec<Entry> {
     let mut matches = Vec::new();
     let mut waiting = std::collections::VecDeque::from([root.to_path_buf()]);
     let mut searched = 0;
 
     while let Some(folder) = waiting.pop_front() {
-        for entry in list(&folder) {
+        if cancelled.load(Ordering::Relaxed) || searched >= MAX_SEARCHED {
+            break;
+        }
+        for entry in list_cancelled(&folder, MAX_SEARCHED - searched, cancelled) {
             searched += 1;
 
-            if searched > MAX_SEARCHED || matches.len() >= MAX_MATCHES {
+            if cancelled.load(Ordering::Relaxed) || matches.len() >= MAX_MATCHES {
                 return matches;
             }
 
             if entry.folder {
-                if !SKIPPED_IN_SEARCH.contains(&entry.name.as_str()) {
+                if !entry.symlink && !SKIPPED_IN_SEARCH.contains(&entry.name.as_str()) {
                     waiting.push_back(entry.path);
                 }
 
@@ -346,7 +460,16 @@ fn read(path: &Path) -> Shown {
         ));
     }
 
-    match std::fs::read(path).map(String::from_utf8) {
+    use std::io::Read;
+    let loaded = std::fs::File::open(path).and_then(|file| {
+        let mut bytes = Vec::new();
+        file.take(MAX_FILE_BYTES + 1).read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > MAX_FILE_BYTES {
+            return Err(std::io::Error::other("file grew beyond the display limit"));
+        }
+        Ok(bytes)
+    });
+    match loaded.map(String::from_utf8) {
         Ok(Ok(text)) => Shown::Text(text.lines().map(str::to_string).collect()),
         Ok(Err(_)) => Shown::Not("This file is not text.".to_string()),
         Err(error) => Shown::Not(format!("This file cannot be read: {error}")),
@@ -364,6 +487,10 @@ fn row(
 ) -> egui::Response {
     let (rect, response) =
         ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
+
+    if !ui.is_rect_visible(rect) {
+        return response;
+    }
 
     if selected || response.hovered() {
         let fill = if selected {
@@ -577,6 +704,27 @@ mod tests {
 
         assert_eq!(found.len(), 1);
         assert!(found[0].path.ends_with("src/main.rs"));
+    }
+
+    #[test]
+    fn searches_cancel_and_directory_reads_are_bounded() {
+        let project = project();
+        for number in 0..100 {
+            std::fs::write(project.path().join(format!("file-{number}")), "").unwrap();
+        }
+        assert_eq!(
+            list_cancelled(project.path(), 7, &AtomicBool::new(false)).len(),
+            7
+        );
+        assert!(search_cancelled(project.path(), "main", &AtomicBool::new(true)).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn searches_do_not_follow_directory_symlink_cycles() {
+        let project = project();
+        std::os::unix::fs::symlink(project.path(), project.path().join("src/loop")).unwrap();
+        assert_eq!(search(project.path(), "main").len(), 1);
     }
 
     #[test]

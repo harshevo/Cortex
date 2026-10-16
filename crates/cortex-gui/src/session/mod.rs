@@ -52,15 +52,6 @@ pub fn slim_after(session: &mut Session, event: &Event) {
     }
 }
 
-/// As [`slim_after`], for every call of a session read back from its log.
-pub fn slim(session: &mut Session) {
-    for item in &mut session.items {
-        if let Item::Tool(tool) = item {
-            slim_tool(tool);
-        }
-    }
-}
-
 fn slim_tool(tool: &mut ToolItem) {
     slim_value(&mut tool.call.input);
 

@@ -139,31 +139,33 @@ pub fn delete(path: &Path) -> std::io::Result<()> {
     fs::remove_file(path)
 }
 
-/// Rebuilds a session from its log.
-#[cfg(test)]
-pub fn load(path: &Path) -> Session {
-    let events: Vec<Event> = events(path).collect();
-
-    replay(&events)
-}
-
-/// Rebuilds a session from the events of its log.
-pub fn replay(events: &[Event]) -> Session {
+/// Streams a log into its display state, trimming each tool payload immediately.
+pub fn load_cancelled(
+    path: &Path,
+    cancelled: &std::sync::atomic::AtomicBool,
+) -> std::io::Result<Session> {
+    let file = File::open(path)?;
     let mut session = Session::default();
-
-    for event in events {
-        session.apply(event);
+    for line in BufReader::new(file).lines() {
+        if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "session loading cancelled",
+            ));
+        }
+        if let Ok(event) = serde_json::from_str::<Event>(&line?) {
+            session.apply(&event);
+            super::slim_after(&mut session, &event);
+        }
     }
-
-    // The window keeps only what it shows of each call.
-    super::slim(&mut session);
-
-    // A log that ends mid-run belongs to a session that was closed or
-    // crashed; nothing is running now.
     session.running = false;
     session.stats.run_ended();
+    Ok(session)
+}
 
-    session
+#[cfg(test)]
+pub fn load(path: &Path) -> Session {
+    load_cancelled(path, &std::sync::atomic::AtomicBool::new(false)).unwrap()
 }
 
 fn first_instruction(path: &Path) -> Option<String> {
@@ -206,6 +208,54 @@ mod tests {
             duration_ms: 5,
             verified: None,
         });
+    }
+
+    #[test]
+    fn large_logs_are_slimmed_during_replay_and_can_be_cancelled() {
+        use cortex_core::{ToolCall, ToolResult};
+        let project = tempfile::tempdir().unwrap();
+        let path = project.path().join("large.jsonl");
+        let sink = JsonlSink::create(&path).unwrap();
+        for number in 0..16 {
+            let id = number.to_string();
+            sink.record(&Event::ToolStarted {
+                step: 1,
+                call: ToolCall {
+                    id: id.clone(),
+                    name: "shell".into(),
+                    input: serde_json::json!({}),
+                },
+            });
+            sink.record(&Event::ToolFinished {
+                step: 1,
+                tool: "shell".into(),
+                result: ToolResult {
+                    call_id: id,
+                    output: "x".repeat(1_000_000),
+                    is_error: false,
+                    images: vec![],
+                },
+                duration_ms: 1,
+            });
+        }
+        let session = load(&path);
+        let held: usize = session
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Tool(tool) => tool.result.as_ref().map(|result| result.output.len()),
+                _ => None,
+            })
+            .sum();
+        assert!(held < 16 * 6100);
+        assert!(load_cancelled(&path, &std::sync::atomic::AtomicBool::new(true)).is_err());
+        assert!(
+            load_cancelled(
+                &project.path().join("missing"),
+                &std::sync::atomic::AtomicBool::new(false)
+            )
+            .is_err()
+        );
     }
 
     #[test]

@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 use cortex_core::Image;
 use eframe::egui::{self, Margin, RichText, Stroke};
 
-use crate::attachment::Attachment;
+use crate::attachment::Attachments;
+use crate::background::Background;
 use crate::engine::{Engine, Info, Launch, PendingApproval, Update};
 use crate::rehearsal::Rehearsal;
 use crate::session::history::{self, PastSession};
@@ -83,6 +84,10 @@ pub struct CortexApp {
     /// The past sessions of every folder in the sidebar, newest first.
     sessions: HashMap<PathBuf, Vec<PastSession>>,
     history_revision: u64,
+    history_job: Background<HashMap<PathBuf, Vec<PastSession>>>,
+    history_dirty: bool,
+    session_job: Background<(PathBuf, Result<Session, String>)>,
+    loading_session: Option<PathBuf>,
 
     /// The session or project whose delete button has been pressed once.
     confirming: Option<PathBuf>,
@@ -99,7 +104,7 @@ pub struct CortexApp {
     insights: crate::views::insights::InsightsView,
 
     /// Pictures waiting to go with the next instruction.
-    attachments: Vec<Attachment>,
+    attachments: Attachments,
 
     /// What has been sent to the run in progress and not yet read by the
     /// model.
@@ -165,12 +170,16 @@ impl CortexApp {
             chat_shows: None,
             sessions: HashMap::new(),
             history_revision: 0,
+            history_job: Background::default(),
+            history_dirty: false,
+            session_job: Background::default(),
+            loading_session: None,
             confirming: None,
             approvals: VecDeque::new(),
             files: Files::opened(rehearsal.opens_files(), rehearsal.opens_file()),
             draft: String::new(),
             insights: Default::default(),
-            attachments: Vec::new(),
+            attachments: Attachments::default(),
             queued: Vec::new(),
             live_log: None,
             form: None,
@@ -244,16 +253,70 @@ impl CortexApp {
 
     fn refresh_sessions(&mut self) {
         self.history_revision += 1;
-        let folders = self.settings.projects.iter().chain([&self.scratch]);
+        self.history_dirty = true;
+    }
 
-        self.sessions = folders
-            .map(|folder| (folder.clone(), history::list(folder)))
-            .collect();
+    fn poll_background(&mut self) {
+        if let Some(sessions) = self.history_job.poll() {
+            self.sessions = sessions;
+        }
+        if self.history_dirty && !self.history_job.pending() {
+            let folders: Vec<_> = self
+                .settings
+                .projects
+                .iter()
+                .chain([&self.scratch])
+                .cloned()
+                .collect();
+            if self
+                .history_job
+                .start(self.engine.context(), move |cancelled| {
+                    folders
+                        .into_iter()
+                        .take_while(|_| !cancelled.load(std::sync::atomic::Ordering::Relaxed))
+                        .map(|folder| {
+                            let sessions = history::list(&folder);
+                            (folder, sessions)
+                        })
+                        .collect()
+                })
+            {
+                self.history_dirty = false;
+            }
+        }
+        if let Some((path, result)) = self.session_job.poll() {
+            self.loading_session = None;
+            match result {
+                Ok(session) => self.install_session(path, session),
+                Err(error) => self
+                    .live
+                    .notice(&format!("Cannot open chat: {error}"), Tone::Bad),
+            }
+        }
+        if let Some(path) = &self.loading_session
+            && !self.session_job.pending()
+        {
+            let path = path.clone();
+            self.session_job
+                .start(self.engine.context(), move |cancelled| {
+                    let session = history::load_cancelled(&path, cancelled)
+                        .map_err(|error| error.to_string());
+                    (path, session)
+                });
+        }
+    }
+
+    fn cancel_session_load(&mut self) {
+        self.session_job.cancel();
+        self.loading_session = None;
     }
 
     /// Takes in everything the agent has reported since the last frame.
     fn absorb_updates(&mut self) {
-        let updates: Vec<Update> = self.engine.updates().collect();
+        let updates: Vec<Update> = self.engine.updates().take(64).collect();
+        if updates.len() == 64 {
+            self.engine.context().request_repaint();
+        }
 
         for update in updates {
             match update {
@@ -406,6 +469,7 @@ impl CortexApp {
     /// Starts a new session in `folder`, moving the agent there if it is
     /// somewhere else.
     fn start_session(&mut self, folder: PathBuf) {
+        self.cancel_session_load();
         self.view = View::Conversation;
 
         let elsewhere = folder != self.place && !self.demo;
@@ -460,6 +524,7 @@ impl CortexApp {
     /// conversation as the model last saw it. While a run is in progress
     /// elsewhere the session is only shown, and can be taken up after.
     fn open_past_session(&mut self, path: PathBuf) {
+        self.cancel_session_load();
         self.view = View::Conversation;
 
         if self.live_log.as_deref() == Some(path.as_path()) {
@@ -468,11 +533,10 @@ impl CortexApp {
             return;
         }
 
-        // The log is read once, here, and everything below is built
-        // from what was read.
-        let events: Vec<cortex_core::Event> = history::events(&path).collect();
-        let session = history::replay(&events);
+        self.loading_session = Some(path);
+    }
 
+    fn install_session(&mut self, path: PathBuf, session: Session) {
         if self.live.running {
             self.viewing = Some((path, session));
 
@@ -503,6 +567,9 @@ impl CortexApp {
     }
 
     pub(crate) fn delete_session(&mut self, path: &Path) {
+        if self.loading_session.as_deref() == Some(path) {
+            self.cancel_session_load();
+        }
         if let Err(error) = history::delete(path) {
             eprintln!("warning: cannot delete {}: {error}", path.display());
         }
@@ -596,6 +663,13 @@ impl CortexApp {
     }
 
     fn composer_mode(&self) -> Mode {
+        if self.loading_session.is_some() {
+            return if self.live.running {
+                Mode::Working
+            } else {
+                Mode::Starting
+            };
+        }
         if self.viewing.is_some() {
             return Mode::Viewing;
         }
@@ -933,7 +1007,15 @@ impl CortexApp {
         egui::CentralPanel::default()
             .frame(frame)
             .show(ui, |ui| match self.view {
-                View::Conversation => self.conversation(ui),
+                View::Conversation => {
+                    if self.loading_session.is_some() {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label("Opening chat…");
+                        });
+                    }
+                    self.conversation(ui);
+                }
 
                 View::Insights => crate::views::insights::show(ui, &mut self.insights),
                 View::Settings => self.settings_page(ui),
@@ -1084,6 +1166,7 @@ impl CortexApp {
 
         let revision = self.history_revision;
         self.absorb_updates();
+        self.poll_background();
         self.approvals.retain(|approval| !approval.answered());
         if !self.live.running
             && !self.preparing
@@ -1092,11 +1175,31 @@ impl CortexApp {
             self.apply_settings(settings);
         }
 
+        if matches!(self.status, Status::Ready(_))
+            && let Some(path) = self.rehearsal.take_session()
+        {
+            self.open_past_session(path);
+        }
+
+        let paths = self.rehearsal.take_attachments();
+        if let Some(error) = self.attachments.enqueue(&paths) {
+            self.live.notice(&error, Tone::Bad);
+        }
+        if let Some(error) = self.attachments.poll(ui.ctx()) {
+            self.live.notice(&error, Tone::Bad);
+        }
+
         // The rehearsed instruction waits until there is an agent for it.
         if matches!(self.status, Status::Ready(_))
+            && self.loading_session.is_none()
+            && !self.attachments.loading()
             && let Some(instruction) = self.rehearsal.take_instruction()
         {
-            let images = self.rehearsal.take_attachments();
+            let images = self
+                .attachments
+                .drain(..)
+                .map(|attachment| attachment.image)
+                .collect();
 
             self.submit(&instruction, images);
         }
@@ -1130,7 +1233,7 @@ impl CortexApp {
             && let Some(instruction) = self.rehearsal.take_reopen()
         {
             self.open_past_session(path);
-            self.submit(&instruction, Vec::new());
+            self.rehearsal.defer_instruction(instruction);
         }
 
         // The "thinking" square pulses while a run is in progress.
@@ -1158,6 +1261,7 @@ impl CortexApp {
         self.live.notice(text, Tone::Muted);
     }
     pub(crate) fn show_chat(&mut self) {
+        self.cancel_session_load();
         self.view = View::Conversation;
     }
 

@@ -34,6 +34,7 @@ enum PaneAction {
 
 pub struct Workspace {
     chats: Vec<(u64, CortexApp)>,
+    performance: crate::performance::Performance,
     active: u64,
     secondary: Option<u64>,
     next_id: u64,
@@ -64,6 +65,7 @@ impl Workspace {
     pub fn new(app: CortexApp, split: bool) -> Self {
         let mut workspace = Self {
             chats: vec![(1, app)],
+            performance: crate::performance::Performance::default(),
             active: 1,
             secondary: None,
             next_id: 2,
@@ -381,6 +383,7 @@ impl eframe::App for Workspace {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let started = std::time::Instant::now();
         let mut history_changed = false;
         // Called on the window's own `ui`: a scope for each chat would take
         // up a line's spacing above the top bar.
@@ -607,6 +610,7 @@ impl eframe::App for Workspace {
                 _ => {}
             }
         }
+        self.performance.record(ui.ctx(), started.elapsed());
     }
 
     fn clear_color(&self, _: &egui::Visuals) -> [f32; 4] {

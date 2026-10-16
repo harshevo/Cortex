@@ -7,9 +7,11 @@
 mod app;
 mod args;
 mod attachment;
+mod background;
 mod engine;
 mod environment;
 mod format;
+mod performance;
 mod rehearsal;
 mod session;
 mod settings;
@@ -107,6 +109,8 @@ fn run() -> Result<()> {
 
     let options = eframe::NativeOptions {
         viewport,
+        wgpu_options: eframe::WgpuConfiguration::default()
+            .with_surface_config(eframe::SurfaceConfig::LOW_LATENCY),
         ..Default::default()
     };
 
@@ -116,10 +120,15 @@ fn run() -> Result<()> {
         "Cortex",
         options,
         Box::new(move |creation| {
-            creation
+            let render = creation
                 .wgpu_render_state
                 .as_ref()
                 .ok_or("the app needs the wgpu renderer")?;
+            let adapter = render.adapter.get_info();
+            eprintln!(
+                "UI renderer: {:?}, {}, {:?}",
+                adapter.backend, adapter.name, adapter.device_type
+            );
 
             // A theme that is no longer offered leaves the default in use.
             theme::palette::choose(&settings.theme);

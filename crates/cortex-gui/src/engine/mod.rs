@@ -220,6 +220,10 @@ impl Engine {
         )
     }
 
+    pub fn context(&self) -> &egui::Context {
+        &self.window
+    }
+
     pub fn agent_id(&self) -> &str {
         &self.member.id
     }

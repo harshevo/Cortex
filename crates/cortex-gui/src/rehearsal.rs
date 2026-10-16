@@ -53,25 +53,16 @@ impl Rehearsal {
     }
 
     /// The instruction to send on opening. Yields it once.
+    pub fn defer_instruction(&mut self, instruction: String) {
+        self.args.autorun = Some(instruction);
+    }
+
     pub fn take_instruction(&mut self) -> Option<String> {
         self.args.autorun.take()
     }
 
-    /// The pictures to send with that instruction. Yields them once; one
-    /// that cannot be read is reported and left out.
-    pub fn take_attachments(&mut self) -> Vec<cortex_core::Image> {
+    pub fn take_attachments(&mut self) -> Vec<PathBuf> {
         std::mem::take(&mut self.args.attach)
-            .iter()
-            .filter_map(|path| match crate::attachment::load(path) {
-                Ok(attachment) => Some(attachment.image),
-
-                Err(error) => {
-                    eprintln!("warning: {error:#}");
-
-                    None
-                }
-            })
-            .collect()
     }
 
     /// Whether the moment to press stop has come. True once.
@@ -136,6 +127,10 @@ impl Rehearsal {
     /// once.
     pub fn take_reopen(&mut self) -> Option<String> {
         self.args.reopen_then.take()
+    }
+
+    pub fn take_session(&mut self) -> Option<PathBuf> {
+        self.args.open_session.take()
     }
 
     pub fn reopens(&self) -> bool {

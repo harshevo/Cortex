@@ -8,7 +8,7 @@ use cortex_core::Image;
 
 use super::icons::{self, Icon};
 use super::menu::{self, Opens};
-use crate::attachment::{self, Attachment};
+use crate::attachment::{self, Attachment, Attachments};
 use crate::theme::{self, palette};
 
 const BUTTON_SIZE: f32 = crate::theme::control::LARGE;
@@ -71,14 +71,14 @@ pub enum Action {
 pub fn show(
     ui: &mut Ui,
     draft: &mut String,
-    attachments: &mut Vec<Attachment>,
+    attachments: &mut Attachments,
     mode: Mode,
     can_continue: bool,
     queued: &[String],
 ) -> Option<Action> {
     let can_continue = can_continue && mode == Mode::Ready;
 
-    let mut action = None;
+    let mut action = attachments.poll(ui.ctx()).map(Action::Refused);
 
     // Pictures go with an instruction, not with a word to a run in
     // progress, so they can only be added while the composer is ready.
@@ -95,7 +95,7 @@ pub fn show(
                 .collect()
         });
 
-        if let Some(why) = attach(attachments, &dropped) {
+        if let Some(why) = attachments.enqueue(&dropped) {
             action = Some(Action::Refused(why));
         }
     }
@@ -128,6 +128,7 @@ pub fn show(
         .inner_margin(egui::Margin::symmetric(16, 12))
         .show(ui, |ui| {
             thumbnails(ui, attachments);
+            if attachments.loading() { ui.horizontal(|ui| { ui.spinner(); ui.label("Preparing pictures…"); }); }
 
             ui.horizontal(|ui| {
                 if takes_pictures
@@ -139,7 +140,7 @@ pub fn show(
                         .pick_files()
                         .unwrap_or_default();
 
-                    if let Some(why) = attach(attachments, &chosen) {
+                    if let Some(why) = attachments.enqueue(&chosen) {
                         action = Some(Action::Refused(why));
                     }
                 }
@@ -237,6 +238,7 @@ pub fn show(
                     }
                 } else {
                     let can_send = mode == Mode::Ready
+                        && !attachments.loading()
                         && (!draft.trim().is_empty() || !attachments.is_empty());
 
                     let pressed_return = editor.has_focus()
@@ -362,30 +364,6 @@ pub fn place_row(
     });
 
     action
-}
-
-/// Reads the pictures in `paths` into `attachments`. Returns what to tell
-/// the person about the first one that could not be taken.
-fn attach(attachments: &mut Vec<Attachment>, paths: &[std::path::PathBuf]) -> Option<String> {
-    let mut refused = None;
-
-    for path in paths {
-        let loaded = if attachment::is_picture(path) {
-            attachment::load(path).map_err(|error| format!("{error:#}"))
-        } else {
-            Err(format!(
-                "{} was not attached: only pictures can be (PNG, JPEG, WebP, GIF)",
-                path.display()
-            ))
-        };
-
-        match loaded {
-            Ok(attachment) => attachments.push(attachment),
-            Err(why) => refused = refused.or(Some(why)),
-        }
-    }
-
-    refused
 }
 
 /// The pictures that will go with the instruction, each with a button
@@ -590,7 +568,14 @@ mod tests {
 
         let mut output = context.run_ui(egui::RawInput::default(), |ui| {
             ui.text_edit_singleline(&mut search).request_focus();
-            show(ui, &mut draft, &mut Vec::new(), Mode::Ready, false, &[]);
+            show(
+                ui,
+                &mut draft,
+                &mut Attachments::default(),
+                Mode::Ready,
+                false,
+                &[],
+            );
         });
         output.textures_delta.clear();
         let input = egui::RawInput {
@@ -599,7 +584,14 @@ mod tests {
         };
         let mut output = context.run_ui(input, |ui| {
             ui.text_edit_singleline(&mut search);
-            show(ui, &mut draft, &mut Vec::new(), Mode::Ready, false, &[]);
+            show(
+                ui,
+                &mut draft,
+                &mut Attachments::default(),
+                Mode::Ready,
+                false,
+                &[],
+            );
         });
 
         output.textures_delta.clear();
@@ -630,7 +622,14 @@ mod tests {
         let mut action = None;
 
         let mut output = context.run_ui(input, |ui| {
-            action = show(ui, draft, &mut Vec::new(), Mode::Working, false, &[]);
+            action = show(
+                ui,
+                draft,
+                &mut Attachments::default(),
+                Mode::Working,
+                false,
+                &[],
+            );
         });
 
         output.textures_delta.clear();
@@ -712,7 +711,14 @@ mod tests {
             let mut action = None;
 
             let mut output = context.run_ui(input, |ui| {
-                action = show(ui, draft, &mut Vec::new(), Mode::Ready, false, &[]);
+                action = show(
+                    ui,
+                    draft,
+                    &mut Attachments::default(),
+                    Mode::Ready,
+                    false,
+                    &[],
+                );
             });
 
             output.textures_delta.clear();

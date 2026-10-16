@@ -28,6 +28,15 @@ pub fn conversation(events: &[Event]) -> Vec<Message> {
     replay.conversation
 }
 
+pub fn conversation_from(events: impl IntoIterator<Item = Event>) -> Vec<Message> {
+    let mut replay = Replay::default();
+    for event in events {
+        replay.apply_owned(event);
+    }
+    replay.settle();
+    replay.conversation
+}
+
 #[derive(Default)]
 struct Replay {
     conversation: Vec<Message>,
@@ -47,6 +56,29 @@ struct Replay {
 }
 
 impl Replay {
+    fn apply_owned(&mut self, event: Event) {
+        match event {
+            Event::ImagesAttached { images } => self.images = images,
+            Event::ModelResponded {
+                message,
+                stop_reason,
+                ..
+            } => {
+                self.catch_up();
+                self.conversation.push(message);
+                if stop_reason == StopReason::ToolUse {
+                    self.answer = Some(Vec::new());
+                }
+            }
+            Event::ToolFinished { result, .. } => {
+                if let Some(answer) = &mut self.answer {
+                    answer.push(Block::ToolResult(result));
+                }
+            }
+            event => self.apply(&event),
+        }
+    }
+
     fn apply(&mut self, event: &Event) {
         match event {
             Event::AdviserObserved { .. } => {},
@@ -313,6 +345,28 @@ mod tests {
             },
             duration_ms: 1,
         }
+    }
+
+    #[test]
+    fn streamed_replay_preserves_images_tool_results_and_run_boundaries() {
+        let events = vec![
+            started("read this"),
+            Event::ImagesAttached {
+                images: vec![Image {
+                    media_type: "image/png".into(),
+                    data: "QUJD".into(),
+                }],
+            },
+            calls_tool(1, "read"),
+            tool_finished("read"),
+            says(2, "done"),
+            finished(),
+            started("continue"),
+            calls_tool(1, "next"),
+            tool_finished("next"),
+        ];
+        let expected = conversation(&events);
+        assert_eq!(conversation_from(events), expected);
     }
 
     fn finished() -> Event {

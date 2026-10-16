@@ -1,8 +1,10 @@
 //! Pictures attached to an instruction: read from a file, made small
 //! enough to send, and drawn.
 
-use std::io::Cursor;
-use std::path::Path;
+use crate::background::Background;
+use std::collections::VecDeque;
+use std::io::{Cursor, Read};
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use base64::Engine;
@@ -32,6 +34,64 @@ pub struct Attachment {
     pub image: Image,
 }
 
+#[derive(Default)]
+pub struct Attachments {
+    ready: Vec<Attachment>,
+    waiting: VecDeque<PathBuf>,
+    job: Background<Result<Attachment, String>>,
+}
+
+impl std::ops::Deref for Attachments {
+    type Target = Vec<Attachment>;
+    fn deref(&self) -> &Self::Target {
+        &self.ready
+    }
+}
+impl std::ops::DerefMut for Attachments {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.ready
+    }
+}
+impl Attachments {
+    pub fn loading(&self) -> bool {
+        self.job.pending() || !self.waiting.is_empty()
+    }
+    pub fn enqueue(&mut self, paths: &[PathBuf]) -> Option<String> {
+        let mut error = None;
+        for path in paths {
+            if !is_picture(path) {
+                error = Some("Only pictures can be attached (PNG, JPEG, WebP, GIF).".into());
+            } else if self.ready.len() + self.waiting.len() + usize::from(self.job.pending()) >= 16
+            {
+                error = Some("Attach up to 16 pictures at a time.".into());
+            } else {
+                self.waiting.push_back(path.clone());
+            }
+        }
+        error
+    }
+    pub fn poll(&mut self, context: &egui::Context) -> Option<String> {
+        let mut error = None;
+        if let Some(result) = self.job.poll() {
+            match result {
+                Ok(attachment) => self.ready.push(attachment),
+                Err(why) => error = Some(why),
+            }
+        }
+        if !self.job.pending()
+            && let Some(path) = self.waiting.front()
+        {
+            let path = path.clone();
+            if self.job.start(context, move |_| {
+                load(&path).map_err(|error| format!("{error:#}"))
+            }) {
+                self.waiting.pop_front();
+            }
+        }
+        error
+    }
+}
+
 pub fn is_picture(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
@@ -45,11 +105,18 @@ pub fn load(path: &Path) -> Result<Attachment> {
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.display().to_string());
 
-    let bytes = std::fs::read(path).with_context(|| format!("cannot read {name}"))?;
+    const MAX_SOURCE_BYTES: u64 = 64 * 1024 * 1024;
+    let file = std::fs::File::open(path).with_context(|| format!("cannot read {name}"))?;
+    let mut bytes = Vec::new();
+    file.take(MAX_SOURCE_BYTES + 1).read_to_end(&mut bytes)?;
+    anyhow::ensure!(
+        bytes.len() as u64 <= MAX_SOURCE_BYTES,
+        "{name} exceeds the 64 MB attachment limit"
+    );
 
     let format = image::guess_format(&bytes).with_context(|| format!("{name} is not a picture"))?;
 
-    let decoded = image::load_from_memory(&bytes).with_context(|| format!("cannot read {name}"))?;
+    let decoded = decode_picture(&bytes).with_context(|| format!("cannot read {name}"))?;
 
     let fits = decoded.width().max(decoded.height()) <= MAX_EDGE && bytes.len() <= MAX_BYTES;
 
@@ -72,8 +139,9 @@ pub fn load(path: &Path) -> Result<Attachment> {
 /// when it has transparency, otherwise as JPEG, which is far smaller for
 /// photographs and screenshots.
 fn encode(picture: DynamicImage) -> Result<(&'static str, Vec<u8>)> {
+    // Area averaging downsamples directly, without a full-width float buffer.
     let picture = if picture.width().max(picture.height()) > MAX_EDGE {
-        picture.resize(MAX_EDGE, MAX_EDGE, image::imageops::FilterType::Triangle)
+        picture.thumbnail(MAX_EDGE, MAX_EDGE)
     } else {
         picture
     };
@@ -86,7 +154,7 @@ fn encode(picture: DynamicImage) -> Result<(&'static str, Vec<u8>)> {
         return Ok(("image/png", bytes.into_inner()));
     }
 
-    DynamicImage::ImageRgb8(picture.to_rgb8()).write_to(&mut bytes, ImageFormat::Jpeg)?;
+    DynamicImage::ImageRgb8(picture.into_rgb8()).write_to(&mut bytes, ImageFormat::Jpeg)?;
 
     Ok(("image/jpeg", bytes.into_inner()))
 }
@@ -94,45 +162,66 @@ fn encode(picture: DynamicImage) -> Result<(&'static str, Vec<u8>)> {
 /// Most pictures kept decoded for drawing. Each is up to
 /// [`THUMBNAIL_EDGE`] square, about 1.6 MB of texture.
 const MAX_TEXTURES: usize = 48;
+const MAX_TEXTURE_BYTES: usize = 24 * 1024 * 1024;
 
-/// The pictures decoded for drawing, and when each was last drawn. Past
-/// [`MAX_TEXTURES`] the one drawn longest ago is let go, which frees its
-/// texture; it is decoded again if it is scrolled back to.
+#[derive(Default)]
+struct Texture {
+    handle: Option<egui::TextureHandle>,
+    job: Background<Option<egui::ColorImage>>,
+    finished: bool,
+}
+
 #[derive(Default)]
 struct Textures {
-    kept: std::collections::HashMap<egui::Id, (Option<egui::TextureHandle>, u64)>,
+    kept: std::collections::HashMap<egui::Id, (Texture, u64)>,
     clock: u64,
 }
 
 impl Textures {
-    fn get(&mut self, id: egui::Id) -> Option<Option<egui::TextureHandle>> {
+    fn texture(
+        &mut self,
+        context: &egui::Context,
+        id: egui::Id,
+        image: &Image,
+    ) -> Option<egui::TextureHandle> {
         self.clock += 1;
-
-        let clock = self.clock;
-
-        self.kept.get_mut(&id).map(|(texture, used)| {
-            *used = clock;
-
-            texture.clone()
-        })
+        let (texture, used) = self.kept.entry(id).or_default();
+        *used = self.clock;
+        if let Some(pixels) = texture.job.poll() {
+            texture.handle = pixels.map(|pixels| {
+                context.load_texture("attachment", pixels, egui::TextureOptions::LINEAR)
+            });
+            texture.finished = true;
+        }
+        if !texture.finished && !texture.job.pending() {
+            let image = image.clone();
+            texture.job.start(context, move |_| decode(&image));
+        }
+        let result = texture.handle.clone();
+        self.trim();
+        result
     }
 
-    fn keep(&mut self, id: egui::Id, texture: Option<egui::TextureHandle>) {
-        self.clock += 1;
-
-        self.kept.insert(id, (texture, self.clock));
-
-        while self.kept.len() > MAX_TEXTURES {
-            let oldest = self
+    fn trim(&mut self) {
+        let mut bytes: usize = self
+            .kept
+            .values()
+            .filter_map(|(texture, _)| texture.handle.as_ref())
+            .map(egui::TextureHandle::byte_size)
+            .sum();
+        while self.kept.len() > MAX_TEXTURES || bytes > MAX_TEXTURE_BYTES {
+            if let Some(oldest) = self
                 .kept
                 .iter()
                 .min_by_key(|(_, (_, used))| *used)
-                .map(|(id, _)| *id);
-
-            match oldest {
-                Some(oldest) => self.kept.remove(&oldest),
-                None => break,
-            };
+                .map(|(id, _)| *id)
+                && let Some((texture, _)) = self.kept.remove(&oldest)
+            {
+                bytes -= texture
+                    .handle
+                    .as_ref()
+                    .map_or(0, egui::TextureHandle::byte_size);
+            }
         }
     }
 }
@@ -165,25 +254,27 @@ pub fn texture(context: &egui::Context, image: &Image) -> Option<egui::TextureHa
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-    if let Some(kept) = store.get(id) {
-        return kept;
-    }
+    store.texture(context, id, image)
+}
 
-    let texture = decode(image)
-        .map(|pixels| context.load_texture("attachment", pixels, egui::TextureOptions::LINEAR));
-
-    store.keep(id, texture.clone());
-
-    texture
+fn decode_picture(bytes: &[u8]) -> image::ImageResult<DynamicImage> {
+    let mut reader = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format()?;
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(128 * 1024 * 1024);
+    reader.limits(limits);
+    reader.decode()
 }
 
 fn decode(image: &Image) -> Option<egui::ColorImage> {
     let bytes = STANDARD.decode(&image.data).ok()?;
 
-    let picture = image::load_from_memory(&bytes)
-        .ok()?
-        .thumbnail(THUMBNAIL_EDGE, THUMBNAIL_EDGE)
-        .to_rgba8();
+    let picture = decode_picture(&bytes).ok()?;
+    let picture = if picture.width().max(picture.height()) > THUMBNAIL_EDGE {
+        picture.thumbnail(THUMBNAIL_EDGE, THUMBNAIL_EDGE)
+    } else {
+        picture
+    }
+    .into_rgba8();
 
     let size = [picture.width() as usize, picture.height() as usize];
 
@@ -237,6 +328,29 @@ mod tests {
     }
 
     #[test]
+    fn preparing_an_attachment_returns_before_decoding_and_preserves_the_result() {
+        let context = egui::Context::default();
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("large.png");
+        image::RgbImage::from_pixel(3000, 2000, image::Rgb([1, 2, 3]))
+            .save(&path)
+            .unwrap();
+        let mut attachments = Attachments::default();
+        assert!(attachments.enqueue(&[path]).is_none());
+        assert!(attachments.poll(&context).is_none());
+        assert!(attachments.loading());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while attachments.loading() {
+            assert!(attachments.poll(&context).is_none());
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(attachments[0].name, "large.png");
+        assert!(decode(&attachments[0].image).is_some());
+    }
+
+    #[test]
     fn a_small_png_is_sent_as_it_is() {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("dot.png");
@@ -252,6 +366,7 @@ mod tests {
             STANDARD.decode(&attachment.image.data).unwrap(),
             std::fs::read(&path).unwrap()
         );
+        assert_eq!(decode(&attachment.image).unwrap().size, [4, 4]);
     }
 
     #[test]
@@ -272,7 +387,14 @@ mod tests {
         };
 
         let first = picture(0);
-        let kept = texture(&context, &first).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let kept = loop {
+            if let Some(texture) = texture(&context, &first) {
+                break texture;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        };
 
         for shade in 1..=MAX_TEXTURES as u8 + 10 {
             texture(&context, &picture(shade));
@@ -301,5 +423,38 @@ mod tests {
         std::fs::write(&path, "not a picture").unwrap();
 
         assert!(load(&path).is_err());
+    }
+
+    #[test]
+    fn large_textures_obey_the_byte_budget_and_keep_the_most_recent() {
+        let context = egui::Context::default();
+        let mut store = Textures::default();
+        for used in 0..30 {
+            let handle = context.load_texture(
+                "large thumbnail",
+                egui::ColorImage::filled([640, 640], egui::Color32::WHITE),
+                egui::TextureOptions::LINEAR,
+            );
+            store.kept.insert(
+                egui::Id::new(used),
+                (
+                    Texture {
+                        handle: Some(handle),
+                        finished: true,
+                        ..Default::default()
+                    },
+                    used,
+                ),
+            );
+            store.trim();
+        }
+        let bytes: usize = store
+            .kept
+            .values()
+            .map(|(t, _)| t.handle.as_ref().unwrap().byte_size())
+            .sum();
+        assert!(bytes <= MAX_TEXTURE_BYTES);
+        assert!(store.kept.contains_key(&egui::Id::new(29_u64)));
+        assert!(!store.kept.contains_key(&egui::Id::new(0_u64)));
     }
 }

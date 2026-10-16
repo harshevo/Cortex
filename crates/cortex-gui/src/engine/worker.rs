@@ -8,7 +8,7 @@ use cortex_cli::args::ModelArgs;
 use cortex_cli::commands::prepare;
 use cortex_core::agent::close_unanswered_calls;
 use cortex_core::{
-    Agent, AgentError, Approver, AutoApprove, Block, Event, Image, Inbox, Message, ModelProvider,
+    Agent, AgentError, Approver, AutoApprove, Block, Image, Inbox, Message, ModelProvider,
     Progress, ToolContext, Workspace, replay,
 };
 use tempfile::TempDir;
@@ -94,7 +94,7 @@ pub async fn run(
                 {
                     Ok(built) => {
                         if let Some(log) = &launch.open {
-                            conversation = take_up(&built, log);
+                            conversation = take_up(&built, log).await;
                             interrupted = None;
                         } else if !launch.fresh {
                             // A changed setting can change the system
@@ -212,7 +212,7 @@ pub async fn run(
             Command::Open(log) => {
                 member.clear();
                 if let Some(running) = &running {
-                    conversation = take_up(running, &log);
+                    conversation = take_up(running, &log).await;
                     interrupted = None;
                 }
             }
@@ -399,17 +399,15 @@ fn drop_sealed_reasoning(conversation: &mut Vec<Message>) {
 
 /// Takes up the session logged in `log`: returns its conversation and
 /// points the session log at that file, so the session goes on as one.
-fn take_up(running: &Running, log: &std::path::Path) -> Vec<Message> {
-    let events: Vec<Event> = history::events(log).collect();
-
-    let mut conversation = replay::conversation(&events);
-
-    // Blocks only their own provider understands (a model's sealed
-    // reasoning) cannot be sent to another, and the provider that wrote
-    // them refuses them too once the system prompt or the tools differ
-    // from when they were written, as they may for a session taken up
-    // later. They are dropped; the model's words stay.
-    drop_sealed_reasoning(&mut conversation);
+async fn take_up(running: &Running, log: &std::path::Path) -> Vec<Message> {
+    let path = log.to_path_buf();
+    let conversation = tokio::task::spawn_blocking(move || {
+        let mut conversation = replay::conversation_from(history::events(&path));
+        drop_sealed_reasoning(&mut conversation);
+        conversation
+    })
+    .await
+    .unwrap_or_default();
 
     running.log.resume(log);
 
