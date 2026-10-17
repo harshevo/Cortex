@@ -198,6 +198,9 @@ pub enum Action {
     /// Use this colour theme, from now on.
     Theme(&'static str),
 
+    /// Use these typefaces, from now on.
+    Fonts(crate::theme::fonts::Selection),
+
     /// Get the project ready ahead of any task.
     Prepare,
 }

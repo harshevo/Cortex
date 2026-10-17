@@ -65,7 +65,10 @@ impl Blueprint {
             .with_sandbox(model.sandbox());
 
         let (provider, models): (Arc<dyn ModelProvider>, _) = match demo_project {
-            Some(_) => (Arc::new(DemoProvider::new(workspace.root())), Models::default()),
+            Some(_) => (
+                Arc::new(DemoProvider::new(workspace.root())),
+                Models::default(),
+            ),
 
             None => {
                 let key = provider_key(launch).await;

@@ -13,7 +13,7 @@
 //! family's files is found, egui's built-in fonts are used instead.
 
 use std::fs;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use eframe::egui::{self, FontData, FontDefinitions, FontFamily, FontTweak};
 use eframe::epaint::text::VariationCoords;
@@ -94,6 +94,96 @@ const MONO: &[&str] = &[
     "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
     "/usr/share/fonts/dejavu-sans-mono-fonts/DejaVuSansMono.ttf",
 ];
+
+/// A typeface the person can pick in Settings. The first of each list,
+/// "Default", leaves the built-in choice in place; the others are tried
+/// first and fall back to it where the files are missing.
+pub struct Choice {
+    pub name: &'static str,
+    regular: &'static [&'static str],
+    bold: &'static [&'static str],
+}
+
+pub const DEFAULT: &str = "Default";
+
+const fn choice(name: &'static str, regular: &'static [&'static str], bold: &'static [&'static str]) -> Choice {
+    Choice { name, regular, bold }
+}
+
+/// For the interface and for the assistant's words.
+pub const TEXT: &[Choice] = &[
+    choice(DEFAULT, &[], &[]),
+    choice("System (San Francisco)", &["/System/Library/Fonts/SFNS.ttf"], &["/System/Library/Fonts/SFNS.ttf"]),
+    choice("SF Rounded", &["/System/Library/Fonts/SFNSRounded.ttf"], &["/System/Library/Fonts/SFNSRounded.ttf"]),
+    choice("New York (serif)", &["/System/Library/Fonts/NewYork.ttf"], &["/System/Library/Fonts/NewYork.ttf"]),
+    choice(
+        "Georgia (serif)",
+        &["/System/Library/Fonts/Supplemental/Georgia.ttf"],
+        &["/System/Library/Fonts/Supplemental/Georgia Bold.ttf"],
+    ),
+    choice(
+        "Times New Roman (serif)",
+        &["/System/Library/Fonts/Supplemental/Times New Roman.ttf"],
+        &["/System/Library/Fonts/Supplemental/Times New Roman Bold.ttf"],
+    ),
+];
+
+/// For code and commands.
+pub const CODE: &[Choice] = &[
+    choice(DEFAULT, &[], &[]),
+    choice("SF Mono", &["/System/Library/Fonts/SFNSMono.ttf"], &[]),
+    choice("Fira Code", &["/Library/Fonts/FiraCodeNerdFontMono-Regular.ttf"], &[]),
+    choice("Courier New", &["/System/Library/Fonts/Supplemental/Courier New.ttf"], &[]),
+];
+
+/// Which typeface is picked for each use, by name.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Selection {
+    pub interface: String,
+    pub reply: String,
+    pub code: String,
+}
+
+impl Default for Selection {
+    fn default() -> Self {
+        Self {
+            interface: DEFAULT.to_string(),
+            reply: DEFAULT.to_string(),
+            code: DEFAULT.to_string(),
+        }
+    }
+}
+
+static SELECTED: Mutex<Option<Selection>> = Mutex::new(None);
+
+/// Sets the typefaces used by the next `install`.
+pub fn select(selection: Selection) {
+    *SELECTED.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(selection);
+}
+
+fn extra(family: Family, bold: bool) -> &'static [&'static str] {
+    let selected = SELECTED
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+        .unwrap_or_default();
+
+    let (list, name) = match family {
+        Family::Interface | Family::Strong => (TEXT, selected.interface),
+        Family::Voice | Family::VoiceStrong => (TEXT, selected.reply),
+        Family::Mono => (CODE, selected.code),
+    };
+
+    let Some(found) = list.iter().find(|choice| choice.name == name) else {
+        return &[];
+    };
+
+    if bold && !found.bold.is_empty() {
+        found.bold
+    } else {
+        found.regular
+    }
+}
 
 /// One cut of a typeface: which file, and where on its axes.
 struct Face {
@@ -185,7 +275,9 @@ pub fn install(context: &egui::Context) {
             .cloned()
             .unwrap_or_default();
 
-        if let Some(data) = load(face) {
+        let bold = matches!(face.family, Family::Strong | Family::VoiceStrong);
+
+        if let Some(data) = load(face, extra(face.family, bold)) {
             let name = format!("face-{index}");
 
             fonts.font_data.insert(name.clone(), Arc::new(data));
@@ -199,11 +291,11 @@ pub fn install(context: &egui::Context) {
     context.set_fonts(fonts);
 }
 
-fn load(face: &Face) -> Option<FontData> {
+fn load(face: &Face, picked: &[&str]) -> Option<FontData> {
     // A font installed for one person only is in their own `Library`.
     let home = std::env::home_dir();
 
-    let bytes = face.files.iter().find_map(|file| {
+    let bytes = picked.iter().chain(face.files.iter()).find_map(|file| {
         fs::read(file).ok().or_else(|| {
             let personal = file
                 .strip_prefix('/')

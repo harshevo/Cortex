@@ -20,6 +20,9 @@ const PATIENCE: Duration = Duration::from_secs(5);
 const MAX_UNTRACKED_READ: usize = 2_000;
 const MAX_UNTRACKED_BYTES: u64 = 2 * 1024 * 1024;
 
+/// Untracked files are read only until this much has been read in all.
+const MAX_UNTRACKED_TOTAL: u64 = 64 * 1024 * 1024;
+
 /// What the panel shows about a folder.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Snapshot {
@@ -147,7 +150,9 @@ fn changes(folder: &Path, cancelled: &AtomicBool) -> Option<Changes> {
     // A repository with no commits is compared with the empty tree.
     let base = match git(folder, &["rev-parse", "--verify", "--quiet", "HEAD"]) {
         Some(commit) if !commit.trim().is_empty() => "HEAD".to_string(),
-        _ => git(folder, &["hash-object", "-t", "tree", "/dev/null"])?
+        // Hashed from the empty input, so that it is right for either
+        // hash a repository uses.
+        _ => git(folder, &["hash-object", "-t", "tree", "--stdin"])?
             .trim()
             .to_string(),
     };
@@ -169,12 +174,14 @@ fn changes(folder: &Path, cancelled: &AtomicBool) -> Option<Changes> {
         .unwrap_or_else(|| folder.to_path_buf());
 
     if let Some(listed) = git(&root, &["ls-files", "--others", "--exclude-standard", "-z"]) {
+        let mut budget = MAX_UNTRACKED_TOTAL;
+
         for (index, name) in listed.split('\0').filter(|name| !name.is_empty()).enumerate() {
             changes.files += 1;
             changes.untracked += 1;
 
-            if index < MAX_UNTRACKED_READ && !cancelled.load(Ordering::Relaxed) {
-                changes.added += count_lines(&root.join(name)).unwrap_or(0);
+            if index < MAX_UNTRACKED_READ && budget > 0 && !cancelled.load(Ordering::Relaxed) {
+                changes.added += count_lines(&root.join(name), &mut budget).unwrap_or(0);
             }
         }
     }
@@ -209,12 +216,15 @@ pub fn parse_numstat(output: &str) -> Changes {
 
 /// The lines of a text file, as git would count them. `None` for a file
 /// that is binary, too large, not a regular file or cannot be read.
-fn count_lines(path: &Path) -> Option<u64> {
+/// What is read is taken from `budget`.
+fn count_lines(path: &Path, budget: &mut u64) -> Option<u64> {
     let metadata = std::fs::symlink_metadata(path).ok()?;
 
-    if !metadata.is_file() || metadata.len() > MAX_UNTRACKED_BYTES {
+    if !metadata.is_file() || metadata.len() > MAX_UNTRACKED_BYTES || metadata.len() > *budget {
         return None;
     }
+
+    *budget -= metadata.len();
 
     let bytes = std::fs::read(path).ok()?;
 
@@ -295,10 +305,10 @@ mod tests {
 
     #[test]
     fn numstat_totals_count_text_and_binary_files() {
-        let output = "3\t1\tsrc/a.rs\0-\t-\timage.png\00\t7\told.rs\0";
+        let output = ["3\t1\tsrc/a.rs", "-\t-\timage.png", "0\t7\told.rs", ""].join("\0");
 
         assert_eq!(
-            parse_numstat(output),
+            parse_numstat(&output),
             Changes {
                 files: 3,
                 added: 3,

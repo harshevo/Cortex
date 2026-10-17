@@ -98,17 +98,48 @@ pub fn kind_of(instruction: &str) -> TaskKind {
 
     let has = |list: &[&str]| list.iter().any(|word| words.contains(word));
 
-    if has(&["fix", "bug", "broken", "crash", "error", "fails", "failing", "issue", "wrong", "panic"]) {
+    if has(&[
+        "fix", "bug", "broken", "crash", "error", "fails", "failing", "issue", "wrong", "panic",
+    ]) {
         TaskKind::Fix
-    } else if has(&["refactor", "rename", "extract", "clean", "cleanup", "simplify", "move", "split"]) {
+    } else if has(&[
+        "refactor", "rename", "extract", "clean", "cleanup", "simplify", "move", "split",
+    ]) {
         TaskKind::Refactor
     } else if has(&["test", "tests", "coverage", "spec"]) {
         TaskKind::Test
-    } else if has(&["readme", "docs", "document", "documentation", "comment", "comments", "changelog"]) {
+    } else if has(&[
+        "readme",
+        "docs",
+        "document",
+        "documentation",
+        "comment",
+        "comments",
+        "changelog",
+    ]) {
         TaskKind::Docs
-    } else if has(&["build", "ci", "dependency", "dependencies", "upgrade", "install", "config", "setup", "deploy"]) {
+    } else if has(&[
+        "build",
+        "ci",
+        "dependency",
+        "dependencies",
+        "upgrade",
+        "install",
+        "config",
+        "setup",
+        "deploy",
+    ]) {
         TaskKind::Build
-    } else if has(&["add", "implement", "create", "support", "new", "feature", "make", "allow"]) {
+    } else if has(&[
+        "add",
+        "implement",
+        "create",
+        "support",
+        "new",
+        "feature",
+        "make",
+        "allow",
+    ]) {
         TaskKind::Feature
     } else {
         TaskKind::Other
@@ -213,7 +244,10 @@ fn stats(kind: TaskKind, runs: &[&Episode]) -> KindStats {
     let (good, bad): (Vec<&Episode>, Vec<&Episode>) = runs.iter().partition(|run| passed(run));
 
     let share = |group: &[&Episode], tool: &str| {
-        group.iter().filter(|run| run.tools.iter().any(|used| used == tool)).count() as f64
+        group
+            .iter()
+            .filter(|run| run.tools.iter().any(|used| used == tool))
+            .count() as f64
             / group.len().max(1) as f64
     };
 
@@ -222,9 +256,7 @@ fn stats(kind: TaskKind, runs: &[&Episode]) -> KindStats {
     let mut helpful: Vec<(f64, String)> = tools
         .into_iter()
         .map(|tool| (share(&good, tool), share(&bad, tool), tool))
-        .filter(|(with, without, _)| {
-            *with >= 0.6 && (bad.is_empty() || with - without >= 0.3)
-        })
+        .filter(|(with, without, _)| *with >= 0.6 && (bad.is_empty() || with - without >= 0.3))
         .map(|(with, _, tool)| (with, tool.clone()))
         .collect();
 
@@ -336,7 +368,9 @@ impl Candidate {
 
 fn step_for(tool: &str) -> String {
     match tool {
-        "read_file" | "outline" | "read_symbol" => "Read the code involved before changing it.".into(),
+        "read_file" | "outline" | "read_symbol" => {
+            "Read the code involved before changing it.".into()
+        }
         "search" | "semantic_search" | "list_files" => "Find where the behaviour lives.".into(),
         "find_references" | "file_dependencies" | "impact" => {
             "Check what depends on the code you will change.".into()
@@ -502,7 +536,11 @@ mod tests {
         Episode {
             time: 0,
             instruction: instruction.to_string(),
-            outcome: if passed { Outcome::Completed } else { Outcome::StepLimit },
+            outcome: if passed {
+                Outcome::Completed
+            } else {
+                Outcome::StepLimit
+            },
             verified: Some(passed),
             steps,
             changed: vec!["a.rs".to_string()],
@@ -514,7 +552,10 @@ mod tests {
 
     #[test]
     fn kinds_are_told_from_the_words() {
-        assert_eq!(kind_of("Fix the crash when the list is empty"), TaskKind::Fix);
+        assert_eq!(
+            kind_of("Fix the crash when the list is empty"),
+            TaskKind::Fix
+        );
         assert_eq!(kind_of("Rename Order to Purchase"), TaskKind::Refactor);
         assert_eq!(kind_of("Add a dark mode"), TaskKind::Feature);
         assert_eq!(kind_of("Update the README"), TaskKind::Docs);

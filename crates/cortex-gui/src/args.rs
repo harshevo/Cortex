@@ -45,6 +45,10 @@ pub struct RehearsalArgs {
     #[arg(long, hide = true)]
     pub open_files: bool,
 
+    /// Start with the details panel shown on the right.
+    #[arg(long, hide = true)]
+    pub open_details: bool,
+
     /// Start with this file open in the files panel.
     #[arg(long, hide = true)]
     pub open_file: Option<PathBuf>,

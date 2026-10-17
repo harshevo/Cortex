@@ -148,7 +148,13 @@ pub fn summarize(run: &[Event]) -> Summary {
             Event::RunStarted {
                 instruction, model, ..
             } => {
-                summary.instruction = clip(instruction.rsplit("## Task\n\n").next().unwrap_or(instruction), 160);
+                summary.instruction = clip(
+                    instruction
+                        .rsplit("## Task\n\n")
+                        .next()
+                        .unwrap_or(instruction),
+                    160,
+                );
                 summary.model = model.clone();
             }
 

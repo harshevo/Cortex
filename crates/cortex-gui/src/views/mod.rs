@@ -9,6 +9,7 @@ pub mod files;
 pub mod icons;
 pub mod insights;
 pub mod inspector;
+pub mod jobs;
 pub mod menu;
 pub mod prose;
 pub mod settings;

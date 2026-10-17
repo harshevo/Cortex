@@ -30,6 +30,10 @@ impl Rehearsal {
         }
     }
 
+    pub fn opens_details(&self) -> bool {
+        self.args.open_details
+    }
+
     pub fn opens_files(&self) -> bool {
         self.args.open_files || self.args.open_file.is_some()
     }

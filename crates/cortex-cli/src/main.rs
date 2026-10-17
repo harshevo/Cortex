@@ -25,6 +25,7 @@ async fn main() -> ExitCode {
         Command::Checkpoints(args) => commands::checkpoints::execute(args).await,
         Command::Trace(args) => commands::trace::execute(args).await,
         Command::Learned(args) => commands::learned::execute(args),
+        Command::Jobs(args) => commands::jobs::execute(args).await,
     };
 
     match result {

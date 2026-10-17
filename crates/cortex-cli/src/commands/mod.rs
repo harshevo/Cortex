@@ -5,6 +5,7 @@ pub mod checkpoints;
 pub mod context;
 pub mod effect;
 pub mod eval;
+pub mod jobs;
 pub mod learned;
 pub mod login;
 pub mod prepare;

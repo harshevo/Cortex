@@ -9,8 +9,8 @@ use tokio::task::JoinSet;
 
 use crate::advice::Adviser;
 use crate::approval::{ApprovalRequest, Approver};
-use crate::budget::{self, Budget, Spent};
 use crate::briefing::{self, Briefing, ContextSource};
+use crate::budget::{self, Budget, Spent};
 use crate::changes::{self, Originals};
 use crate::checkpoint::Checkpoints;
 use crate::compact::CompactConfig;
@@ -760,7 +760,11 @@ impl Agent {
         let provider = self.model(escalated);
 
         match &self.stream_observer {
-            Some(observer) => provider.complete_streaming(request, observer.as_ref()).await,
+            Some(observer) => {
+                provider
+                    .complete_streaming(request, observer.as_ref())
+                    .await
+            }
             None => provider.complete(request).await,
         }
     }
@@ -768,7 +772,12 @@ impl Agent {
     /// Adds a call to what the run has spent, and says what to do about
     /// the budget: `Some(true)` to stop, `Some(false)` to warn.
     fn spend(&self, step: u32, usage: &Usage, elapsed: Duration, gate: &mut Gate) -> Option<bool> {
-        let budget = self.config.extras.budget.as_ref().filter(|budget| budget.is_set())?;
+        let budget = self
+            .config
+            .extras
+            .budget
+            .as_ref()
+            .filter(|budget| budget.is_set())?;
 
         gate.spent.elapsed = elapsed;
 

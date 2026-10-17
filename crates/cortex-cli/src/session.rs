@@ -1,5 +1,6 @@
 //! Building an agent from command-line arguments.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
@@ -57,7 +58,31 @@ pub fn build_provider(args: &ModelArgs) -> Result<Arc<dyn ModelProvider>> {
     Ok(provider)
 }
 
+/// How [`build_agent_with`] differs from a session at the terminal.
+#[derive(Default)]
+pub struct BuildOptions {
+    /// Decides what may run, in place of the one `args` would choose.
+    pub approver: Option<Arc<dyn Approver>>,
+
+    /// Where the run's log is written, in place of a new file under
+    /// `.cortex/trajectories`.
+    pub log: Option<PathBuf>,
+
+    /// Add to the log at `log` instead of starting it afresh, as when a
+    /// run is taken up again.
+    pub append_log: bool,
+
+    /// Leave out the console view (or the JSON lines of `--json`).
+    pub quiet: bool,
+}
+
 pub async fn build_agent(args: &SessionArgs) -> Result<Agent> {
+    build_agent_with(args, BuildOptions::default()).await
+}
+
+/// As [`build_agent`], changed by `options`: for runs nobody watches at
+/// a terminal, such as background jobs.
+pub async fn build_agent_with(args: &SessionArgs, options: BuildOptions) -> Result<Agent> {
     // A session starts with the capabilities that are on unless turned off.
     let model = args.model.clone().with_defaults();
 
@@ -69,7 +94,9 @@ pub async fn build_agent(args: &SessionArgs) -> Result<Agent> {
 
     let provider = build_routed_provider(&model)?;
 
-    let approver: Arc<dyn Approver> = if args.yes {
+    let approver: Arc<dyn Approver> = if let Some(approver) = options.approver {
+        approver
+    } else if args.yes {
         Arc::new(AutoApprove)
     } else if args.json {
         // Nobody is at the terminal to ask.
@@ -78,14 +105,19 @@ pub async fn build_agent(args: &SessionArgs) -> Result<Agent> {
         Arc::new(InteractiveApprover::default())
     };
 
-    let trajectory_file = workspace
-        .root()
-        .join(STATE_DIRECTORY)
-        .join("trajectories")
-        .join(format!("{}.jsonl", unix_millis()));
+    let trajectory_file = options.log.unwrap_or_else(|| {
+        workspace
+            .root()
+            .join(STATE_DIRECTORY)
+            .join("trajectories")
+            .join(format!("{}.jsonl", unix_millis()))
+    });
 
-    let log = JsonlSink::create(&trajectory_file)
-        .with_context(|| format!("cannot create {}", trajectory_file.display()))?;
+    let log = match options.append_log && trajectory_file.exists() {
+        true => JsonlSink::append(&trajectory_file),
+        false => JsonlSink::create(&trajectory_file),
+    }
+    .with_context(|| format!("cannot create {}", trajectory_file.display()))?;
 
     let state_directory = workspace.root().join(STATE_DIRECTORY);
 
@@ -122,14 +154,19 @@ pub async fn build_agent(args: &SessionArgs) -> Result<Agent> {
         approver,
     };
 
-    let console: Arc<dyn TrajectorySink> = match args.json {
-        true => Arc::new(JsonLinesSink),
-        false => Arc::new(ConsoleSink::new(provider.model())),
+    let console: Option<Arc<dyn TrajectorySink>> = match (options.quiet, args.json) {
+        (true, _) => None,
+        (false, true) => Some(Arc::new(JsonLinesSink)),
+        (false, false) => Some(Arc::new(ConsoleSink::new(provider.model()))),
     };
 
-    let mut agent = Agent::new(provider, setup.tools, context, config)
-        .with_sink(console)
-        .with_sink(Arc::new(log));
+    let mut agent = Agent::new(provider, setup.tools, context, config);
+
+    if let Some(console) = console {
+        agent = agent.with_sink(console);
+    }
+
+    agent = agent.with_sink(Arc::new(log));
 
     for sink in setup.sinks {
         agent = agent.with_sink(sink);

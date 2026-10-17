@@ -68,6 +68,10 @@ pub enum Command {
     /// Show what the project's runs have taught: how each kind of task
     /// goes, which notes help, and workflows to keep as skills.
     Learned(LearnedArgs),
+
+    /// Background jobs: agents that work in parallel, each on a branch of
+    /// its own, and keep going when the window that started them closes.
+    Jobs(JobsArgs),
 }
 
 #[derive(Args)]
@@ -551,4 +555,126 @@ pub struct EvalCompareArgs {
 
     /// The report to judge against it.
     pub candidate: PathBuf,
+}
+
+#[derive(Args)]
+pub struct JobsArgs {
+    #[command(subcommand)]
+    pub command: JobsCommand,
+}
+
+/// What `cortex jobs` does.
+#[derive(Subcommand)]
+pub enum JobsCommand {
+    /// List the project's background jobs.
+    List(JobsListArgs),
+
+    /// Show one job: its record, what it did lately, and its report.
+    Show(JobArgs),
+
+    /// Queue a job, and start a runner for it if none is running.
+    Add(JobsAddArgs),
+
+    /// Stop a queued or running job.
+    Cancel(JobArgs),
+
+    /// Merge a finished job's branch into the project, after a conflict
+    /// check.
+    Merge(JobArgs),
+
+    /// Have an agent resolve a conflicted job's conflicts in its own
+    /// worktree, then merge it.
+    Resolve(JobArgs),
+
+    /// Queue a failed or cancelled job again, carrying on where it
+    /// stopped.
+    Retry(JobArgs),
+
+    /// Forget a job that is not running, and remove its worktree and
+    /// branch. A branch that was never merged is kept unless `--force`.
+    Remove(JobsRemoveArgs),
+
+    /// Carry out the project's jobs, several at once, until none are
+    /// left. The model arguments after `--` are kept for runners started
+    /// later; without them the last ones kept are used.
+    Serve(JobsServeArgs),
+}
+
+#[derive(Args)]
+pub struct JobsListArgs {
+    /// The project. Defaults to the current directory.
+    #[arg(long, default_value = ".")]
+    pub dir: PathBuf,
+
+    /// Print the jobs as JSON.
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args)]
+pub struct JobArgs {
+    /// The job, such as `job-3` or `3`.
+    pub id: String,
+
+    /// The project. Defaults to the current directory.
+    #[arg(long, default_value = ".")]
+    pub dir: PathBuf,
+}
+
+#[derive(Args)]
+pub struct JobsRemoveArgs {
+    #[command(flatten)]
+    pub job: JobArgs,
+
+    /// Delete the job's branch even if it was never merged.
+    #[arg(long)]
+    pub force: bool,
+}
+
+#[derive(Args)]
+pub struct JobsAddArgs {
+    /// What the job's agent should do. It does not see any conversation,
+    /// so say everything it needs.
+    pub instruction: String,
+
+    /// The project. Defaults to the current directory.
+    #[arg(long, default_value = ".")]
+    pub dir: PathBuf,
+
+    /// A few words naming the job.
+    #[arg(long)]
+    pub title: Option<String>,
+
+    /// A job that must be finished and merged first. Repeat for several.
+    #[arg(long = "after", value_name = "JOB")]
+    pub after: Vec<String>,
+
+    /// Leave the finished branch for `cortex jobs merge` instead of
+    /// merging it as soon as the job finishes well.
+    #[arg(long)]
+    pub no_merge: bool,
+
+    /// Model calls the job may make.
+    #[arg(long)]
+    pub max_steps: Option<u32>,
+}
+
+#[derive(Args)]
+pub struct JobsServeArgs {
+    /// The project. Defaults to the current directory.
+    #[arg(long, default_value = ".")]
+    pub dir: PathBuf,
+
+    /// Jobs carried out at once.
+    #[arg(long, value_name = "COUNT")]
+    pub parallel: Option<usize>,
+
+    /// Stop after this many seconds with nothing to do.
+    #[arg(long, default_value_t = 60, value_name = "SECONDS")]
+    pub idle_exit: u64,
+
+    /// The `cortex run` model arguments for the jobs' agents, such as
+    /// `--provider anthropic --model claude-opus-5-5 --with gate`.
+    #[arg(last = true, value_name = "MODEL ARGS")]
+    pub model: Vec<String>,
 }

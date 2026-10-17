@@ -268,11 +268,7 @@ impl Session {
                 });
             }
 
-            Event::ContextPrepared {
-                source,
-                detail,
-                ..
-            } if source == "playbook" => {
+            Event::ContextPrepared { source, detail, .. } if source == "playbook" => {
                 self.run.estimate = detail
                     .get("estimate")
                     .and_then(|estimate| serde_json::from_value(estimate.clone()).ok());

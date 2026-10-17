@@ -136,7 +136,7 @@ struct Inner {
     state: TaskState,
 
     /// Counts as they were when this stretch began.
-    prior_usage: Usage,
+    usage_so_far: Usage,
     prior_elapsed: Duration,
     began: Instant,
 }
@@ -179,7 +179,7 @@ impl TaskStateSink {
         let inner = Inner {
             prior,
             events: Vec::new(),
-            prior_usage: state.usage,
+            usage_so_far: state.usage,
             prior_elapsed: Duration::from_millis(state.elapsed_ms),
             began: Instant::now(),
             state,
@@ -264,8 +264,8 @@ impl TrajectorySink for TaskStateSink {
                 ..
             } => {
                 inner.state.steps = *step;
-                inner.prior_usage += *usage;
-                inner.state.usage = inner.prior_usage;
+                inner.usage_so_far += *usage;
+                inner.state.usage = inner.usage_so_far;
 
                 let planned = message
                     .tool_calls()

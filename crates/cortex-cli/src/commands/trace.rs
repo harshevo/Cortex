@@ -12,14 +12,14 @@ use cortex_core::{AutoApprove, Checkpoints, Sandbox, ToolContext, trace};
 use crate::args::TraceArgs;
 
 pub async fn execute(args: TraceArgs) -> Result<ExitCode> {
-    let events = trace::read(&args.log)
-        .with_context(|| format!("could not read {}", args.log.display()))?;
+    let events =
+        trace::read(&args.log).with_context(|| format!("could not read {}", args.log.display()))?;
 
     let run = pick(&events, args.run)?;
 
     if let Some(other) = &args.compare {
-        let other_events = trace::read(other)
-            .with_context(|| format!("could not read {}", other.display()))?;
+        let other_events =
+            trace::read(other).with_context(|| format!("could not read {}", other.display()))?;
 
         let other_run = pick(&other_events, args.other_run)?;
 
@@ -86,7 +86,10 @@ async fn replay(run: &[Event], args: &TraceArgs) -> Result<String> {
             .await
             .is_ok()
     {
-        note = format!("Replayed in a copy put back to checkpoint {}.", &id[..id.len().min(8)]);
+        note = format!(
+            "Replayed in a copy put back to checkpoint {}.",
+            &id[..id.len().min(8)]
+        );
     }
 
     let context = ToolContext {

@@ -47,6 +47,46 @@ pub fn show(ui: &mut Ui, form: &mut Form, filter: &Filter) -> Option<Action> {
         true,
     );
 
+    let mut fonts_changed = false;
+
+    for (label, help, list, pick) in [
+        (
+            "Interface font",
+            "The typeface of menus, buttons and labels.",
+            theme::fonts::TEXT,
+            &mut form.draft.interface_font,
+        ),
+        (
+            "Reply font",
+            "The typeface of the assistant's words in the chat.",
+            theme::fonts::TEXT,
+            &mut form.draft.reply_font,
+        ),
+        (
+            "Code font",
+            "The typeface of code, commands and their output.",
+            theme::fonts::CODE,
+            &mut form.draft.code_font,
+        ),
+    ] {
+        rows::row(ui, filter, label, help, |ui| {
+            egui::ComboBox::from_id_salt(label)
+                .selected_text(pick.as_str())
+                .show_ui(ui, |ui| {
+                    for choice in list {
+                        if ui.selectable_label(*pick == choice.name, choice.name).clicked() {
+                            *pick = choice.name.to_string();
+                            fonts_changed = true;
+                        }
+                    }
+                });
+        });
+    }
+
+    if fonts_changed && chosen.is_none() {
+        return Some(Action::Fonts(form.draft.font_selection()));
+    }
+
     let name = chosen?;
 
     // Kept in the draft too, so that applying other settings does not

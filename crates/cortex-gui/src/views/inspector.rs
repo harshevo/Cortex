@@ -97,13 +97,13 @@ impl Inspector {
             for (tab, name) in [(Tab::Run, "Run"), (Tab::Learned, "Learned")] {
                 let chosen = self.tab == tab;
 
-                let text = RichText::new(name).font(theme::strong(theme::size::UI)).color(
-                    if chosen {
+                let text = RichText::new(name)
+                    .font(theme::strong(theme::size::UI))
+                    .color(if chosen {
                         palette::text()
                     } else {
                         palette::text_muted()
-                    },
-                );
+                    });
 
                 if ui
                     .add(egui::Label::new(text).sense(Sense::click()))
@@ -171,7 +171,10 @@ impl Inspector {
             bar(ui, kind.pass_rate(), palette::accent());
 
             if !kind.helpful_tools.is_empty() {
-                muted(ui, &format!("Passing runs used {}", kind.helpful_tools.join(", ")));
+                muted(
+                    ui,
+                    &format!("Passing runs used {}", kind.helpful_tools.join(", ")),
+                );
             }
         }
 
@@ -307,9 +310,12 @@ fn run(ui: &mut Ui, context: &Context<'_>) {
     let limits = context.limits;
 
     let shares = [
-        limits
-            .tokens
-            .map(|max| (tokens as f64 / max.max(1) as f64, format!("{} tokens", count(max)))),
+        limits.tokens.map(|max| {
+            (
+                tokens as f64 / max.max(1) as f64,
+                format!("{} tokens", count(max)),
+            )
+        }),
         match (limits.cost, cost) {
             (Some(max), Some(CallCost::Usd(usd))) => Some((usd / max, format!("${max:.2}"))),
             _ => None,
@@ -333,7 +339,11 @@ fn run(ui: &mut Ui, context: &Context<'_>) {
 
         let share = share.max(state.budget.map_or(0.0, |(share, _)| share));
 
-        pair(ui, &format!("{:.0}% used", share * 100.0), &format!("of {limit}"));
+        pair(
+            ui,
+            &format!("{:.0}% used", share * 100.0),
+            &format!("of {limit}"),
+        );
 
         let colour = match share {
             share if share >= 1.0 => palette::bad(),

@@ -62,7 +62,12 @@ const BUILTINS: [(Builtin, &str, &str, &str); 16] = [
         "<name>",
         "Work on a new branch in its own folder",
     ),
-    (Builtin::Run, "run", "", "Budget, recovery and changes of the run  ⌘I"),
+    (
+        Builtin::Run,
+        "run",
+        "",
+        "Budget, recovery and changes of the run  ⌘I",
+    ),
     (Builtin::Learned, "learned", "", "What earlier runs taught"),
     (Builtin::Trace, "trace", "", "Summary of the last run's log"),
     (Builtin::Compact, "compact", "", "Summarise older messages"),

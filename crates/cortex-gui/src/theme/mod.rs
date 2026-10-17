@@ -57,7 +57,7 @@ pub mod size {
     pub const UI: f32 = 13.0;
 
     /// What is read at length: the conversation.
-    pub const BODY: f32 = 14.0;
+    pub const BODY: f32 = 15.0;
 
     pub const TITLE: f32 = 16.0;
     pub const HEADING: f32 = 20.0;
@@ -69,7 +69,7 @@ pub const LINE_HEIGHT: f32 = 1.5;
 
 /// Widest the conversation column grows; wider windows leave equal
 /// margins either side, so the chat sits in the middle.
-pub const COLUMN_WIDTH: f32 = 800.0;
+pub const COLUMN_WIDTH: f32 = 720.0;
 
 /// Sets the app up to draw: its fonts, and the colours of the theme in
 /// use.

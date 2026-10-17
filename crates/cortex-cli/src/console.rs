@@ -54,7 +54,10 @@ impl TrajectorySink for ConsoleSink {
             Event::BudgetReached { share, cost, .. } => {
                 let cost = cost.map_or(String::new(), |cost| format!(", ${cost:.2}"));
 
-                println!("{RED}  {:.0}% of the budget used{cost}{RESET}", share * 100.0);
+                println!(
+                    "{RED}  {:.0}% of the budget used{cost}{RESET}",
+                    share * 100.0
+                );
             }
 
             Event::ModelResponded { message, .. } => {

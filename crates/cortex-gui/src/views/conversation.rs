@@ -65,7 +65,7 @@ const UNIT_GAP: f32 = space::XS;
 /// Room above what the person said, which sets a new exchange apart from
 /// the one before, and the padding inside its bubble.
 const USER_GAP: f32 = 10.0;
-const BUBBLE_PADDING: egui::Vec2 = egui::vec2(12.0, 7.0);
+const BUBBLE_PADDING: egui::Vec2 = egui::vec2(14.0, 9.0);
 
 /// Room above and below what the agent said.
 const AGENT_PADDING: f32 = space::XS;
@@ -812,7 +812,11 @@ fn draw_units(
                 );
             });
 
-            ui.add_space(gap_under(unit.kind));
+            // Commands that follow a reply belong to it: no gap between.
+            let tools_follow = unit.kind == Kind::Assistant
+                && view.units.get(index + 1).is_some_and(|next| next.kind == Kind::Tools);
+
+            ui.add_space(if tools_follow { 0.0 } else { gap_under(unit.kind) });
         }
 
         let drawn = ui.cursor().top() - before;
@@ -1355,7 +1359,7 @@ fn user_message(ui: &mut Ui, text: &str, images: &[Image], galley: &Arc<Galley>)
     let bubble = egui::Rect::from_min_size(egui::pos2(row.right() - size.x, row.top()), size);
 
     ui.painter()
-        .rect_filled(bubble, CornerRadius::same(radius::XL), palette::raised());
+        .rect_filled(bubble, CornerRadius::same(radius::L), palette::raised());
 
     // A label rather than painted text, so that it can be selected.
     let mut inside = ui.new_child(

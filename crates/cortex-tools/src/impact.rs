@@ -158,7 +158,11 @@ impl Tool for Impact {
                 }
             }
 
-            let label = if depth == 1 { "directly" } else { "through those" };
+            let label = if depth == 1 {
+                "directly"
+            } else {
+                "through those"
+            };
 
             output.push_str(&format!("  {label}: {}\n", next.len()));
 
@@ -208,7 +212,11 @@ impl Tool for Impact {
             .filter(|episode| episode.changed.iter().any(|file| relative.contains(file)))
             .take(5)
             .map(|episode| {
-                let ending = if learn::passed(&episode) { "passed" } else { "did not pass" };
+                let ending = if learn::passed(&episode) {
+                    "passed"
+                } else {
+                    "did not pass"
+                };
 
                 format!("  \"{}\": {ending}", episode.instruction)
             })

@@ -244,7 +244,8 @@ mod tests {
 
     #[test]
     fn redacted_json_still_parses() {
-        let value = serde_json::json!({ "output": "TOKEN=abcdefghijkl\nsk-proj-AAAAAAAAAAAAAAAAAAAA" });
+        let value =
+            serde_json::json!({ "output": "TOKEN=abcdefghijkl\nsk-proj-AAAAAAAAAAAAAAAAAAAA" });
         let text = serde_json::to_string(&value).unwrap();
 
         let redacted = redact(&text);

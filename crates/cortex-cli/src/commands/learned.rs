@@ -67,7 +67,10 @@ pub fn execute(args: LearnedArgs) -> Result<ExitCode> {
         .collect();
 
     if !doubtful.is_empty() {
-        println!("\nNotes never shown in a run that passed:\n{}", doubtful.join("\n"));
+        println!(
+            "\nNotes never shown in a run that passed:\n{}",
+            doubtful.join("\n")
+        );
     }
 
     if !learned.candidates.is_empty() {

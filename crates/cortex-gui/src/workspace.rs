@@ -4,6 +4,7 @@ use crate::app::CortexApp;
 use crate::menu_bar::{self, Command, MenuBar};
 use crate::theme::palette;
 use crate::views::icons::{self, Icon};
+use crate::views::jobs::{self as jobs_view, JobsPanel};
 use crate::views::menu;
 use crate::views::top_bar::{Step, Steps};
 
@@ -61,6 +62,9 @@ pub struct Workspace {
     /// The sidebar was put away because the window became narrow, not
     /// by the person: it comes back when there is room again.
     stepped_aside: bool,
+
+    /// The background jobs of the project in front, on the right.
+    jobs: JobsPanel,
 }
 
 impl Workspace {
@@ -80,6 +84,7 @@ impl Workspace {
             position: 0,
             narrow: false,
             stepped_aside: false,
+            jobs: JobsPanel::default(),
         };
         if split {
             workspace.choose_split(Split::Columns);
@@ -299,6 +304,42 @@ impl Workspace {
         }
     }
 
+    /// The background jobs of the project in front, on the right, while
+    /// switched on. The jobs are followed while the panel is off too, so
+    /// the tray can say when some are working.
+    fn jobs_panel(&mut self, ui: &mut egui::Ui) {
+        let active = self.index(self.active);
+        let place = self.chats[active].1.jobs_place().map(std::path::Path::to_path_buf);
+
+        let Some(place) = place else {
+            return;
+        };
+
+        self.jobs.follow(ui.ctx(), &place);
+
+        if !self.jobs.visible {
+            return;
+        }
+
+        let frame = egui::Frame::new()
+            .fill(palette::sidebar())
+            .inner_margin(egui::Margin::symmetric(12, 8));
+
+        let mut closed = false;
+
+        egui::Panel::right(ui.id().with("background jobs"))
+            .default_size(jobs_view::DEFAULT_WIDTH)
+            .size_range(jobs_view::MIN_WIDTH..=jobs_view::MAX_WIDTH)
+            .resizable(true)
+            .show_separator_line(true)
+            .frame(frame)
+            .show(ui, |ui| closed = self.jobs.show(ui));
+
+        if closed {
+            self.jobs.visible = false;
+        }
+    }
+
     /// The strip of minimized chats. Returns the one to bring back and
     /// the one to close, if either was asked for.
     fn tray(&mut self, ui: &mut egui::Ui, strip: egui::Rect) -> (Option<u64>, Option<u64>) {
@@ -423,6 +464,9 @@ impl eframe::App for Workspace {
         if ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::B)) {
             self.chats[active].1.toggle_sidebar();
         }
+        if ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::J)) {
+            self.jobs.visible = !self.jobs.visible;
+        }
         // On becoming narrow the sidebar steps aside, once; it can be
         // brought back, and comes back by itself with the room.
         let narrow = ui.available_width() < NARROW_WINDOW;
@@ -441,6 +485,8 @@ impl eframe::App for Workspace {
         let mut closed = None;
         let mut added = false;
         let mut split = self.split;
+        let jobs_visible = self.jobs.visible;
+        let mut toggle_jobs = false;
         let chats: Vec<_> = self
             .chats
             .iter()
@@ -470,6 +516,10 @@ impl eframe::App for Workspace {
                 if menu::danger_item(ui, Some(Icon::Close), "Close current chat").clicked() {
                     closed = Some(active_id);
                 }
+            }
+            menu::separator(ui);
+            if menu::item(ui, None, "Background jobs", "⌘J", jobs_visible).clicked() {
+                toggle_jobs = true;
             }
             menu::separator(ui);
             menu::title(ui, "Layout");
@@ -508,6 +558,9 @@ impl eframe::App for Workspace {
         if split != self.split {
             self.choose_split(split);
         }
+        if toggle_jobs {
+            self.jobs.visible = !self.jobs.visible;
+        }
         let active = self.index(self.active);
         if self.chats[active].1.sidebar_visible() {
             let running: Vec<_> = self
@@ -519,6 +572,7 @@ impl eframe::App for Workspace {
             self.chats[active].1.sidebar_with_activity(ui, &running);
         }
         self.chats[active].1.details_panel(ui);
+        self.jobs_panel(ui);
         self.chats[active].1.files_panel(ui);
         if let Some((folder, log)) = self.chats[active].1.take_requested_session() {
             let existing = log.as_ref().and_then(|path| {
@@ -569,7 +623,9 @@ impl eframe::App for Workspace {
             self.activate(id);
         }
         let mut rect = ui.available_rect_before_wrap();
-        if !self.minimized.is_empty() {
+        let (running_jobs, queued_jobs) = self.jobs.counts();
+        let jobs_pill = !self.jobs.visible && running_jobs + queued_jobs > 0;
+        if !self.minimized.is_empty() || jobs_pill {
             let mut strip = rect;
             strip.max.y = strip.min.y + TRAY_HEIGHT;
             rect.min.y = strip.max.y;
@@ -578,6 +634,9 @@ impl eframe::App for Workspace {
                 self.close(id);
             } else if let Some(id) = restored {
                 self.restore(id);
+            }
+            if jobs_pill && jobs_pill_button(ui, strip, running_jobs, queued_jobs).clicked() {
+                self.jobs.visible = true;
             }
         }
         if self.split == Split::Off || self.secondary.is_none() {
@@ -839,4 +898,65 @@ mod tests {
         assert_eq!(workspace.chats.len(), 2);
         assert!(workspace.split == Split::Rows);
     }
+}
+
+/// The pill at the right of the tray that says jobs are working, while
+/// their panel is closed. A click opens it.
+fn jobs_pill_button(
+    ui: &mut egui::Ui,
+    strip: egui::Rect,
+    running: usize,
+    queued: usize,
+) -> egui::Response {
+    let label = match (running, queued) {
+        (0, queued) => format!("{queued} queued"),
+        (running, 0) => format!("{running} running"),
+        (running, queued) => format!("{running} running · {queued} queued"),
+    };
+
+    let font = crate::theme::small();
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label, font, palette::text_secondary());
+
+    let size = egui::vec2(galley.size().x + 28.0, 22.0);
+    let rect = egui::Rect::from_min_size(
+        egui::pos2(strip.right() - 10.0 - size.x, strip.center().y - size.y / 2.0),
+        size,
+    );
+
+    let response = ui
+        .interact(rect, ui.id().with("jobs pill"), Sense::click())
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text("Background jobs  ⌘J");
+
+    let painter = ui.painter();
+
+    painter.rect(
+        rect,
+        CornerRadius::same(crate::theme::radius::L),
+        if response.hovered() {
+            palette::raised()
+        } else {
+            palette::surface()
+        },
+        Stroke::new(1.0, palette::border()),
+        egui::StrokeKind::Inside,
+    );
+
+    let dot = egui::pos2(rect.left() + 12.0, rect.center().y);
+
+    if running > 0 {
+        painter.circle_filled(dot, 3.0, palette::accent());
+    } else {
+        painter.circle_stroke(dot, 3.0, Stroke::new(1.25, palette::text_muted()));
+    };
+
+    painter.galley(
+        egui::pos2(rect.left() + 20.0, rect.center().y - galley.size().y / 2.0),
+        galley,
+        palette::text_secondary(),
+    );
+
+    response
 }

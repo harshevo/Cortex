@@ -88,6 +88,14 @@ impl Default for Details {
 }
 
 impl Details {
+    /// The panel, shown from the start when `visible`.
+    pub fn opened(visible: bool) -> Self {
+        Self {
+            visible,
+            ..Self::default()
+        }
+    }
+
     /// Takes in a finished reading and starts another when the one shown
     /// is missing, of another folder, old, or from before a run ended.
     /// Called on every frame, open or not.
@@ -600,8 +608,9 @@ fn legend(ui: &mut Ui, color: Color32, name: &str, tokens: &str, share: &str) {
         egui::StrokeKind::Inside,
     );
 
-    let share_width = 48.0;
-    let tokens_right = rect.right() - share_width - space::S;
+    // Without a share the tokens take its place at the right-hand end.
+    let share_width = if share.is_empty() { 0.0 } else { 48.0 + space::S };
+    let tokens_right = rect.right() - share_width;
 
     painter.text(
         egui::pos2(rect.right(), rect.center().y),
@@ -809,7 +818,7 @@ fn group(value: u64) -> String {
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
 
     for (index, digit) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index) % 3 == 0 {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
             out.push(',');
         }
 

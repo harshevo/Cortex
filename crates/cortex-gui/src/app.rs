@@ -206,7 +206,7 @@ impl CortexApp {
             confirming: None,
             approvals: VecDeque::new(),
             files: Files::opened(rehearsal.opens_files(), rehearsal.opens_file()),
-            details: Details::default(),
+            details: Details::opened(rehearsal.opens_details()),
             draft: String::new(),
             insights: Default::default(),
             attachments: Attachments::default(),
@@ -1433,6 +1433,16 @@ impl CortexApp {
                 self.save_settings();
             }
 
+            Some(settings_page::Action::Fonts(fonts)) => {
+                self.settings.interface_font = fonts.interface.clone();
+                self.settings.reply_font = fonts.reply.clone();
+                self.settings.code_font = fonts.code.clone();
+
+                theme::fonts::select(fonts);
+                theme::apply(ui.ctx());
+                self.save_settings();
+            }
+
             Some(settings_page::Action::Prepare) if self.can_prepare() => self.prepare(),
             Some(settings_page::Action::Prepare) => {}
 
@@ -1696,6 +1706,11 @@ impl CortexApp {
     }
     pub(crate) fn stop(&self) {
         self.engine.stop();
+    }
+    /// The folder whose background jobs go with this chat: its project,
+    /// or `None` for the demo, whose stand-in model cannot run jobs.
+    pub(crate) fn jobs_place(&self) -> Option<&Path> {
+        (!self.demo).then_some(self.place.as_path())
     }
 }
 

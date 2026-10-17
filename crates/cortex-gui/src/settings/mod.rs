@@ -226,6 +226,11 @@ pub struct Settings {
 
     /// The colour theme, by its name in `theme::palette::THEMES`.
     pub theme: String,
+
+    /// The typefaces, by name in `theme::fonts`.
+    pub interface_font: String,
+    pub reply_font: String,
+    pub code_font: String,
 }
 
 impl Default for Settings {
@@ -276,11 +281,23 @@ impl Default for Settings {
             browser_window: false,
             projects: Vec::new(),
             theme: crate::theme::palette::DEFAULT.to_string(),
+            interface_font: crate::theme::fonts::DEFAULT.to_string(),
+            reply_font: crate::theme::fonts::DEFAULT.to_string(),
+            code_font: crate::theme::fonts::DEFAULT.to_string(),
         }
     }
 }
 
 impl Settings {
+    /// The typefaces picked, as the theme takes them.
+    pub fn font_selection(&self) -> crate::theme::fonts::Selection {
+        crate::theme::fonts::Selection {
+            interface: self.interface_font.clone(),
+            reply: self.reply_font.clone(),
+            code: self.code_font.clone(),
+        }
+    }
+
     /// Reads the saved settings. A missing file means first use; a file
     /// that cannot be read is reported and replaced by the defaults.
     pub fn load() -> Self {
@@ -427,10 +444,22 @@ impl Settings {
     /// The same settings as the `cortex` command's own arguments, so the
     /// agent is built exactly as the command line would build it.
     pub fn model_args(&self) -> Result<ModelArgs> {
+        let arguments = std::iter::once("cortex".to_string()).chain(self.model_arguments());
+
+        let parsed = ModelOnly::try_parse_from(arguments)
+            .context("the saved settings are not ones the agent accepts")?;
+
+        Ok(parsed.model)
+    }
+
+    /// The settings as the `cortex` command's model arguments, without the
+    /// command's name: what a job runner started apart from the window is
+    /// given, so its agents are built as the window's are. The helper and
+    /// fallback models, which the window builds itself, are among them.
+    pub fn model_arguments(&self) -> Vec<String> {
         let current = self.current();
 
         let mut arguments: Vec<String> = vec![
-            "cortex".to_string(),
             "--provider".to_string(),
             self.provider.argument().to_string(),
             "--effort".to_string(),
@@ -494,10 +523,32 @@ impl Settings {
             arguments.extend(["--with".to_string(), capability.clone()]);
         }
 
-        let parsed = ModelOnly::try_parse_from(arguments)
-            .context("the saved settings are not ones the agent accepts")?;
+        arguments
+    }
 
-        Ok(parsed.model)
+    /// [`Self::model_arguments`] with the helper and fallback models, for
+    /// an agent built by the `cortex` command rather than by the window.
+    pub fn runner_arguments(&self) -> Vec<String> {
+        let current = self.current();
+        let model = current.model.trim();
+
+        let mut arguments = self.model_arguments();
+
+        let helper = current.helper.trim();
+
+        if !helper.is_empty() && helper != model {
+            arguments.extend(["--helper-model".to_string(), helper.to_string()]);
+        }
+
+        for fallback in &current.fallbacks {
+            let fallback = fallback.trim();
+
+            if !fallback.is_empty() && fallback != model {
+                arguments.extend(["--fallback-model".to_string(), fallback.to_string()]);
+            }
+        }
+
+        arguments
     }
 }
 
@@ -591,6 +642,28 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn a_job_runner_gets_the_helper_and_fallback_models_too() {
+        let mut settings = Settings::default();
+
+        settings.current_mut().helper = "small".to_string();
+        settings.current_mut().fallbacks = vec!["other".to_string(), String::new()];
+
+        let window = settings.model_arguments();
+        let runner = settings.runner_arguments();
+
+        assert!(!window.contains(&"--helper-model".to_string()));
+        assert!(runner.windows(2).any(|pair| pair == ["--helper-model", "small"]));
+        assert!(runner.windows(2).any(|pair| pair == ["--fallback-model", "other"]));
+        assert_eq!(runner.iter().filter(|arg| *arg == "--fallback-model").count(), 1);
+
+        let parsed = cortex_cli::commands::jobs::runner::parse_model_args(&runner).unwrap();
+
+        assert_eq!(parsed.helper_model.as_deref(), Some("small"));
+        assert_eq!(parsed.fallback_models, vec!["other".to_string()]);
+    }
+
     #[test]
     fn old_capabilities_are_removed_without_losing_provider_settings() {
         let mut settings: Settings = serde_json::from_str(r#"{"provider":"codex","capabilities":["memory","brain","gate","hope","lessons","priors"],"combine_memory":true,"remote_control":true}"#).unwrap();

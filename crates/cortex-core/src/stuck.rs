@@ -223,7 +223,9 @@ impl TrajectorySink for StuckDetector {
                 }
 
                 state.step_failures += 1;
-                state.causes.push(cause(tool, &result.output, result.is_error));
+                state
+                    .causes
+                    .push(cause(tool, &result.output, result.is_error));
 
                 let Some(signature) = state.calls.get(&result.call_id).cloned() else {
                     return;
@@ -263,7 +265,8 @@ impl Adviser for StuckDetector {
 
         state.close_step();
 
-        if state.pending.is_none() && state.reversals >= 2 && state.told.insert("reversals".into()) {
+        if state.pending.is_none() && state.reversals >= 2 && state.told.insert("reversals".into())
+        {
             state.pending = Some((
                 "You are undoing your own edits: changes you made earlier have been put back \
                  more than once. Stop editing and decide which version is right, and why, \
@@ -315,7 +318,12 @@ impl State {
 
         order
             .into_iter()
-            .map(|cause| (self.causes.iter().filter(|seen| **seen == cause).count(), cause))
+            .map(|cause| {
+                (
+                    self.causes.iter().filter(|seen| **seen == cause).count(),
+                    cause,
+                )
+            })
             .filter(|(count, _)| *count > 0)
             .max_by_key(|(count, _)| *count)
             .map_or(Cause::Unknown, |(_, cause)| cause)
@@ -548,9 +556,22 @@ mod tests {
 
     #[test]
     fn causes_are_told_apart() {
-        assert_eq!(cause("shell", "exit code: 127\nnpm: command not found", false), Cause::Environment);
-        assert_eq!(cause("edit_file", "old_string not found", true), Cause::Call);
-        assert_eq!(cause("shell", "exit code: 101\ntest result: FAILED. 3 passed", false), Cause::Task);
+        assert_eq!(
+            cause("shell", "exit code: 127\nnpm: command not found", false),
+            Cause::Environment
+        );
+        assert_eq!(
+            cause("edit_file", "old_string not found", true),
+            Cause::Call
+        );
+        assert_eq!(
+            cause(
+                "shell",
+                "exit code: 101\ntest result: FAILED. 3 passed",
+                false
+            ),
+            Cause::Task
+        );
     }
 
     #[test]

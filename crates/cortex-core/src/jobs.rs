@@ -134,6 +134,11 @@ pub struct Job {
     #[serde(default)]
     pub max_steps: Option<u32>,
 
+    /// The folder the agent works in, relative to the top of the
+    /// project, for a project that is one folder of a larger repository.
+    #[serde(default)]
+    pub folder: String,
+
     /// Where the agent works and on which branch; `None` when the project
     /// is not a repository and the job works in the project itself.
     #[serde(default)]
@@ -266,6 +271,7 @@ pub struct NewJob {
     pub depth: u32,
     pub auto_merge: bool,
     pub max_steps: Option<u32>,
+    pub folder: String,
 }
 
 /// The jobs of one project.
@@ -281,6 +287,7 @@ const STATE_FILE: &str = "state.json";
 const RUNNER_FILE: &str = "runner.json";
 const CONFIG_FILE: &str = "runner-config.json";
 const LOCK_FILE: &str = ".lock";
+const COUNTER_FILE: &str = "last-id";
 
 /// A lock older than this was left by a process that died holding it.
 const LOCK_STALE_AFTER: Duration = Duration::from_secs(10);
@@ -363,6 +370,15 @@ impl JobStore {
             ));
         }
 
+        let folder = new.folder.trim().trim_matches('/').to_string();
+
+        if Path::new(&folder)
+            .components()
+            .any(|part| !matches!(part, std::path::Component::Normal(_)))
+        {
+            return Err(format!("`{folder}` is not a folder inside the project"));
+        }
+
         let _lock = self.lock()?;
 
         let jobs = self.list();
@@ -391,12 +407,26 @@ impl JobStore {
             }
         }
 
+        // Numbers are never given twice, even after a job is removed, so
+        // a new job's branch never meets an old one's.
+        let counter = self.dir.join(COUNTER_FILE);
+
+        let last = fs::read_to_string(&counter)
+            .ok()
+            .and_then(|text| text.trim().parse::<u64>().ok())
+            .unwrap_or(0);
+
         let next = jobs
             .iter()
             .filter_map(|job| number_of(&job.id))
             .max()
             .unwrap_or(0)
+            .max(last)
             + 1;
+
+        write_atomically(&counter, next.to_string().as_bytes())
+            .map_err(|error| error.to_string())?;
+
 
         let title = match new.title.trim() {
             "" => crate_title(instruction),
@@ -413,6 +443,7 @@ impl JobStore {
             depth: new.depth,
             auto_merge: new.auto_merge,
             max_steps: new.max_steps,
+            folder,
             worktree: None,
             branch: None,
             base: None,
@@ -438,6 +469,8 @@ impl JobStore {
         };
 
         self.write(&job).map_err(|error| error.to_string())?;
+
+        hide_from_git(&self.root);
 
         Ok(job)
     }
@@ -953,6 +986,201 @@ pub fn project_root(path: &Path) -> PathBuf {
     }
 }
 
+/// One thing a job did, as its activity feed shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Activity {
+    pub ts_ms: u64,
+    pub kind: ActivityKind,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActivityKind {
+    /// The model said something.
+    Said,
+
+    /// A tool was called.
+    Tool,
+
+    /// A tool failed.
+    Failed,
+
+    /// The checks ran, or the run ended.
+    Milestone,
+}
+
+/// How much of the end of a log is read for its activity.
+const ACTIVITY_TAIL_BYTES: u64 = 512 * 1024;
+
+/// The latest `limit` things a job did, oldest first, from the end of its
+/// log at `path`.
+pub fn activity(path: &Path, limit: usize) -> Vec<Activity> {
+    use std::io::{BufRead, BufReader, Seek, SeekFrom};
+
+    #[derive(Deserialize)]
+    struct Line {
+        #[serde(default)]
+        ts_ms: u64,
+
+        #[serde(flatten)]
+        event: crate::trajectory::Event,
+    }
+
+    let Ok(mut file) = fs::File::open(path) else {
+        return Vec::new();
+    };
+
+    let length = file.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+    let start = length.saturating_sub(ACTIVITY_TAIL_BYTES);
+
+    if file.seek(SeekFrom::Start(start)).is_err() {
+        return Vec::new();
+    }
+
+    let mut lines = BufReader::new(file).lines();
+
+    // Reading from the middle of the file, the first line is likely cut.
+    if start > 0 {
+        lines.next();
+    }
+
+    let mut found = Vec::new();
+
+    for line in lines.map_while(Result::ok) {
+        let Ok(Line { ts_ms, event }) = serde_json::from_str::<Line>(&line) else {
+            continue;
+        };
+
+        if let Some((kind, text)) = describe(&event) {
+            found.push(Activity { ts_ms, kind, text });
+        }
+    }
+
+    let skip = found.len().saturating_sub(limit);
+
+    found.split_off(skip)
+}
+
+fn describe(event: &crate::trajectory::Event) -> Option<(ActivityKind, String)> {
+    use crate::trajectory::Event;
+
+    let line = |text: &str| -> String {
+        let first = text.lines().map(str::trim).find(|line| !line.is_empty()).unwrap_or("");
+
+        match first.chars().count() > 140 {
+            true => format!("{}…", first.chars().take(139).collect::<String>()),
+            false => first.to_string(),
+        }
+    };
+
+    match event {
+        Event::RunStarted { .. } => Some((ActivityKind::Milestone, "Started".to_string())),
+
+        Event::RunResumed { steps } => Some((
+            ActivityKind::Milestone,
+            format!("Resumed after step {steps}"),
+        )),
+
+        Event::ModelResponded { message, .. } => {
+            let text = message.text();
+
+            (!text.trim().is_empty()).then(|| (ActivityKind::Said, line(&text)))
+        }
+
+        Event::ToolStarted { call, .. } => {
+            let detail = ["path", "command", "query", "pattern", "title"]
+                .iter()
+                .find_map(|key| call.input.get(*key).and_then(serde_json::Value::as_str))
+                .map(|value| format!(" {}", line(value)))
+                .unwrap_or_default();
+
+            Some((ActivityKind::Tool, format!("{}{detail}", call.name)))
+        }
+
+        Event::ToolFinished { tool, result, .. } if result.is_error => Some((
+            ActivityKind::Failed,
+            format!("{tool} failed: {}", line(&result.output)),
+        )),
+
+        Event::VerificationRan { passed, .. } => Some((
+            ActivityKind::Milestone,
+            match passed {
+                true => "Checks passed".to_string(),
+                false => "Checks failed".to_string(),
+            },
+        )),
+
+        Event::UserInterjected { text, .. } => Some((ActivityKind::Milestone, line(text))),
+
+        Event::RunFinished { outcome, steps, .. } => Some((
+            ActivityKind::Milestone,
+            format!("Finished ({}) after {steps} steps", outcome_label(*outcome)),
+        )),
+
+        _ => None,
+    }
+}
+
+/// How an outcome is named in a job's record.
+pub fn outcome_label(outcome: crate::agent::Outcome) -> String {
+    serde_json::to_value(outcome)
+        .ok()
+        .and_then(|value| value.as_str().map(|text| text.replace('_', " ")))
+        .unwrap_or_else(|| format!("{outcome:?}"))
+}
+
+/// Keeps Cortex's own folder out of `git status` in the repository at
+/// `root`, through its `info/exclude`, which no commit carries.
+fn hide_from_git(root: &Path) {
+    let found = Command::new("git")
+        .args(["rev-parse", "--path-format=absolute", "--git-path", "info/exclude"])
+        .current_dir(root)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .filter(|output| output.status.success());
+
+    let Some(found) = found else {
+        return;
+    };
+
+    let path = PathBuf::from(String::from_utf8_lossy(&found.stdout).trim());
+    let current = fs::read_to_string(&path).unwrap_or_default();
+
+    if current.lines().any(|line| matches!(line.trim(), "/.cortex/" | ".cortex/" | ".cortex" | "/.cortex")) {
+        return;
+    }
+
+    if let Some(folder) = path.parent() {
+        let _ = fs::create_dir_all(folder);
+    }
+
+    let separator = if current.is_empty() || current.ends_with('\n') { "" } else { "\n" };
+
+    let _ = fs::write(&path, format!("{current}{separator}/.cortex/\n"));
+}
+
+/// Where `path` is inside its repository's checkout, as a relative
+/// folder: empty at the top, or when it is not in a repository.
+pub fn folder_in_repository(path: &Path) -> String {
+    Command::new("git")
+        .args(["rev-parse", "--show-prefix"])
+        .current_dir(path)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .trim_end_matches('/')
+                .to_string()
+        })
+        .unwrap_or_default()
+}
+
 /// `3`, `#3`, `job 3` and `job-3` all name `job-3`.
 pub fn normalize_id(id: &str) -> String {
     let id = id.trim();
@@ -1026,6 +1254,20 @@ mod tests {
 
         assert_eq!(ids, vec!["job-1", "job-2"]);
         assert!(store.add(new("x", &["job-9"])).is_err());
+        assert!(
+            store
+                .add(NewJob {
+                    folder: "../out".to_string(),
+                    ..new("x", &[])
+                })
+                .is_err()
+        );
+
+        // A removed job's number is not given again.
+        store.update("job-2", |job| job.status = JobStatus::Failed).unwrap();
+        store.remove("job-2").unwrap();
+
+        assert_eq!(store.add(new("again", &[])).unwrap().id, "job-3");
         assert!(store.add(new("  ", &[])).is_err());
         assert!(
             store
@@ -1141,6 +1383,40 @@ mod tests {
         let store = JobStore::for_project(folder.path());
 
         assert!(store.get("../x").is_none());
+    }
+
+    #[test]
+    fn the_activity_of_a_log_is_read_from_its_end() {
+        use crate::trajectory::{Event, JsonlSink, TrajectorySink};
+
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("log.jsonl");
+        let sink = JsonlSink::create(&path).unwrap();
+
+        sink.record(&Event::RunStarted {
+            instruction: "x".into(),
+            provider: "p".into(),
+            model: "m".into(),
+        });
+
+        for step in 1..=5 {
+            sink.record(&Event::ToolStarted {
+                step,
+                call: crate::message::ToolCall {
+                    id: step.to_string(),
+                    name: "read_file".into(),
+                    input: serde_json::json!({ "path": format!("{step}.rs") }),
+                },
+            });
+        }
+
+        let shown = activity(&path, 3);
+
+        assert_eq!(shown.len(), 3);
+        assert_eq!(shown[2].text, "read_file 5.rs");
+        assert_eq!(shown[2].kind, ActivityKind::Tool);
+        assert!(activity(&folder.path().join("none"), 3).is_empty());
+        assert_eq!(outcome_label(crate::agent::Outcome::StepLimit), "step limit");
     }
 
     #[test]

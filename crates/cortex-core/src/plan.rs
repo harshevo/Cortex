@@ -388,7 +388,7 @@ mod tests {
         let plan = plan(json!([
             { "step": "Parse", "status": "completed", "id": "parse" },
             { "step": "Lex", "status": "pending" },
-            { "step": "Check", "status": "pending", "depends_on": ["parse"] },
+            { "step": "Check", "status": "pending", "id": "check", "depends_on": ["parse"] },
             { "step": "Emit", "status": "pending", "depends_on": ["2", "check"] },
         ]));
 

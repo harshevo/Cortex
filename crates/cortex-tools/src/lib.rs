@@ -15,6 +15,7 @@ mod git;
 mod github;
 mod impact;
 mod input;
+mod jobs;
 mod list_files;
 mod mcp;
 mod move_file;
@@ -43,6 +44,7 @@ pub use impact::Impact;
 pub use find_references::FindReferences;
 pub use git::Git;
 pub use github::{Github, GithubWrite};
+pub use jobs::{Jobs, ManageJob, SpawnJob};
 pub use list_files::ListFiles;
 pub use mcp::add_mcp_tools;
 pub use move_file::MoveFile;
@@ -71,6 +73,9 @@ pub fn default_registry() -> ToolRegistry {
     registry.register(MoveFile);
     registry.register(Git);
     registry.register(UpdatePlan);
+    registry.register(SpawnJob);
+    registry.register(Jobs);
+    registry.register(ManageJob);
     registry.register(SaveNote);
     registry.register(DropNote);
 

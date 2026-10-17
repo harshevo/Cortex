@@ -89,7 +89,11 @@ impl Budget {
             .filter(|max| !max.is_zero())
             .map(|max| spent.elapsed.as_secs_f64() / max.as_secs_f64());
 
-        tokens.into_iter().chain(cost).chain(time).fold(0.0, f64::max)
+        tokens
+            .into_iter()
+            .chain(cost)
+            .chain(time)
+            .fold(0.0, f64::max)
     }
 }
 
