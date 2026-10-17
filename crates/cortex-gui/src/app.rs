@@ -662,6 +662,41 @@ impl CortexApp {
         }
     }
 
+    /// Takes what was pasted. Text is handed back as the event that puts
+    /// it in the field with the keyboard; pictures and files are attached
+    /// to the next instruction.
+    pub fn paste(&mut self, pasted: crate::clipboard::Pasted) -> Option<egui::Event> {
+        use crate::clipboard::Pasted;
+
+        if let Pasted::Text(text) = pasted {
+            return Some(egui::Event::Paste(text));
+        }
+
+        if self.composer_mode() != Mode::Ready {
+            self.live.notice(
+                "Files can be attached once Cortex is ready for an instruction.",
+                Tone::Muted,
+            );
+            return None;
+        }
+
+        let refused = match pasted {
+            Pasted::Files(paths) => self.attachments.enqueue(&paths),
+            Pasted::Picture {
+                width,
+                height,
+                rgba,
+            } => self.attachments.enqueue_pixels(width, height, rgba),
+            Pasted::Text(_) => None,
+        };
+
+        if let Some(why) = refused {
+            self.live.notice(&why, Tone::Bad);
+        }
+
+        None
+    }
+
     fn composer_mode(&self) -> Mode {
         if self.loading_session.is_some() {
             return if self.live.running {
@@ -1195,11 +1230,7 @@ impl CortexApp {
             && !self.attachments.loading()
             && let Some(instruction) = self.rehearsal.take_instruction()
         {
-            let images = self
-                .attachments
-                .drain(..)
-                .map(|attachment| attachment.image)
-                .collect();
+            let (instruction, images) = self.attachments.take_message(&instruction);
 
             self.submit(&instruction, images);
         }

@@ -8,9 +8,11 @@ mod app;
 mod args;
 mod attachment;
 mod background;
+mod clipboard;
 mod engine;
 mod environment;
 mod format;
+mod menu_bar;
 mod performance;
 mod rehearsal;
 mod session;
@@ -141,10 +143,13 @@ fn run() -> Result<()> {
 
             let engine = Engine::start(&handle, creation.egui_ctx.clone());
 
-            Ok(Box::new(workspace::Workspace::new(
-                CortexApp::new(engine, settings, open, demo, rehearsal),
-                split,
-            )))
+            Ok(Box::new(
+                workspace::Workspace::new(
+                    CortexApp::new(engine, settings, open, demo, rehearsal),
+                    split,
+                )
+                .with_menu_bar(menu_bar::MenuBar::install(&creation.egui_ctx)),
+            ))
         }),
     )
     .map_err(|error| anyhow!("the window could not be opened: {error}"))

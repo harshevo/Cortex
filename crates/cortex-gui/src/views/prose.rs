@@ -59,10 +59,6 @@ const MAX_TINTED_BYTES: usize = 60_000;
 
 const CELL_PADDING: egui::Vec2 = vec2(10.0, 6.0);
 
-/// A sentence with the letters of ordinary English, for finding how
-/// wide a line of so many characters is.
-const SAMPLE: &str = "the quick brown fox jumps over the lazy dog and runs ";
-
 #[derive(Debug, Clone, PartialEq)]
 enum Block {
     Paragraph(String),
@@ -185,16 +181,6 @@ impl Setting<'_> {
             typeset::direct(self.context, job)
         }
     }
-}
-
-/// The widest a line of prose should run: about [`theme::MEASURE_CHARS`]
-/// characters of the body font.
-pub fn measure(context: &egui::Context) -> f32 {
-    let sample = typeset::layout(context, typeset::hash(("measure", SAMPLE)), || {
-        LayoutJob::simple_singleline(SAMPLE.to_string(), theme::body(), palette::text())
-    });
-
-    sample.size().x / SAMPLE.chars().count() as f32 * theme::MEASURE_CHARS
 }
 
 /// Splits `text` into blocks and lays each out no wider than `width`.
@@ -2056,27 +2042,5 @@ mod tests {
             guess > real * 0.5 && guess < real * 2.0,
             "{guess} for {real}"
         );
-    }
-
-    #[test]
-    fn a_line_of_prose_is_about_eighty_characters() {
-        let context = context();
-        let width = measure(&context);
-
-        let line = "word ".repeat(40);
-        let (job, _) = inline(&line, &body_format());
-
-        let mut job = job;
-        job.wrap = TextWrapping::wrap_at_width(width);
-
-        let galley = typeset::direct(&context, job);
-        let longest = galley
-            .rows
-            .iter()
-            .map(|row| row.glyphs.len())
-            .max()
-            .unwrap();
-
-        assert!((66..=90).contains(&longest), "{longest} characters");
     }
 }

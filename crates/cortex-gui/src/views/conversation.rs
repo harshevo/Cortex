@@ -98,9 +98,6 @@ enum Kind {
     Assistant,
     Notice,
 
-    /// A run of context put in front of an instruction.
-    Briefings,
-
     /// A run of tool calls, with the wordless steps between them.
     Tools,
     Checks,
@@ -542,7 +539,7 @@ pub fn show(
 
     let widths = Widths {
         column,
-        prose: (column - GUTTER).min(prose::measure(&context)).max(40.0),
+        prose: (column - GUTTER).max(40.0),
         bubble: (column * USER_SHARE - 2.0 * BUBBLE_PADDING.x).max(40.0),
     };
 
@@ -860,7 +857,6 @@ fn draw_unit(
     match (unit.kind, &unit.ready) {
         (Kind::Nothing, _) => {}
 
-        (Kind::Briefings, _) => briefings(ui, items),
         (Kind::Tools, _) => tool_card::show_group(ui, items, live, show_thinking),
 
         (Kind::User, Some(Ready::Bubble(galley))) => {
@@ -973,10 +969,12 @@ fn jump_button(ui: &mut Ui, window: egui::Rect, unseen: bool) -> bool {
 
 /// Which unit begins at `start`, and where it ends.
 fn next_unit(items: &[Item], start: usize) -> (usize, Kind) {
+    // The context the engine put in front of an instruction goes to the
+    // model but is not drawn.
     let briefed = briefings_end(items, start);
 
     if briefed > start {
-        return (briefed, Kind::Briefings);
+        return (briefed, Kind::Nothing);
     }
 
     let end = activity_end(items, start);
@@ -1277,56 +1275,6 @@ fn briefings_end(items: &[Item], start: usize) -> usize {
         .iter()
         .position(|item| !matches!(item, Item::Briefing { .. }))
         .map_or(items.len(), |length| start + length)
-}
-
-/// The context put in front of an instruction, as one quiet line naming
-/// where each piece came from. A name unfolds into what it brought.
-fn briefings(ui: &mut Ui, items: &mut [Item]) {
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing.x = 6.0;
-
-        ui.label(
-            RichText::new("Context")
-                .font(theme::small())
-                .color(palette::text_muted()),
-        );
-
-        for item in items.iter_mut() {
-            let Item::Briefing { source, open, .. } = item else {
-                continue;
-            };
-
-            let color = if *open {
-                palette::text()
-            } else {
-                palette::text_secondary()
-            };
-
-            let name = RichText::new(source.replace('_', " "))
-                .font(theme::small())
-                .color(color);
-
-            let response = ui
-                .add(egui::Label::new(name).sense(Sense::click()))
-                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .on_hover_text("What the engine showed the model before your message");
-
-            if response.clicked() {
-                *open = !*open;
-            }
-        }
-    });
-
-    for item in items.iter() {
-        if let Item::Briefing {
-            source,
-            text,
-            open: true,
-        } = item
-        {
-            code_block(ui, &source.replace('_', " "), text, MAX_CHECK_OUTPUT_HEIGHT);
-        }
-    }
 }
 
 fn empty_state(ui: &mut Ui) {
@@ -1806,10 +1754,13 @@ fn run_summary(
     duration_ms: u64,
     model: &str,
 ) {
+    // A normal finish says nothing; only a run that ended badly is flagged.
     let (ending, color) = match (outcome, verified) {
-        (Outcome::Completed, Some(true)) => ("Finished and verified", palette::good()),
         (Outcome::Completed, Some(false)) => ("Finished, checks still failing", palette::warning()),
-        (Outcome::Completed, None) => ("Finished", palette::good()),
+        (Outcome::Completed, _) => {
+            ui.add_space(space::S);
+            return;
+        }
         (Outcome::StepLimit, _) => ("Stopped at the step limit", palette::warning()),
         (Outcome::Truncated, _) => ("Stopped: the response was cut off", palette::warning()),
         (Outcome::Refused, _) => ("Stopped: the model declined", palette::bad()),
@@ -1838,13 +1789,7 @@ fn run_summary(
         );
     });
 
-    let (line, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 9.0), Sense::hover());
-
-    ui.painter().hline(
-        line.x_range(),
-        line.center().y,
-        Stroke::new(1.0, palette::border()),
-    );
+    ui.add_space(space::S);
 }
 
 pub fn approval_card(ui: &mut Ui, request: &ApprovalRequest) -> Option<Decision> {

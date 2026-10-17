@@ -1,6 +1,7 @@
 use eframe::egui::{self, CornerRadius, Layout, Sense, Stroke, UiBuilder};
 
 use crate::app::CortexApp;
+use crate::menu_bar::{self, Command, MenuBar};
 use crate::theme::palette;
 use crate::views::icons::{self, Icon};
 use crate::views::menu;
@@ -34,6 +35,7 @@ enum PaneAction {
 
 pub struct Workspace {
     chats: Vec<(u64, CortexApp)>,
+    menu_bar: MenuBar,
     performance: crate::performance::Performance,
     active: u64,
     secondary: Option<u64>,
@@ -65,6 +67,7 @@ impl Workspace {
     pub fn new(app: CortexApp, split: bool) -> Self {
         let mut workspace = Self {
             chats: vec![(1, app)],
+            menu_bar: MenuBar::default(),
             performance: crate::performance::Performance::default(),
             active: 1,
             secondary: None,
@@ -82,6 +85,11 @@ impl Workspace {
             workspace.choose_split(Split::Columns);
         }
         workspace
+    }
+
+    pub fn with_menu_bar(mut self, menu_bar: MenuBar) -> Self {
+        self.menu_bar = menu_bar;
+        self
     }
 
     fn index(&self, id: u64) -> usize {
@@ -380,6 +388,23 @@ impl Workspace {
 impl eframe::App for Workspace {
     fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
         self.chats[0].1.raw_input_hook(ctx, input);
+
+        for command in self.menu_bar.take() {
+            if command != Command::Paste {
+                input.events.extend(menu_bar::events(command));
+                continue;
+            }
+
+            // Text goes to whichever field has the keyboard; pictures and
+            // files to the chat in front.
+            let active = self.index(self.active);
+
+            if let Some(pasted) = crate::clipboard::read()
+                && let Some(event) = self.chats[active].1.paste(pasted)
+            {
+                input.events.push(event);
+            }
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {

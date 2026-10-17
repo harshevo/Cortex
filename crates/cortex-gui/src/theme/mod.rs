@@ -67,13 +67,9 @@ pub mod size {
 /// Height of a line of running text, as a multiple of its size.
 pub const LINE_HEIGHT: f32 = 1.5;
 
-/// Longest line of the assistant's prose, in characters of the body
-/// font. Past about eighty the eye loses its place on the way back.
-pub const MEASURE_CHARS: f32 = 78.0;
-
-/// Widest the conversation column grows; beyond this, long lines are
-/// tiring to read.
-pub const COLUMN_WIDTH: f32 = 760.0;
+/// Widest the conversation column grows; wider windows leave equal
+/// margins either side, so the chat sits in the middle.
+pub const COLUMN_WIDTH: f32 = 800.0;
 
 /// Sets the app up to draw: its fonts, and the colours of the theme in
 /// use.

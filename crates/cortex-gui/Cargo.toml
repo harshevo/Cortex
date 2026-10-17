@@ -16,11 +16,13 @@ cortex-providers.workspace = true
 cortex-retrieval.workspace = true
 
 anyhow.workspace = true
+arboard = "3.6"
 async-trait.workspace = true
 clap.workspace = true
 dirs = "7"
 eframe = { version = "0.36", default-features = false, features = ["default_fonts", "wgpu"] }
 keyring = "4"
+pdf-extract = "0.12"
 base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
 reqwest.workspace = true
@@ -29,6 +31,11 @@ serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 tokio.workspace = true
+
+# On macOS Cmd+V is taken by an Edit menu, so that pasting pictures and
+# files works: the window library only passes on pasted text.
+[target.'cfg(target_os = "macos")'.dependencies]
+muda = { version = "0.20", default-features = false }
 
 # Linux has two windowing systems and no file dialog of its own: the
 # window library is built for both, and folders are picked through the

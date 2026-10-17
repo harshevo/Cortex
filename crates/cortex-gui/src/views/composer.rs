@@ -8,7 +8,7 @@ use cortex_core::Image;
 
 use super::icons::{self, Icon};
 use super::menu::{self, Opens};
-use crate::attachment::{self, Attachment, Attachments};
+use crate::attachment::{self, Attachment, Attachments, Content};
 use crate::theme::{self, palette};
 
 const BUTTON_SIZE: f32 = crate::theme::control::LARGE;
@@ -19,8 +19,8 @@ const CONTINUE_WIDTH: f32 = 84.0;
 /// Side of a picture waiting in the composer.
 const THUMBNAIL_SIZE: f32 = 52.0;
 
-/// Sent as the instruction when only pictures were attached.
-const PICTURES_ONLY: &str = "Look at the attached picture.";
+/// Sent as the instruction when only files were attached.
+const ATTACHMENTS_ONLY: &str = "Look at the attached files.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -128,15 +128,19 @@ pub fn show(
         .inner_margin(egui::Margin::symmetric(16, 12))
         .show(ui, |ui| {
             thumbnails(ui, attachments);
-            if attachments.loading() { ui.horizontal(|ui| { ui.spinner(); ui.label("Preparing pictures…"); }); }
+            if attachments.loading() {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("Preparing attachments…");
+                });
+            }
 
             ui.horizontal(|ui| {
                 if takes_pictures
-                    && icons::button(ui, Icon::Plus, "Attach pictures, or drop them here", false).clicked()
+                    && icons::button(ui, Icon::Plus, "Attach pictures or documents, drop them here, or paste them", false).clicked()
                 {
                     let chosen = rfd::FileDialog::new()
-                        .set_title("Attach pictures")
-                        .add_filter("Pictures", &attachment::EXTENSIONS)
+                        .set_title("Attach files")
                         .pick_files()
                         .unwrap_or_default();
 
@@ -250,16 +254,13 @@ pub fn show(
 
                     if wants_to_send && can_send && action.is_none() {
                         let instruction = match draft.trim() {
-                            "" => PICTURES_ONLY,
+                            "" => ATTACHMENTS_ONLY,
                             written => written,
                         };
 
-                        let images = attachments
-                            .drain(..)
-                            .map(|attachment| attachment.image)
-                            .collect();
+                        let (instruction, images) = attachments.take_message(instruction);
 
-                        action = Some(Action::Send(instruction.to_string(), images));
+                        action = Some(Action::Send(instruction, images));
 
                         draft.clear();
                     }
@@ -382,7 +383,12 @@ fn thumbnails(ui: &mut Ui, attachments: &mut Vec<Attachment>) {
             let (rect, response) =
                 ui.allocate_exact_size(egui::vec2(THUMBNAIL_SIZE, THUMBNAIL_SIZE), Sense::hover());
 
-            match attachment::texture(ui.ctx(), &attachment.image) {
+            let texture = match &attachment.content {
+                Content::Picture(image) => attachment::texture(ui.ctx(), image),
+                Content::Document(_) => None,
+            };
+
+            match texture {
                 Some(texture) => attachment::paint_cover(ui, rect, &texture, 8),
 
                 None => {
@@ -392,6 +398,10 @@ fn thumbnails(ui: &mut Ui, attachments: &mut Vec<Attachment>) {
                         palette::raised(),
                     );
                 }
+            }
+
+            if let Content::Document(_) = attachment.content {
+                document_tile(ui, rect, &attachment.name);
             }
 
             ui.painter().rect_stroke(
@@ -441,6 +451,44 @@ fn thumbnails(ui: &mut Ui, attachments: &mut Vec<Attachment>) {
     if let Some(index) = removed {
         attachments.remove(index);
     }
+}
+
+/// A document's kind, large, over its name.
+fn document_tile(ui: &Ui, rect: egui::Rect, name: &str) {
+    let kind = std::path::Path::new(name)
+        .extension()
+        .map(|extension| extension.to_string_lossy().to_uppercase())
+        .filter(|extension| extension.len() <= 5)
+        .unwrap_or_else(|| "TEXT".to_string());
+
+    ui.painter().text(
+        rect.center() - egui::vec2(0.0, 6.0),
+        egui::Align2::CENTER_CENTER,
+        kind,
+        theme::strong(13.0),
+        palette::text_secondary(),
+    );
+
+    let room = rect.shrink2(egui::vec2(6.0, 4.0));
+    let galley = ui.painter().layout(
+        name.to_string(),
+        theme::small(),
+        palette::text_muted(),
+        room.width(),
+    );
+
+    // One line of the name, cut at the tile's edge.
+    let line = galley.rows.first().map_or(0.0, |row| row.height());
+    ui.painter()
+        .with_clip_rect(egui::Rect::from_min_max(
+            egui::pos2(room.left(), room.bottom() - line),
+            room.right_bottom(),
+        ))
+        .galley(
+            egui::pos2(room.left(), room.bottom() - line),
+            galley,
+            palette::text_muted(),
+        );
 }
 
 /// Puts the caret after the last character, as if the text had been typed.

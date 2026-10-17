@@ -194,7 +194,7 @@ impl Session {
                 self.busy_with(Activity::Preparing);
 
                 self.items.push(Item::User {
-                    text: instruction.clone(),
+                    text: crate::attachment::shown(instruction),
                     images: Vec::new(),
                 });
             }
