@@ -132,7 +132,7 @@ impl DemoProvider {
         match step {
             0 => Turn::tools(
                 "I'll start by looking at how the project is laid out.",
-                vec![("list_files", json!({ "path": "." }))],
+                vec![plan(0), ("list_files", json!({ "path": "." }))],
             ),
 
             // The second call guesses at a file that does not exist, as
@@ -166,10 +166,13 @@ impl DemoProvider {
             Turn::tools(
                 "Found it. `average_moves` loops over `range(1, window)`, which covers only \
                  `window - 1` price changes but divides by `window`. The last change is dropped.",
-                vec![(
-                    "edit_file",
-                    json!({ "path": RSI_FILE, "old_text": BUGGY_LINE, "new_text": FIXED_LINE }),
-                )],
+                vec![
+                    plan(1),
+                    (
+                        "edit_file",
+                        json!({ "path": RSI_FILE, "old_text": BUGGY_LINE, "new_text": FIXED_LINE }),
+                    ),
+                ],
             )
         } else {
             Turn::tools(
@@ -187,9 +190,38 @@ impl DemoProvider {
                  Allow the edit and ask again to fix it.",
             )
         } else {
-            Turn::tools("Now the test, to check the fix.", vec![run_the_test()])
+            Turn::tools(
+                "Now the test, to check the fix.",
+                vec![plan(2), run_the_test()],
+            )
         }
     }
+}
+
+/// The plan, with the steps before `step` done and `step` under way.
+fn plan(step: usize) -> (&'static str, Value) {
+    let steps: Vec<Value> = ["Find the bug", "Fix the window loop", "Run the RSI test"]
+        .iter()
+        .enumerate()
+        .map(|(index, text)| {
+            let status = match index.cmp(&step) {
+                std::cmp::Ordering::Less => "completed",
+                std::cmp::Ordering::Equal => "in_progress",
+                std::cmp::Ordering::Greater => "pending",
+            };
+
+            json!({ "step": text, "status": status })
+        })
+        .collect();
+
+    (
+        "update_plan",
+        json!({
+            "goal": "Fix the RSI average",
+            "steps": steps,
+            "acceptance": ["tests/test_rsi.py passes"],
+        }),
+    )
 }
 
 fn run_the_test() -> (&'static str, Value) {

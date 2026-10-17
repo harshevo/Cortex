@@ -893,6 +893,7 @@ dependencies = [
  "cortex-core",
  "cortex-providers",
  "cortex-retrieval",
+ "cortex-skills",
  "dirs",
  "eframe",
  "image",

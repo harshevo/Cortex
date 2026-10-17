@@ -5,11 +5,12 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use cortex_cli::args::ModelArgs;
-use cortex_cli::commands::prepare;
+use cortex_cli::commands::{checkpoints, prepare};
 use cortex_core::agent::close_unanswered_calls;
+use cortex_core::notes::Notes;
 use cortex_core::{
-    Agent, AgentError, Approver, AutoApprove, Block, Image, Inbox, Message, ModelProvider,
-    Progress, ToolContext, Workspace, replay,
+    Agent, AgentError, Approver, Block, Checkpoints, Image, Inbox, Message, ModelProvider,
+    Progress, ToolContext, Workspace, replay, worktree,
 };
 use tempfile::TempDir;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -247,6 +248,63 @@ pub async fn run(
 
                 outbox.send(get_ready(running).await);
             }
+
+            Command::Restore(id) => {
+                let Some(running) = &running else {
+                    outbox.send(not_set_up());
+
+                    continue;
+                };
+
+                outbox.send(Update::Said(restore(running, id).await));
+            }
+
+            Command::Checkpoints => {
+                let Some(running) = &running else {
+                    outbox.send(not_set_up());
+
+                    continue;
+                };
+
+                outbox.send(Update::Said(list_checkpoints(running).await));
+            }
+
+            Command::Diff => {
+                let Some(running) = &running else {
+                    outbox.send(not_set_up());
+
+                    continue;
+                };
+
+                outbox.send(Update::Said(diff(running).await));
+            }
+
+            Command::Notes => {
+                let Some(running) = &running else {
+                    outbox.send(not_set_up());
+
+                    continue;
+                };
+
+                outbox.send(Update::Said(list_notes(running)));
+            }
+
+            Command::Worktree(name) => {
+                let Some(running) = &running else {
+                    outbox.send(not_set_up());
+
+                    continue;
+                };
+
+                match worktree::create(running.workspace.root(), &name).await {
+                    Ok(made) => outbox.send(Update::WorktreeMade((made.path, made.branch))),
+
+                    Err(error) => outbox.send(Update::Said((
+                        format!("The worktree could not be made: {error}"),
+                        true,
+                    ))),
+                }
+            }
         }
     }
 }
@@ -441,6 +499,104 @@ async fn compact(running: &Running, conversation: &mut Vec<Message>) -> (String,
     }
 }
 
+/// Puts the project back to checkpoint `id`, or to the one saved before
+/// the last run changed anything, and says what came of it.
+async fn restore(running: &Running, id: Option<String>) -> (String, bool) {
+    let checkpoints = Checkpoints::for_project(running.workspace.root());
+
+    let id = match id {
+        Some(id) => id,
+
+        None => match checkpoints::latest_before_a_run(&checkpoints).await {
+            Ok(id) => id,
+            Err(error) => return (format!("Nothing to undo: {error}."), true),
+        },
+    };
+
+    match checkpoints.restore(&id).await {
+        Ok(restored) => (checkpoints::describe(&restored), false),
+        Err(error) => (format!("The project was left as it was: {error}"), true),
+    }
+}
+
+async fn list_checkpoints(running: &Running) -> (String, bool) {
+    let checkpoints = Checkpoints::for_project(running.workspace.root());
+
+    match checkpoints.list(10).await {
+        Ok(list) if list.is_empty() => (
+            "No checkpoints yet. One is saved before a run first changes the project.".to_string(),
+            false,
+        ),
+
+        Ok(list) => {
+            let lines: Vec<String> = list
+                .iter()
+                .map(|checkpoint| format!("{}  {}", checkpoint.short(), checkpoint.label))
+                .collect();
+
+            (
+                format!(
+                    "Checkpoints, newest first. /restore <id> goes back to one.\n\n{}",
+                    lines.join("\n")
+                ),
+                false,
+            )
+        }
+
+        Err(error) => (format!("The checkpoints could not be read: {error}"), true),
+    }
+}
+
+/// The files changed since the latest checkpoint.
+async fn diff(running: &Running) -> (String, bool) {
+    let checkpoints = Checkpoints::for_project(running.workspace.root());
+
+    let latest = match checkpoints::latest_before_a_run(&checkpoints).await {
+        Ok(id) => id,
+        Err(_) => return ("No checkpoint to compare with yet.".to_string(), false),
+    };
+
+    match checkpoints.diff_stat(&latest).await {
+        Ok(stat) if stat.trim().is_empty() => (
+            "Nothing has changed since the last checkpoint.".to_string(),
+            false,
+        ),
+        Ok(stat) => (
+            format!("Changed since the last checkpoint:\n\n{}", stat.trim_end()),
+            false,
+        ),
+        Err(error) => (format!("The changes could not be listed: {error}"), true),
+    }
+}
+
+/// The notes kept about the project, newest last, with those whose
+/// files have changed since marked.
+fn list_notes(running: &Running) -> (String, bool) {
+    let notes = Notes::for_project(running.workspace.root());
+    let all = notes.all();
+
+    if all.is_empty() {
+        return (
+            "No notes yet. Cortex keeps them as it learns the project.".to_string(),
+            false,
+        );
+    }
+
+    let lines: Vec<String> = all
+        .iter()
+        .map(|note| {
+            let stale = match notes.stale_files(note).is_empty() {
+                true => "",
+                false => " · stale",
+            };
+
+            format!("#{} {}{stale} — {}", note.id, note.kind.label(), note.text)
+        })
+        .collect();
+
+    (lines.join("\n"), false)
+}
+
 fn not_set_up() -> Update {
     Update::RunFailed {
         error: "The agent is not set up yet. Check Settings.".to_string(),
@@ -545,6 +701,11 @@ async fn carry_out(
                         | Command::Open(_)
                         | Command::Prepare
                         | Command::Compact
+                        | Command::Restore(_)
+                        | Command::Checkpoints
+                        | Command::Diff
+                        | Command::Notes
+                        | Command::Worktree(_)
                         | Command::Launch(_),
                     ) => {}
                 },
@@ -574,7 +735,7 @@ fn build_agent(
     outbox: &Outbox,
 ) -> Agent {
     let approver: Arc<dyn Approver> = if blueprint.approve_everything {
-        Arc::new(AutoApprove)
+        Arc::new(WindowApprover::trusting(outbox.clone()))
     } else {
         Arc::new(WindowApprover::new(outbox.clone()))
     };
@@ -585,6 +746,10 @@ fn build_agent(
     };
 
     let setup = blueprint.setup;
+
+    for line in &setup.report {
+        outbox.send(Update::Said((line.clone(), false)));
+    }
 
     let mut agent = Agent::new(blueprint.provider, setup.tools, context, blueprint.config)
         .with_sink(Arc::new(WindowSink::new(outbox.clone())))
@@ -606,6 +771,22 @@ fn build_agent(
 
     for adviser in setup.advisers {
         agent = agent.with_adviser(adviser);
+    }
+
+    if let Some(hooks) = setup.hooks {
+        agent = agent.with_hooks(hooks);
+    }
+
+    if let Some(helper) = blueprint.models.helper {
+        agent = agent.with_helper(helper);
+    }
+
+    if let Some(stronger) = blueprint.models.escalation {
+        agent = agent.with_escalation(stronger);
+    }
+
+    if let Some(recovery) = setup.recovery {
+        agent = agent.with_recovery(recovery);
     }
 
     agent

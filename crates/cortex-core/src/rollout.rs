@@ -398,6 +398,11 @@ impl Agent {
             stream_observer: None,
             inbox: None,
             heard: Arc::default(),
+            helper: self.helper.clone(),
+            hooks: self.hooks.clone(),
+            escalation: None,
+            recovery: None,
+            decisions: self.decisions.clone(),
         }
     }
 }
@@ -516,8 +521,7 @@ async fn make_attempt(mut agent: Agent, plan: Plan, attempt: u32, strategy: Stra
         let diff = changes::render(&candidate.changes, MAX_REVIEWED_DIFF_CHARS);
         let report = last_assistant_text(&candidate.conversation);
 
-        let reviewed =
-            review::review(agent.provider.as_ref(), &plan.instruction, &diff, &report).await;
+        let reviewed = review::review(agent.helper(), &plan.instruction, &diff, &report).await;
 
         if let Ok(Some(review)) = reviewed {
             candidate.usage += review.usage;
@@ -567,7 +571,7 @@ fn describe_choice(winner: &Candidate, made: u32) -> String {
 ///
 /// On macOS the files are cloned, which takes no extra disk space until
 /// one of them is changed. Links are copied as links.
-async fn copy_project(root: &Path, sandbox: Sandbox) -> io::Result<(TempDir, Workspace)> {
+pub async fn copy_project(root: &Path, sandbox: Sandbox) -> io::Result<(TempDir, Workspace)> {
     let copy = tempfile::Builder::new()
         .prefix("cortex-attempt-")
         .tempdir()?;

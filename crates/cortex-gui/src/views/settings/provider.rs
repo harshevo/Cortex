@@ -40,6 +40,7 @@ pub fn show(ui: &mut Ui, form: &mut Form, filter: &Filter) -> Option<Action> {
 
     if provider != before {
         form.models = form.draft.current().models.join("\n");
+        form.fallbacks = form.draft.current().fallbacks.join(", ");
         form.key.clear();
         form.notice = None;
     }

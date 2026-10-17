@@ -33,6 +33,15 @@ pub enum Icon {
 
     /// A tick: the chosen one of a list.
     Check,
+
+    /// A git branch: two commits on a line and one off to the side.
+    Branch,
+
+    /// A window with its right-hand column marked off.
+    PanelRight,
+
+    /// A square with a plus over a minus: changes to files.
+    Diff,
 }
 
 pub fn activity_dot(ui: &Ui, centre: Pos2) {
@@ -268,6 +277,42 @@ pub fn paint(ui: &Ui, centre: Pos2, icon: Icon, color: Color32) {
         Icon::Check => {
             line(at(-0.6, 0.0), at(-0.15, 0.45));
             line(at(-0.15, 0.45), at(0.65, -0.45));
+        }
+
+        Icon::Branch => {
+            let dot = ICON_SIZE * 0.14;
+
+            painter.circle_stroke(at(-0.5, -0.7), dot, stroke);
+            painter.circle_stroke(at(-0.5, 0.7), dot, stroke);
+            painter.circle_stroke(at(0.55, -0.45), dot, stroke);
+
+            line(at(-0.5, -0.5), at(-0.5, 0.5));
+            line(at(0.55, -0.25), at(0.55, -0.05));
+            line(at(0.55, -0.05), at(-0.45, 0.45));
+        }
+
+        Icon::PanelRight => {
+            painter.rect_stroke(
+                Rect::from_min_max(at(-0.95, -0.75), at(0.95, 0.75)),
+                CornerRadius::same(crate::theme::radius::XS),
+                stroke,
+                egui::StrokeKind::Middle,
+            );
+
+            line(at(0.3, -0.75), at(0.3, 0.75));
+        }
+
+        Icon::Diff => {
+            painter.rect_stroke(
+                Rect::from_min_max(at(-0.85, -0.85), at(0.85, 0.85)),
+                CornerRadius::same(crate::theme::radius::XS),
+                stroke,
+                egui::StrokeKind::Middle,
+            );
+
+            line(at(-0.35, -0.3), at(0.35, -0.3));
+            line(at(0.0, -0.62), at(0.0, 0.02));
+            line(at(-0.35, 0.45), at(0.35, 0.45));
         }
     }
 }

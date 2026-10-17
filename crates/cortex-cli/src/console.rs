@@ -31,6 +31,32 @@ impl TrajectorySink for ConsoleSink {
                 println!("{DIM}  carrying on after step {steps}{RESET}");
             }
 
+            Event::CheckpointSaved { id, error, .. } => match error {
+                None => println!(
+                    "{DIM}  checkpoint {} saved; `cortex undo` restores it{RESET}",
+                    &id[..id.len().min(8)]
+                ),
+                Some(error) => println!("{DIM}  no checkpoint: {error}{RESET}"),
+            },
+
+            Event::ApprovalDecided {
+                tool,
+                approved: false,
+                ..
+            } => println!("{RED}  {tool}: refused{RESET}"),
+
+            Event::ApprovalDecided { .. } => {}
+
+            Event::Escalated { to, reason, .. } => {
+                println!("{DIM}  moved to {to}: {}{RESET}", one_line(reason));
+            }
+
+            Event::BudgetReached { share, cost, .. } => {
+                let cost = cost.map_or(String::new(), |cost| format!(", ${cost:.2}"));
+
+                println!("{RED}  {:.0}% of the budget used{cost}{RESET}", share * 100.0);
+            }
+
             Event::ModelResponded { message, .. } => {
                 let text = message.text();
 
@@ -250,4 +276,22 @@ fn one_line(text: &str) -> String {
     let clipped: String = flat.chars().take(MAX_SUMMARY_CHARS).collect();
 
     format!("{clipped}...")
+}
+
+/// Every event as one line of JSON on standard output, for scripts.
+pub struct JsonLinesSink;
+
+impl TrajectorySink for JsonLinesSink {
+    fn record(&self, event: &Event) {
+        use std::io::Write;
+
+        let Ok(line) = serde_json::to_string(event) else {
+            return;
+        };
+
+        let mut out = std::io::stdout().lock();
+
+        let _ = writeln!(out, "{line}");
+        let _ = out.flush();
+    }
 }

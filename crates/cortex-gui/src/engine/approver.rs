@@ -34,11 +34,24 @@ impl WindowApprover {
             approve_all: AtomicBool::new(false),
         }
     }
+
+    /// Approves everything without asking, except what cannot be undone
+    /// from a checkpoint or reaches beyond the project.
+    pub fn trusting(outbox: Outbox) -> Self {
+        Self {
+            outbox,
+            approve_all: AtomicBool::new(true),
+        }
+    }
 }
 #[async_trait]
 impl Approver for WindowApprover {
     async fn approve(&self, request: &ApprovalRequest) -> bool {
-        if self.approve_all.load(Ordering::Relaxed) {
+        // Approving everything in advance does not cover a destructive
+        // call: that is asked about each time.
+        let destructive = cortex_core::destructive(request).is_some();
+
+        if self.approve_all.load(Ordering::Relaxed) && !destructive {
             return true;
         }
         let (reply, answer) = oneshot::channel();
@@ -49,7 +62,9 @@ impl Approver for WindowApprover {
         match answer.await.unwrap_or(Decision::Deny) {
             Decision::Allow => true,
             Decision::AlwaysAllow => {
-                self.approve_all.store(true, Ordering::Relaxed);
+                if !destructive {
+                    self.approve_all.store(true, Ordering::Relaxed);
+                }
                 true
             }
             Decision::Deny => false,

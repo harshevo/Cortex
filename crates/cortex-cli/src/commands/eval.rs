@@ -42,6 +42,7 @@ async fn run(args: EvalRunArgs) -> Result<ExitCode> {
     let location = SessionLocation {
         directory: args.out.join("state"),
         scope: suite.name.clone(),
+        project: None,
     };
 
     let mut setup = features::setup(&args.model, location).await?;
@@ -50,6 +51,9 @@ async fn run(args: EvalRunArgs) -> Result<ExitCode> {
     // off. Holding an adviser out of some runs would water down the side
     // that has it.
     setup.extras.experiment = None;
+
+    // Each task runs in a throwaway copy, which needs no undoing.
+    setup.extras.checkpoints = false;
 
     let options = RunOptions {
         label: args.label,
@@ -182,6 +186,7 @@ async fn locate(args: EvalLocateArgs) -> Result<ExitCode> {
     let location = SessionLocation {
         directory: scratch.path().to_path_buf(),
         scope: suite.name.clone(),
+        project: None,
     };
 
     let setup = features::setup(&args.model, location).await?;

@@ -53,6 +53,78 @@ pub enum Command {
     /// Show whether the advisers help: for each one, how runs went with
     /// it speaking and with it held out.
     Effect(EffectArgs),
+
+    /// Undo the last run's changes to the project. Every run saves the
+    /// project before it first changes anything.
+    Undo(CheckpointArgs),
+
+    /// List the saved states of the project, or restore one.
+    Checkpoints(CheckpointArgs),
+
+    /// Read a run's log: what it did, where it differs from another run,
+    /// and whether its tool calls still give the same output.
+    Trace(TraceArgs),
+
+    /// Show what the project's runs have taught: how each kind of task
+    /// goes, which notes help, and workflows to keep as skills.
+    Learned(LearnedArgs),
+}
+
+#[derive(Args)]
+pub struct CheckpointArgs {
+    /// The project. Defaults to the current directory.
+    #[arg(long, default_value = ".")]
+    pub dir: PathBuf,
+
+    /// The checkpoint to restore, by the start of its id. Without it,
+    /// `checkpoints` lists them and `undo` restores the latest.
+    pub id: Option<String>,
+}
+
+#[derive(Args)]
+pub struct TraceArgs {
+    /// A session log (`.jsonl`).
+    pub log: PathBuf,
+
+    /// Which run of the log, from 1. Defaults to the last.
+    #[arg(long)]
+    pub run: Option<usize>,
+
+    /// Another log to compare with: where the two runs part ways.
+    #[arg(long, value_name = "LOG")]
+    pub compare: Option<PathBuf>,
+
+    /// Which run of the other log. Defaults to the last.
+    #[arg(long)]
+    pub other_run: Option<usize>,
+
+    /// List every tool call.
+    #[arg(long)]
+    pub steps: bool,
+
+    /// Make the run's tool calls again in a copy of the project and show
+    /// the first whose output differs.
+    #[arg(long)]
+    pub replay: bool,
+
+    /// The project, for `--replay`. Defaults to the current directory.
+    #[arg(long, default_value = ".")]
+    pub dir: PathBuf,
+}
+
+#[derive(Args)]
+pub struct LearnedArgs {
+    /// The project. Defaults to the current directory.
+    #[arg(long, default_value = ".")]
+    pub dir: PathBuf,
+
+    /// Save a candidate skill to `.cortex/skills`.
+    #[arg(long, value_name = "NAME")]
+    pub accept: Option<String>,
+
+    /// Stop offering a candidate skill.
+    #[arg(long, value_name = "NAME")]
+    pub dismiss: Option<String>,
 }
 
 #[derive(Args)]
@@ -242,6 +314,44 @@ pub struct ModelArgs {
     #[arg(long)]
     pub no_records: bool,
 
+    /// Do not save the project before a run changes it. Without
+    /// checkpoints a run cannot be undone with `/undo`.
+    #[arg(long)]
+    pub no_checkpoints: bool,
+
+    /// Do not start the MCP servers listed in `~/.cortex/mcp.json`.
+    #[arg(long)]
+    pub no_mcp: bool,
+
+    /// A model of the same provider for the questions put beside a run:
+    /// the review, compaction summaries and lessons. Usually a cheaper one.
+    #[arg(long, value_name = "MODEL")]
+    pub helper_model: Option<String>,
+
+    /// A model of the same provider to carry on with when the main one is
+    /// rate limited or unavailable. May be given more than once; tried in
+    /// order.
+    #[arg(long = "fallback-model", value_name = "MODEL")]
+    pub fallback_models: Vec<String>,
+
+    /// A stronger model of the same provider to move to when a run keeps
+    /// failing after it was told to change approach.
+    #[arg(long, value_name = "MODEL")]
+    pub escalation_model: Option<String>,
+
+    /// Stop a run once it has cost this many US dollars, at list price.
+    /// It is told to wrap up at 80%.
+    #[arg(long, value_name = "USD")]
+    pub max_cost: Option<f64>,
+
+    /// Stop a run once it has used this many tokens, in and out.
+    #[arg(long, value_name = "TOKENS")]
+    pub max_tokens: Option<u64>,
+
+    /// Stop a run after this many minutes of work.
+    #[arg(long, value_name = "MINUTES")]
+    pub max_minutes: Option<f64>,
+
     /// Maximum number of model calls per instruction.
     #[arg(long, default_value_t = 60)]
     pub max_steps: u32,
@@ -263,6 +373,13 @@ pub struct SessionArgs {
     /// Run commands and edit files without asking first.
     #[arg(long)]
     pub yes: bool,
+
+    /// For scripts and CI: write every event of the run to standard
+    /// output as one JSON object per line, then a final `result` line,
+    /// instead of the console view. Approvals that cannot be asked are
+    /// refused unless `--yes` is given.
+    #[arg(long)]
+    pub json: bool,
 
     #[command(flatten)]
     pub model: ModelArgs,

@@ -81,7 +81,11 @@ impl Replay {
 
     fn apply(&mut self, event: &Event) {
         match event {
-            Event::AdviserObserved { .. } => {},
+            Event::AdviserObserved { .. }
+            | Event::CheckpointSaved { .. }
+            | Event::ApprovalDecided { .. }
+            | Event::Escalated { .. }
+            | Event::BudgetReached { .. } => {}
             Event::RunStarted { instruction, .. } => {
                 self.settle();
 

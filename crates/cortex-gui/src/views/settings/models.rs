@@ -29,6 +29,36 @@ pub fn show(ui: &mut Ui, form: &mut Form, filter: &Filter) -> Option<Action> {
         },
     );
 
+    rows::row(
+        ui,
+        filter,
+        "Helper model",
+        "Reviews, reflection and compaction. Empty uses the model in use.",
+        |ui| {
+            rows::text_field(ui, &mut form.draft.current_mut().helper, "Same model");
+        },
+    );
+
+    rows::row(
+        ui,
+        filter,
+        "Escalation model",
+        "Takes over a run that keeps failing. Empty never switches.",
+        |ui| {
+            rows::text_field(ui, &mut form.draft.current_mut().escalation, "None");
+        },
+    );
+
+    rows::row(
+        ui,
+        filter,
+        "Fallback models",
+        "Tried in order when the model in use is rate limited or down. Comma separated.",
+        |ui| {
+            rows::text_field(ui, &mut form.fallbacks, "None");
+        },
+    );
+
     if provider.takes_effort() {
         rows::row(
             ui,

@@ -56,6 +56,10 @@ const BUILT_IN: &[(&str, &str)] = &[
         "pr-comments",
         include_str!("../skills/pr-comments/SKILL.md"),
     ),
+    (
+        "resolve-conflicts",
+        include_str!("../skills/resolve-conflicts/SKILL.md"),
+    ),
     ("review", include_str!("../skills/review/SKILL.md")),
     (
         "security-review",

@@ -41,7 +41,8 @@ pub struct Place<'a> {
 }
 
 /// Draws the bar. `files_open` is whether the files of the project are
-/// shown on the right; the button at the right-hand end switches it.
+/// shown on the right, and `details_open` whether the details panel is;
+/// the two buttons at the right-hand end switch them.
 #[allow(clippy::too_many_arguments)]
 pub fn show(
     ui: &mut Ui,
@@ -50,6 +51,7 @@ pub fn show(
     section: &mut Section,
     sidebar_open: &mut bool,
     files_open: &mut bool,
+    details_open: &mut bool,
     sidebar_width: f32,
     steps: Steps,
     workspace_menu: impl FnOnce(&mut Ui),
@@ -134,6 +136,14 @@ pub fn show(
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = space::XS;
             ui.add_space(space::XS);
+
+            toggle(
+                ui,
+                Icon::PanelRight,
+                details_open,
+                "Hide the details  ⇧⌘D",
+                "Show the details  ⇧⌘D",
+            );
 
             {
                 let tooltip = if *files_open {
@@ -440,4 +450,22 @@ fn badge(ui: &mut Ui, label: &str) {
 
     ui.painter()
         .galley(rect.min + egui::vec2(6.0, 2.0), text, palette::warning());
+}
+
+/// A button that switches a panel, outlined while the panel is shown.
+fn toggle(ui: &mut Ui, icon: Icon, open: &mut bool, hide: &str, show: &str) {
+    let response = icons::button(ui, icon, if *open { hide } else { show }, false);
+
+    if *open {
+        ui.painter().rect_stroke(
+            response.rect,
+            CornerRadius::same(radius::M),
+            Stroke::new(1.0, palette::border()),
+            egui::StrokeKind::Inside,
+        );
+    }
+
+    if response.clicked() {
+        *open = !*open;
+    }
 }

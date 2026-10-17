@@ -8,12 +8,16 @@ use serde::{Deserialize, Serialize};
 use tokio::task::JoinSet;
 
 use crate::advice::Adviser;
+use crate::approval::{ApprovalRequest, Approver};
+use crate::budget::{self, Budget, Spent};
 use crate::briefing::{self, Briefing, ContextSource};
 use crate::changes::{self, Originals};
+use crate::checkpoint::Checkpoints;
 use crate::compact::CompactConfig;
 use crate::context::{self, MaskConfig, PruneConfig};
 use crate::effect::{self, Experiment, ExperimentConfig};
 use crate::error::{AgentError, ProviderError};
+use crate::hooks::ToolHooks;
 use crate::inbox::{self, Inbox};
 use crate::message::{Block, Image, Message, Role, ToolCall, ToolResult};
 use crate::provider::{ModelProvider, ModelRequest, ModelResponse, StopReason, StreamObserver};
@@ -21,6 +25,7 @@ use crate::reflect;
 use crate::repeat;
 use crate::review;
 use crate::rollout::RolloutConfig;
+use crate::stuck::{StuckDetector, Verdict};
 use crate::tool::{ToolContext, ToolRegistry};
 use crate::trajectory::{Event, TrajectorySink};
 use crate::usage::Usage;
@@ -82,6 +87,14 @@ pub struct Extras {
     /// that runs with and without its advice can be compared. See
     /// [`crate::effect`].
     pub experiment: Option<ExperimentConfig>,
+
+    /// Save the project before a run first changes anything, so the run
+    /// can be undone. See [`crate::checkpoint`].
+    pub checkpoints: bool,
+
+    /// How many tokens, or how much money, one run may spend. See
+    /// [`crate::budget`].
+    pub budget: Option<Budget>,
 }
 
 /// The diff shown to the reviewer is shortened to this.
@@ -128,6 +141,13 @@ pub enum Outcome {
 
     /// The provider declined the request.
     Refused,
+
+    /// The run kept failing after it was told to change approach, and
+    /// was stopped: another attempt was unlikely to do better.
+    Stuck,
+
+    /// The run used its budget of tokens or money.
+    OverBudget,
 }
 
 #[derive(Debug, Clone)]
@@ -159,6 +179,46 @@ pub struct Agent {
     /// they sign their advice with. An adviser has no name until it
     /// speaks, so this is how a run's hold-outs can be listed up front.
     pub(crate) heard: Arc<Mutex<BTreeSet<String>>>,
+
+    /// The model for the questions put beside the run (the review, the
+    /// summary of a compaction, the lessons). The run's own model when
+    /// `None`.
+    pub(crate) helper: Option<Arc<dyn ModelProvider>>,
+
+    /// Commands run before and after each tool call.
+    pub(crate) hooks: Option<Arc<dyn ToolHooks>>,
+
+    /// A stronger model to move to when the run is stuck.
+    pub(crate) escalation: Option<Arc<dyn ModelProvider>>,
+
+    /// What says whether the run is stuck.
+    pub(crate) recovery: Option<Arc<StuckDetector>>,
+
+    /// Approval decisions not yet reported.
+    pub(crate) decisions: Arc<Mutex<Vec<Decision>>>,
+}
+
+/// One approval decision: the tool, what it asked, and the answer.
+pub(crate) type Decision = (String, String, bool);
+
+/// Passes questions on and keeps the answers, so they are in the log.
+struct RecordingApprover {
+    inner: Arc<dyn Approver>,
+    decisions: Arc<Mutex<Vec<Decision>>>,
+}
+
+#[async_trait::async_trait]
+impl Approver for RecordingApprover {
+    async fn approve(&self, request: &ApprovalRequest) -> bool {
+        let approved = self.inner.approve(request).await;
+
+        self.decisions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push((request.tool.clone(), request.summary.clone(), approved));
+
+        approved
+    }
 }
 
 impl Agent {
@@ -168,6 +228,16 @@ impl Agent {
         context: ToolContext,
         config: AgentConfig,
     ) -> Self {
+        let decisions = Arc::new(Mutex::new(Vec::new()));
+
+        let context = ToolContext {
+            approver: Arc::new(RecordingApprover {
+                inner: context.approver,
+                decisions: decisions.clone(),
+            }),
+            ..context
+        };
+
         Self {
             provider,
             tools,
@@ -180,7 +250,48 @@ impl Agent {
             stream_observer: None,
             inbox: None,
             heard: Arc::default(),
+            helper: None,
+            hooks: None,
+            escalation: None,
+            recovery: None,
+            decisions,
         }
+    }
+
+    /// The model to move to when the run is stuck.
+    pub fn with_escalation(mut self, provider: Arc<dyn ModelProvider>) -> Self {
+        self.escalation = Some(provider);
+
+        self
+    }
+
+    /// Lets `detector` move the run to the escalation model, or stop it,
+    /// when it keeps failing. The detector should also be one of the
+    /// agent's sinks and advisers.
+    pub fn with_recovery(mut self, detector: Arc<StuckDetector>) -> Self {
+        self.recovery = Some(detector);
+
+        self
+    }
+
+    /// Puts the questions beside the run (review, compaction summaries,
+    /// lessons) to `helper`, usually a cheaper model than the run's own.
+    pub fn with_helper(mut self, helper: Arc<dyn ModelProvider>) -> Self {
+        self.helper = Some(helper);
+
+        self
+    }
+
+    /// Runs `hooks` before and after each tool call.
+    pub fn with_hooks(mut self, hooks: Arc<dyn ToolHooks>) -> Self {
+        self.hooks = Some(hooks);
+
+        self
+    }
+
+    /// The model the questions beside the run go to.
+    pub(crate) fn helper(&self) -> &dyn ModelProvider {
+        self.helper.as_deref().unwrap_or(self.provider.as_ref())
     }
 
     /// Lets the person speak to a run in progress: what is put in `inbox`
@@ -361,7 +472,7 @@ impl Agent {
 
             let call_started = Instant::now();
 
-            let response = match self.ask(request).await {
+            let response = match self.ask(request, progress.gate.escalated).await {
                 Ok(response) => response,
 
                 // The step did not happen, so it is not counted, and the
@@ -375,6 +486,9 @@ impl Agent {
 
             progress.steps = step;
             progress.usage += response.usage;
+
+            let elapsed = progress.elapsed + started.elapsed();
+            let budget = self.spend(step, &response.usage, elapsed, &mut progress.gate);
 
             self.emit(Event::ModelResponded {
                 step,
@@ -403,8 +517,16 @@ impl Agent {
 
             conversation.push(response.message);
 
+            if budget == Some(true) {
+                break Outcome::OverBudget;
+            }
+
             match response.stop_reason {
                 StopReason::ToolUse => {
+                    if calls.iter().any(|call| self.tools.is_mutating(&call.name)) {
+                        self.checkpoint(step, &mut progress.gate).await;
+                    }
+
                     for call in &calls {
                         if self.tools.is_mutating(&call.name) {
                             progress.gate.changed = true;
@@ -414,6 +536,8 @@ impl Agent {
 
                     let results = self.run_tools(step, &calls, conversation).await;
 
+                    self.report_decisions(step);
+
                     let mut message = Message::tool_results(results);
 
                     message
@@ -421,7 +545,19 @@ impl Agent {
                         .extend(self.advice(step, progress.gate.experiment.as_ref()).await);
                     message.blocks.extend(self.interjections(step));
 
+                    if let Some(text) = progress.gate.notice.take() {
+                        message.blocks.push(Block::Text { text });
+                    }
+
+                    let stop = self.recover(step, &mut progress.gate);
+
                     conversation.push(message);
+
+                    if let Some(reason) = stop {
+                        conversation.push(Message::assistant_text(format!("Stopped: {reason}")));
+
+                        break Outcome::Stuck;
+                    }
                 }
 
                 StopReason::Paused => {}
@@ -506,7 +642,7 @@ impl Agent {
         let started = Instant::now();
 
         let learned = reflect::lessons(
-            self.provider.as_ref(),
+            self.helper(),
             &progress.gate.instruction,
             conversation,
             outcome,
@@ -525,6 +661,37 @@ impl Agent {
             usage,
             duration_ms: started.elapsed().as_millis() as u64,
         });
+    }
+
+    /// Saves the project before the run's first change, once per run. A
+    /// checkpoint that cannot be saved costs the run nothing but the
+    /// chance to undo it, and says so in the log.
+    async fn checkpoint(&self, step: u32, gate: &mut Gate) {
+        if !self.config.extras.checkpoints || gate.checkpointed {
+            return;
+        }
+
+        gate.checkpointed = true;
+
+        let checkpoints = Checkpoints::for_project(self.context.workspace.root());
+
+        let event = match checkpoints.save(&gate.instruction).await {
+            Ok(checkpoint) => Event::CheckpointSaved {
+                step,
+                id: checkpoint.id,
+                label: checkpoint.label,
+                error: None,
+            },
+
+            Err(error) => Event::CheckpointSaved {
+                step,
+                id: String::new(),
+                label: String::new(),
+                error: Some(error),
+            },
+        };
+
+        self.emit(event);
     }
 
     /// The review of finished work against the request. Called when the
@@ -558,8 +725,7 @@ impl Agent {
         let diff = changes::render(&changed, MAX_REVIEWED_DIFF_CHARS);
         let report = last_assistant_text(conversation);
 
-        let reviewed =
-            review::review(self.provider.as_ref(), &gate.instruction, &diff, &report).await;
+        let reviewed = review::review(self.helper(), &gate.instruction, &diff, &report).await;
 
         let review = reviewed.ok().flatten()?;
 
@@ -578,15 +744,107 @@ impl Agent {
         feedback
     }
 
-    async fn ask(&self, request: ModelRequest<'_>) -> Result<ModelResponse, ProviderError> {
+    /// The model the run's steps go to.
+    fn model(&self, escalated: bool) -> &Arc<dyn ModelProvider> {
+        match (&self.escalation, escalated) {
+            (Some(stronger), true) => stronger,
+            _ => &self.provider,
+        }
+    }
+
+    async fn ask(
+        &self,
+        request: ModelRequest<'_>,
+        escalated: bool,
+    ) -> Result<ModelResponse, ProviderError> {
+        let provider = self.model(escalated);
+
         match &self.stream_observer {
-            Some(observer) => {
-                self.provider
-                    .complete_streaming(request, observer.as_ref())
-                    .await
+            Some(observer) => provider.complete_streaming(request, observer.as_ref()).await,
+            None => provider.complete(request).await,
+        }
+    }
+
+    /// Adds a call to what the run has spent, and says what to do about
+    /// the budget: `Some(true)` to stop, `Some(false)` to warn.
+    fn spend(&self, step: u32, usage: &Usage, elapsed: Duration, gate: &mut Gate) -> Option<bool> {
+        let budget = self.config.extras.budget.as_ref().filter(|budget| budget.is_set())?;
+
+        gate.spent.elapsed = elapsed;
+
+        let model = self.model(gate.escalated);
+        gate.spent
+            .add(&budget.prices, model.name(), model.model(), usage);
+
+        let share = budget.share(&gate.spent);
+
+        let over = share >= 1.0;
+        let warn = share >= budget::WARN_AT && !gate.budget_warned;
+
+        if !over && !warn {
+            return None;
+        }
+
+        gate.budget_warned = true;
+
+        self.emit(Event::BudgetReached {
+            step,
+            share,
+            tokens: gate.spent.tokens,
+            cost: gate.spent.cost,
+        });
+
+        if !over {
+            gate.notice = Some(budget::warning(share));
+        }
+
+        Some(over)
+    }
+
+    /// Reports the approval decisions made since the last call.
+    fn report_decisions(&self, step: u32) {
+        let decisions = std::mem::take(
+            &mut *self
+                .decisions
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        );
+
+        for (tool, summary, approved) in decisions {
+            self.emit(Event::ApprovalDecided {
+                step,
+                tool,
+                summary,
+                approved,
+            });
+        }
+    }
+
+    /// Asks the detector what to do about the run. `Some(reason)` stops it.
+    fn recover(&self, step: u32, gate: &mut Gate) -> Option<String> {
+        let detector = self.recovery.as_ref()?;
+
+        match detector.verdict() {
+            Verdict::Carry => None,
+
+            Verdict::Escalate(reason) => {
+                if let Some(stronger) = &self.escalation
+                    && !gate.escalated
+                {
+                    gate.escalated = true;
+
+                    self.emit(Event::Escalated {
+                        step,
+                        from: self.provider.model().to_string(),
+                        to: stronger.model().to_string(),
+                        reason,
+                    });
+                }
+
+                None
             }
 
-            None => self.provider.complete(request).await,
+            Verdict::Stop(reason) => Some(reason),
         }
     }
 
@@ -812,14 +1070,19 @@ impl Agent {
                 });
             }
 
-            let finished = match group {
-                [call] => vec![timed_dispatch(&self.tools, call, &self.context).await],
-                _ => self.run_together(group).await,
-            };
+            let finished = self.dispatch_group(group).await;
 
             for (call, (mut result, duration_ms)) in group.iter().zip(finished) {
                 if self.config.fold_repeats && !self.tools.is_mutating(&call.name) {
                     repeat::fold(conversation, call, &mut result);
+                }
+
+                if let Some(hooks) = &self.hooks
+                    && let Some(said) = hooks.after(call, &result, &self.context.workspace).await
+                {
+                    result
+                        .output
+                        .push_str(&format!("\n\nHook feedback: {said}"));
                 }
 
                 self.emit(Event::ToolFinished {
@@ -834,6 +1097,54 @@ impl Agent {
         }
 
         results
+    }
+
+    /// Runs one group of calls, after asking the hooks whether each may
+    /// run. A call a hook stops is answered with the hook's reason.
+    async fn dispatch_group(&self, group: &[ToolCall]) -> Vec<(ToolResult, u64)> {
+        let Some(hooks) = &self.hooks else {
+            return match group {
+                [call] => vec![timed_dispatch(&self.tools, call, &self.context).await],
+                _ => self.run_together(group).await,
+            };
+        };
+
+        let mut stopped = Vec::with_capacity(group.len());
+
+        for call in group {
+            stopped.push(hooks.before(call, &self.context.workspace).await);
+        }
+
+        let allowed: Vec<ToolCall> = group
+            .iter()
+            .zip(&stopped)
+            .filter(|(_, stopped)| stopped.is_none())
+            .map(|(call, _)| call.clone())
+            .collect();
+
+        let mut ran = match allowed.as_slice() {
+            [] => Vec::new(),
+            [call] => vec![timed_dispatch(&self.tools, call, &self.context).await],
+            _ => self.run_together(&allowed).await,
+        }
+        .into_iter();
+
+        group
+            .iter()
+            .zip(stopped)
+            .map(|(call, stopped)| match stopped {
+                Some(reason) => (
+                    ToolResult {
+                        call_id: call.id.clone(),
+                        output: format!("Stopped by a hook: {reason}"),
+                        is_error: true,
+                        images: Vec::new(),
+                    },
+                    0,
+                ),
+                None => ran.next().expect("one result per allowed call"),
+            })
+            .collect()
     }
 
     /// Splits `calls` into runs of read-only calls and single mutating ones.
@@ -1071,6 +1382,21 @@ pub(crate) struct Gate {
 
     /// Which advisers stay silent in this run.
     pub(crate) experiment: Option<Experiment>,
+
+    /// The project was saved before the run's first change.
+    checkpointed: bool,
+
+    /// The run has moved to the escalation model.
+    pub(crate) escalated: bool,
+
+    /// What the run has spent, for its budget.
+    spent: Spent,
+
+    /// The run has been told most of its budget is gone.
+    budget_warned: bool,
+
+    /// Something to tell the model with the next results.
+    notice: Option<String>,
 }
 
 impl Gate {

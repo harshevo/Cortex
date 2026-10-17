@@ -15,13 +15,16 @@ use crate::session::history::{self, PastSession};
 use crate::session::{Session, Tone};
 use crate::settings::Settings;
 use crate::theme::{self, palette};
+use crate::views::commands::{self, Builtin};
 use crate::views::composer::{self, Mode};
 use crate::views::conversation::{self, ChatView};
+use crate::views::details::{self as details_view, Details};
 use crate::views::files::Files;
+use crate::views::inspector::{self, Inspector};
 use crate::views::settings::Form;
 use crate::views::sidebar::{self, Shelf};
 use crate::views::stats_strip::{self, Change, Reading};
-use crate::views::{Section, View, settings as settings_page, top_bar, typeset};
+use crate::views::{Section, View, settings as settings_page, tasks, top_bar, typeset};
 
 /// Low enough that its buttons sit on a line with the window's own.
 const TOP_BAR_HEIGHT: f32 = 32.0;
@@ -29,7 +32,13 @@ const SIDEBAR_WIDTH: f32 = 272.0;
 const SIDEBAR_MIN_WIDTH: f32 = 200.0;
 const SIDEBAR_MAX_WIDTH: f32 = 440.0;
 
+const DETAILS_ID: &str = "details";
+const DETAILS_WIDTH: f32 = 300.0;
+const DETAILS_MIN_WIDTH: f32 = 240.0;
+const DETAILS_MAX_WIDTH: f32 = 460.0;
+
 const FILES_WIDTH: f32 = 264.0;
+const INSPECTOR_WIDTH: f32 = 280.0;
 const FILES_WIDTH_WITH_FILE: f32 = 640.0;
 const FILES_MIN_WIDTH: f32 = 180.0;
 const FILES_MAX_WIDTH: f32 = 1100.0;
@@ -98,6 +107,10 @@ pub struct CortexApp {
     /// The files of the project, shown on the right.
     files: Files,
 
+    /// Where the agent works, how full the context is and what changed,
+    /// on the far right.
+    details: Details,
+
     /// The instruction being typed.
     draft: String,
 
@@ -116,6 +129,22 @@ pub struct CortexApp {
 
     /// The settings page, while it is open.
     form: Option<Form>,
+
+    /// The slash commands, and the folder whose skills are among them.
+    commands: Vec<commands::Entry>,
+    commands_for: Option<PathBuf>,
+
+    /// The task list lists every step, not only the current one.
+    tasks_open: bool,
+
+    /// The task list was put away with `/tasks`.
+    tasks_hidden: bool,
+
+    /// The run and what was learned, on the right.
+    inspector: Inspector,
+
+    /// List prices, for what a run has cost.
+    prices: cortex_core::PriceTable,
 
     rehearsal: Rehearsal,
     requested_session: Option<(PathBuf, Option<PathBuf>)>,
@@ -177,12 +206,19 @@ impl CortexApp {
             confirming: None,
             approvals: VecDeque::new(),
             files: Files::opened(rehearsal.opens_files(), rehearsal.opens_file()),
+            details: Details::default(),
             draft: String::new(),
             insights: Default::default(),
             attachments: Attachments::default(),
             queued: Vec::new(),
             live_log: None,
             form: None,
+            commands: Vec::new(),
+            commands_for: None,
+            tasks_open: true,
+            tasks_hidden: false,
+            inspector: Inspector::default(),
+            prices: cortex_core::PriceTable::at_home(),
             rehearsal,
             requested_session: None,
             requested_delete: None,
@@ -376,10 +412,25 @@ impl CortexApp {
                 }
 
                 // One that arrives after the next run began is too late.
-                Update::Compacted((text, failed)) => {
+                Update::Compacted((text, failed)) | Update::Said((text, failed)) => {
                     let tone = if failed { Tone::Bad } else { Tone::Muted };
 
                     self.live.notice(&text, tone);
+                }
+
+                Update::WorktreeMade((folder, branch)) => {
+                    self.live.notice(
+                        &format!("Worktree on {branch} · {}", folder.display()),
+                        Tone::Muted,
+                    );
+
+                    self.settings.add_project(&folder);
+                    self.save_settings();
+                    self.refresh_sessions();
+
+                    if !self.live.running {
+                        self.requested_session = Some((folder, None));
+                    }
                 }
 
                 Update::Prepared { text, failed } => {
@@ -746,6 +797,25 @@ impl CortexApp {
             egui::containers::panel::PanelState::load(ui.ctx(), ui.id().with(id))
                 .map_or(width + 16.0, |state| state.size().x)
         });
+
+        let panel_width = |id: &str, width: f32| {
+            egui::containers::panel::PanelState::load(ui.ctx(), ui.id().with(id))
+                .map_or(width, |state| state.size().x)
+        };
+
+        // Every panel on the right is under the bar's right-hand end.
+        let right_width = [
+            files_width,
+            self.details
+                .visible
+                .then(|| panel_width(DETAILS_ID, DETAILS_WIDTH + 24.0)),
+            self.inspector
+                .visible
+                .then(|| panel_width("inspector", INSPECTOR_WIDTH + 32.0)),
+        ]
+        .into_iter()
+        .flatten()
+        .reduce(|total, width| total + width);
         // The bar is not a strip of its own: it is the top of whatever is
         // under it, so it takes the chat's colour.
         let frame = egui::Frame::new()
@@ -765,6 +835,7 @@ impl CortexApp {
 
         let mut navigation = self.sidebar_visible();
         let mut right = self.files.visible;
+        let mut details_open = self.details.visible;
         let result = egui::Panel::top(ui.id().with("top bar"))
             .exact_size(TOP_BAR_HEIGHT)
             .show_separator_line(false)
@@ -782,7 +853,7 @@ impl CortexApp {
                     );
                 }
 
-                if let Some(width) = files_width {
+                if let Some(width) = right_width {
                     ui.painter().rect_filled(
                         bar.with_min_x(bar.right() - width),
                         0.0,
@@ -797,6 +868,7 @@ impl CortexApp {
                     &mut self.section,
                     &mut navigation,
                     &mut right,
+                    &mut details_open,
                     sidebar_width,
                     steps,
                     workspace_menu,
@@ -805,6 +877,7 @@ impl CortexApp {
             .inner;
         self.sidebar_open = navigation;
         self.files.visible = right;
+        self.details.visible = details_open;
         result
     }
 
@@ -855,6 +928,133 @@ impl CortexApp {
             .show_separator_line(false)
             .frame(frame)
             .show(ui, |ui| self.files.show(ui, &self.place));
+    }
+
+    /// The run and what the project has taught, on the right, while
+    /// switched on.
+    pub(crate) fn inspector_panel(&mut self, ui: &mut egui::Ui) {
+        if ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::I)) {
+            self.inspector.visible = !self.inspector.visible;
+        }
+
+        if !self.inspector.visible {
+            return;
+        }
+
+        let frame = egui::Frame::new()
+            .fill(palette::sidebar())
+            .inner_margin(Margin::symmetric(16, 12));
+
+        let settings = &self.settings;
+        let positive = |value: u32| (value > 0).then_some(value);
+
+        let context = inspector::Context {
+            place: &self.place,
+            session: &self.live,
+            provider: settings.provider.argument(),
+            limits: inspector::Limits {
+                cost: positive(settings.max_cost_cents).map(|cents| f64::from(cents) / 100.0),
+                tokens: positive(settings.max_thousand_tokens)
+                    .map(|thousands| u64::from(thousands) * 1000),
+                minutes: positive(settings.max_minutes),
+            },
+            prices: &self.prices,
+        };
+
+        egui::Panel::right(ui.id().with("inspector"))
+            .default_size(INSPECTOR_WIDTH)
+            .size_range(240.0..=420.0)
+            .resizable(true)
+            .show_separator_line(false)
+            .frame(frame)
+            .show(ui, |ui| self.inspector.show(ui, &context));
+    }
+
+    /// What the live session's latest run did, from its log.
+    fn trace(&mut self) {
+        let Some(log) = &self.live_log else {
+            self.live.notice("No run to trace yet.", Tone::Muted);
+
+            return;
+        };
+
+        let text = match cortex_core::trace::read(log) {
+            Ok(events) => match cortex_core::trace::runs(&events).last() {
+                Some(run) => cortex_core::trace::summarize(run).render(),
+                None => "No run to trace yet.".to_string(),
+            },
+
+            Err(error) => format!("The log could not be read: {error}"),
+        };
+
+        self.live.notice(&text, Tone::Muted);
+    }
+
+    /// Where the agent works, how full the context is and what changed,
+    /// on the far right, while it is switched on.
+    pub(crate) fn details_panel(&mut self, ui: &mut egui::Ui) {
+        let shortcut = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
+
+        if ui.input_mut(|input| input.consume_key(shortcut, egui::Key::D)) {
+            self.details.visible = !self.details.visible;
+        }
+
+        // Looked at even while hidden, so that a finished reading is
+        // taken in and the end of a run is noticed.
+        self.details
+            .refresh(ui.ctx(), &self.place, self.live.running || self.preparing);
+
+        if !self.details.visible {
+            return;
+        }
+
+        let ready = matches!(self.status, Status::Ready(_));
+
+        let (model, compact_at) = match &self.status {
+            Status::Ready(info) => (Some(info.model.as_str()), info.compact_at),
+            _ => (None, None),
+        };
+
+        let session = match &self.viewing {
+            Some((_, session)) => session,
+            None => &self.live,
+        };
+
+        let facts = details_view::Facts {
+            place: &self.place,
+            outside_project: self.place == self.scratch,
+            model,
+            context: session.stats.context.as_ref(),
+            auto_compact_at: compact_at,
+            compactions: session.stats.compactions,
+
+            // Compacting acts on the live session, so only it can be.
+            can_compact: ready
+                && self.viewing.is_none()
+                && !self.live.running
+                && !self.preparing
+                && !self.demo,
+        };
+
+        let frame = egui::Frame::new()
+            .fill(palette::sidebar())
+            .inner_margin(Margin::symmetric(12, 8));
+
+        // Beside another panel, a line keeps the two apart.
+        let action = egui::Panel::right(ui.id().with(DETAILS_ID))
+            .default_size(DETAILS_WIDTH)
+            .size_range(DETAILS_MIN_WIDTH..=DETAILS_MAX_WIDTH)
+            .resizable(true)
+            .show_separator_line(self.files.visible || self.inspector.visible)
+            .frame(frame)
+            .show(ui, |ui| details_view::show(ui, &mut self.details, &facts))
+            .inner;
+
+        match action {
+            Some(details_view::Action::Compact) => self.command(Builtin::Compact, ""),
+            Some(details_view::Action::ShowFiles) => self.files.visible = true,
+            None => {}
+        }
     }
 
     pub(crate) fn sidebar(&mut self, ui: &mut egui::Ui) {
@@ -954,6 +1154,12 @@ impl CortexApp {
                         ui.set_width(width);
                         ui.spacing_mut().item_spacing.y = theme::space::S;
 
+                        if self.view == View::Conversation {
+                            self.task_list(ui);
+                        }
+
+                        self.refresh_commands();
+
                         let can_continue = self.viewing.is_none() && self.live.can_continue;
 
                         let queued: &[String] = match self.viewing {
@@ -979,6 +1185,7 @@ impl CortexApp {
                             mode,
                             can_continue,
                             queued,
+                            &self.commands,
                         );
 
                         let stand_in = match &self.status {
@@ -1012,9 +1219,17 @@ impl CortexApp {
             .inner;
 
         match action {
-            Some(composer::Action::Send(instruction, images)) => self.submit(&instruction, images),
+            Some(composer::Action::Send(instruction, images)) => {
+                match commands::parse(&instruction) {
+                    Some((command, arguments)) => self.command(command, &arguments),
+                    None => self.submit(&instruction, images),
+                }
+            }
             Some(composer::Action::Refused(why)) => self.live.notice(&why, Tone::Bad),
-            Some(composer::Action::Steer(message)) => self.steer(&message),
+            Some(composer::Action::Steer(message)) => match commands::parse(&message) {
+                Some((command, arguments)) => self.command(command, &arguments),
+                None => self.steer(&message),
+            },
             Some(composer::Action::Recall) => self.recall_last(),
             Some(composer::Action::Continue) => self.carry_on(),
             Some(composer::Action::Stop) => self.engine.stop(),
@@ -1031,6 +1246,139 @@ impl CortexApp {
             }
             Some(composer::PlaceAction::AddProject) => self.add_project(),
             None => {}
+        }
+    }
+
+    /// The plan of the session on screen, pinned above the composer while
+    /// it is being worked through.
+    fn task_list(&mut self, ui: &mut egui::Ui) {
+        if self.tasks_hidden {
+            return;
+        }
+
+        let session = match &self.viewing {
+            Some((_, session)) => session,
+            None => &self.live,
+        };
+
+        let Some(plan) = session.plan() else {
+            return;
+        };
+
+        if plan.is_finished() && !session.running {
+            return;
+        }
+
+        tasks::show(ui, &plan, &mut self.tasks_open, session.running);
+    }
+
+    /// The slash commands, with the skills of the folder the agent works
+    /// in. Read again only when the folder changes.
+    fn refresh_commands(&mut self) {
+        if self.commands_for.as_deref() == Some(self.place.as_path()) {
+            return;
+        }
+
+        let library = cortex_skills::SkillLibrary::for_project(&self.place);
+
+        self.commands = commands::entries(library.skills().map(|skill| {
+            (
+                skill.name.clone(),
+                skill.description.clone(),
+                skill.argument_hint.clone(),
+            )
+        }));
+
+        self.commands_for = Some(self.place.clone());
+    }
+
+    /// Carries out one of the app's own slash commands.
+    fn command(&mut self, command: Builtin, arguments: &str) {
+        let busy = self.live.running || self.preparing;
+
+        // These change the project or the conversation under a run.
+        let needs_quiet = matches!(
+            command,
+            Builtin::Undo
+                | Builtin::Restore
+                | Builtin::Compact
+                | Builtin::Prepare
+                | Builtin::New
+                | Builtin::Worktree
+        );
+
+        if busy && needs_quiet {
+            self.live
+                .notice("Wait for the run to finish, or /stop it first.", Tone::Bad);
+
+            return;
+        }
+
+        let ready = matches!(self.status, Status::Ready(_));
+
+        if !ready
+            && !matches!(
+                command,
+                Builtin::Help
+                    | Builtin::Settings
+                    | Builtin::Tasks
+                    | Builtin::Run
+                    | Builtin::Learned
+                    | Builtin::Trace
+            )
+        {
+            self.live
+                .notice("Set up a model in Settings first.", Tone::Bad);
+
+            return;
+        }
+
+        self.viewing = None;
+
+        match command {
+            Builtin::New => self.start_session(self.place.clone()),
+            Builtin::Undo => self.engine.restore(None),
+
+            Builtin::Restore if arguments.is_empty() => {
+                self.live.notice(
+                    "Name a checkpoint: /restore <id>. /checkpoints lists them.",
+                    Tone::Bad,
+                );
+            }
+
+            Builtin::Restore => self.engine.restore(Some(arguments.to_string())),
+            Builtin::Checkpoints => self.engine.checkpoints(),
+            Builtin::Diff => self.engine.diff(),
+            Builtin::Notes => self.engine.notes(),
+            Builtin::Run => self.inspector.show_run(),
+            Builtin::Learned => self.inspector.show_learned(),
+            Builtin::Trace => self.trace(),
+
+            Builtin::Worktree if arguments.is_empty() => {
+                self.live
+                    .notice("Name the branch: /worktree <name>.", Tone::Bad);
+            }
+
+            Builtin::Worktree => self.engine.worktree(arguments.to_string()),
+            Builtin::Compact => self.engine.compact(),
+
+            Builtin::Tasks => {
+                self.tasks_hidden = !self.tasks_hidden;
+
+                if !self.tasks_hidden && self.live.plan().is_none() {
+                    self.live.notice("No task list yet.", Tone::Muted);
+                }
+            }
+
+            Builtin::Prepare if self.can_prepare() => self.prepare(),
+            Builtin::Prepare => {}
+            Builtin::Stop => self.engine.stop(),
+            Builtin::Settings => self.open_settings(),
+            Builtin::Help => {
+                let help = commands::help(&self.commands);
+
+                self.live.notice(&help, Tone::Muted);
+            }
         }
     }
 
@@ -1185,7 +1533,9 @@ impl eframe::App for CortexApp {
         if self.sidebar_visible() {
             self.sidebar(ui);
         }
+        self.details_panel(ui);
         self.files_panel(ui);
+        self.inspector_panel(ui);
         self.render_pane(ui);
     }
 
@@ -1386,6 +1736,7 @@ mod navigation_tests {
             model: "stand-in".to_string(),
             max_steps: 10,
             demo: true,
+            compact_at: None,
         });
 
         let input = egui::RawInput {
@@ -1400,6 +1751,7 @@ mod navigation_tests {
             app.tick(ui);
             app.top_bar(ui);
             app.sidebar(ui);
+            app.details_panel(ui);
             app.files_panel(ui);
             app.render_pane(ui);
         });

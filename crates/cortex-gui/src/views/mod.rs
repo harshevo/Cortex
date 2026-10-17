@@ -1,16 +1,20 @@
 //! The parts of the window. Each view draws itself from state it is handed
 //! and reports what the person did; none of them talks to the agent.
 
+pub mod commands;
 pub mod composer;
 pub mod conversation;
+pub mod details;
 pub mod files;
 pub mod icons;
 pub mod insights;
+pub mod inspector;
 pub mod menu;
 pub mod prose;
 pub mod settings;
 pub mod sidebar;
 pub mod stats_strip;
+pub mod tasks;
 pub mod tool_card;
 pub mod top_bar;
 pub mod typeset;

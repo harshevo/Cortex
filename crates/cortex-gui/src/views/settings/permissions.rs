@@ -38,6 +38,44 @@ pub fn show(ui: &mut Ui, form: &mut Form, filter: &Filter) -> Option<Action> {
         },
     );
 
+    rows::row(
+        ui,
+        filter,
+        "Budget per run",
+        "Cortex wraps up at 80% and stops at the limit. 0 is no limit.",
+        |ui| {
+            ui.horizontal(|ui| {
+                let mut dollars = f64::from(form.draft.max_cost_cents) / 100.0;
+
+                let cost = ui.add(
+                    egui::DragValue::new(&mut dollars)
+                        .range(0.0..=500.0)
+                        .speed(0.05)
+                        .prefix("$")
+                        .fixed_decimals(2),
+                );
+
+                if cost.changed() {
+                    form.draft.max_cost_cents = (dollars * 100.0).round() as u32;
+                }
+
+                ui.add(
+                    egui::DragValue::new(&mut form.draft.max_thousand_tokens)
+                        .range(0..=100_000)
+                        .speed(5.0)
+                        .suffix("k tokens"),
+                );
+
+                ui.add(
+                    egui::DragValue::new(&mut form.draft.max_minutes)
+                        .range(0..=600)
+                        .speed(0.5)
+                        .suffix(" min"),
+                );
+            });
+        },
+    );
+
     None
 }
 

@@ -518,6 +518,7 @@ impl eframe::App for Workspace {
                 .collect();
             self.chats[active].1.sidebar_with_activity(ui, &running);
         }
+        self.chats[active].1.details_panel(ui);
         self.chats[active].1.files_panel(ui);
         if let Some((folder, log)) = self.chats[active].1.take_requested_session() {
             let existing = log.as_ref().and_then(|path| {

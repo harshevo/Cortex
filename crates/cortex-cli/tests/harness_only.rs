@@ -25,6 +25,7 @@ async fn a_plain_harness_has_no_learner_tools_or_persistent_memory() {
         SessionLocation {
             directory: project.path().join(".cortex"),
             scope: project.path().display().to_string(),
+            project: None,
         },
     )
     .await
@@ -41,7 +42,9 @@ async fn a_plain_harness_has_no_learner_tools_or_persistent_memory() {
     ] {
         assert!(!names.contains(&removed));
     }
-    assert!(setup.advisers.is_empty());
+    // The only adviser is the one that notices a run going round in
+    // circles; it learns nothing and keeps nothing between runs.
+    assert_eq!(setup.advisers.len(), 1);
     assert!(!setup.extras.reflect);
     assert!(!project.path().join(".cortex").exists());
 }

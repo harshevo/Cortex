@@ -16,6 +16,7 @@ use serde_json::Value;
 use crate::agent::Outcome;
 use crate::message::{Image, Message, ToolCall, ToolResult};
 use crate::provider::StopReason;
+use crate::redact;
 use crate::reflect::Lesson;
 use crate::review::Requirement;
 use crate::usage::Usage;
@@ -240,6 +241,44 @@ pub enum Event {
         duration_ms: u64,
     },
 
+    /// The project was saved before the run's first change, as the
+    /// checkpoint `id`, so the run can be undone. `error` says why it
+    /// could not be, in which case `id` is empty.
+    CheckpointSaved {
+        step: u32,
+        id: String,
+        label: String,
+        #[serde(default)]
+        error: Option<String>,
+    },
+
+    /// The person allowed or refused a call that asked first.
+    ApprovalDecided {
+        step: u32,
+        tool: String,
+        summary: String,
+        approved: bool,
+    },
+
+    /// The run moved to a stronger model after repeated failures.
+    Escalated {
+        step: u32,
+        from: String,
+        to: String,
+        reason: String,
+    },
+
+    /// The run's spending crossed a line of its budget: `share` is how
+    /// much of it is used (1.0 is all of it). `cost` is in US dollars,
+    /// when the model's price is known.
+    BudgetReached {
+        step: u32,
+        share: f64,
+        tokens: u64,
+        #[serde(default)]
+        cost: Option<f64>,
+    },
+
     RunFinished {
         outcome: Outcome,
         steps: u32,
@@ -296,6 +335,7 @@ impl JsonlSink {
         };
 
         let json = serde_json::to_string(&line)?;
+        let json = redact::redact(&json);
 
         let mut file = self
             .file

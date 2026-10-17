@@ -2,6 +2,8 @@
 
 use std::time::{Duration, Instant};
 
+use cortex_core::learn::Estimate;
+use cortex_core::plan::{self, Plan};
 use cortex_core::{
     CheckOutcome, Event, Image, Outcome, Requirement, ToolCall, ToolResult, Usage, repeat,
 };
@@ -172,9 +174,60 @@ pub struct Session {
     /// The last run stopped on a provider failure that may not last, and
     /// can be carried on from the step that failed.
     pub can_continue: bool,
+
+    /// The checkpoint saved before the latest run's first change.
+    pub checkpoint: Option<String>,
+
+    /// What the latest run has been like, for the run panel.
+    pub run: RunState,
+}
+
+/// The latest run at a glance.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RunState {
+    /// What runs like it took before, when there were enough.
+    pub estimate: Option<Estimate>,
+
+    /// The largest share of its budget the run reached, and the cost
+    /// then, when the run has a budget and crossed a line of it.
+    pub budget: Option<(f64, Option<f64>)>,
+
+    /// The model it moved to, and why.
+    pub escalated: Option<(String, String)>,
+
+    pub approved: u32,
+    pub refused: u32,
+
+    pub calls: u32,
+    pub failed_calls: u32,
+
+    /// Files the run wrote to, in the order first changed.
+    pub changed: Vec<String>,
+
+    /// When the run started and ended, on this machine's clock. Absent
+    /// for a run read back from a log.
+    pub started: Option<Instant>,
+    pub ended: Option<Instant>,
+}
+
+impl RunState {
+    /// How long the run has worked, while it is watched live.
+    pub fn elapsed(&self) -> Option<Duration> {
+        let started = self.started?;
+
+        Some(self.ended.unwrap_or_else(Instant::now) - started)
+    }
 }
 
 impl Session {
+    /// The plan the model wrote last, from its latest `update_plan` call.
+    pub fn plan(&self) -> Option<Plan> {
+        self.items.iter().rev().find_map(|item| match item {
+            Item::Tool(tool) if tool.call.name == plan::TOOL => Plan::from_input(&tool.call.input),
+            _ => None,
+        })
+    }
+
     pub fn apply(&mut self, event: &Event) {
         match event {
             Event::AdviserObserved { .. } => {}
@@ -190,6 +243,10 @@ impl Session {
                 self.running = true;
                 self.can_continue = false;
                 self.model = Some(model.clone());
+                self.run = RunState {
+                    started: Some(Instant::now()),
+                    ..RunState::default()
+                };
                 self.stats.run_started();
                 self.busy_with(Activity::Preparing);
 
@@ -209,6 +266,16 @@ impl Session {
                     text: format!("Carrying on after step {steps}"),
                     tone: Tone::Muted,
                 });
+            }
+
+            Event::ContextPrepared {
+                source,
+                detail,
+                ..
+            } if source == "playbook" => {
+                self.run.estimate = detail
+                    .get("estimate")
+                    .and_then(|estimate| serde_json::from_value(estimate.clone()).ok());
             }
 
             Event::ContextPrepared { source, text, .. } => {
@@ -257,6 +324,24 @@ impl Session {
             }
 
             Event::ToolStarted { call, .. } => {
+                self.run.calls += 1;
+
+                let writes = matches!(
+                    call.name.as_str(),
+                    "edit_file" | "write_file" | "delete_file" | "move_file"
+                );
+
+                if writes
+                    && let Some(path) = call
+                        .input
+                        .get("path")
+                        .or_else(|| call.input.get("to"))
+                        .and_then(|path| path.as_str())
+                    && !self.run.changed.iter().any(|known| known == path)
+                {
+                    self.run.changed.push(path.to_string());
+                }
+
                 self.items.push(Item::Tool(ToolItem {
                     call: call.clone(),
                     result: None,
@@ -271,6 +356,10 @@ impl Session {
                 ..
             } => {
                 self.stats.tool_finished(result.is_error);
+
+                if result.is_error {
+                    self.run.failed_calls += 1;
+                }
 
                 if repeat::is_repeat_note(&result.output) {
                     self.stats.repeat_folded();
@@ -454,6 +543,51 @@ impl Session {
                 });
             }
 
+            Event::CheckpointSaved { id, error, .. } => {
+                let text = match error {
+                    None => {
+                        self.checkpoint = Some(id.clone());
+
+                        "Checkpoint saved · /undo reverts this run".to_string()
+                    }
+
+                    Some(error) => format!("No checkpoint: {error}"),
+                };
+
+                self.items.push(Item::Notice {
+                    text,
+                    tone: Tone::Muted,
+                });
+            }
+
+            Event::ApprovalDecided { approved, .. } => match approved {
+                true => self.run.approved += 1,
+                false => self.run.refused += 1,
+            },
+
+            Event::Escalated { to, reason, .. } => {
+                self.run.escalated = Some((to.clone(), reason.clone()));
+
+                self.items.push(Item::Notice {
+                    text: format!("Moved to {to} · {reason}"),
+                    tone: Tone::Muted,
+                });
+            }
+
+            Event::BudgetReached { share, cost, .. } => {
+                self.run.budget = Some((*share, *cost));
+
+                let text = match *share >= 1.0 {
+                    true => "Budget used · the run stops here".to_string(),
+                    false => format!("{:.0}% of the budget used · wrapping up", share * 100.0),
+                };
+
+                self.items.push(Item::Notice {
+                    text,
+                    tone: Tone::Bad,
+                });
+            }
+
             Event::RunFinished {
                 outcome,
                 steps,
@@ -463,6 +597,7 @@ impl Session {
             } => {
                 self.running = false;
                 self.doing = None;
+                self.run.ended = Some(Instant::now());
                 self.stats.run_ended();
                 self.stats.run_used(*usage);
 

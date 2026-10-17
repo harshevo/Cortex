@@ -351,6 +351,8 @@ pub fn describe_result(result: &TaskResult) -> String {
         Some(Outcome::StepLimit) => format!("{verdict} (step limit)"),
         Some(Outcome::Truncated) => format!("{verdict} (output limit)"),
         Some(Outcome::Refused) => format!("{verdict} (refused)"),
+        Some(Outcome::Stuck) => format!("{verdict} (stopped, stuck)"),
+        Some(Outcome::OverBudget) => format!("{verdict} (over budget)"),
     }
 }
 

@@ -12,7 +12,9 @@ use crate::session::{Item, ToolItem};
 use crate::theme::{self, palette};
 
 /// Input fields worth showing on the folded card, in order of preference.
-const SUMMARY_FIELDS: [&str; 5] = ["command", "path", "pattern", "query", "symbol"];
+const SUMMARY_FIELDS: [&str; 7] = [
+    "command", "path", "pattern", "query", "symbol", "from", "goal",
+];
 
 /// Longest summary of a call's input worked out for a row, in bytes.
 /// Rows are a line long; no more of the input is ever read for one.
@@ -328,6 +330,10 @@ fn verb(tool: &str, running: bool) -> &'static str {
         "remember" => ("Remembered", "Remembering"),
         "recall" => ("Recalled", "Recalling"),
         "find_references" | "file_dependencies" => ("Traced", "Tracing"),
+        "delete_file" => ("Deleted", "Deleting"),
+        "move_file" => ("Moved", "Moving"),
+        "git" => ("Checked git", "Checking git"),
+        "update_plan" => ("Planned", "Planning"),
         _ => ("Searched", "Searching"),
     };
 

@@ -244,6 +244,11 @@ impl Stats {
     /// A run reported what it used in all. That can be more than its
     /// steps added up to: a review, the lessons, and attempts that were
     /// not kept are model calls too. The difference is added here.
+    /// Tokens of the current run so far.
+    pub fn run_usage(&self) -> Usage {
+        self.run_counted
+    }
+
     pub fn run_used(&mut self, total: Usage) {
         let counted = self.run_counted;
 

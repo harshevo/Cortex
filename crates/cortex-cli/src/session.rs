@@ -5,8 +5,8 @@ use std::sync::Arc;
 use anyhow::{Context, Result, bail};
 use cortex_core::trajectory::unix_millis;
 use cortex_core::{
-    Agent, AgentConfig, Approver, AutoApprove, JsonlSink, ModelProvider, ToolContext, Workspace,
-    prompt,
+    Agent, AgentConfig, ApprovalRequest, Approver, AutoApprove, Fallback, JsonlSink, ModelProvider,
+    ToolContext, TrajectorySink, Workspace, prompt,
 };
 use cortex_providers::{
     AnthropicConfig, AnthropicProvider, CodexConfig, CodexProvider, OpenAiCompatConfig,
@@ -15,7 +15,7 @@ use cortex_providers::{
 
 use crate::approver::InteractiveApprover;
 use crate::args::{ModelArgs, ProviderKind, SessionArgs};
-use crate::console::ConsoleSink;
+use crate::console::{ConsoleSink, JsonLinesSink};
 use crate::features::{self, SessionLocation};
 
 /// Folder inside the project where Cortex keeps its own files.
@@ -67,10 +67,13 @@ pub async fn build_agent(args: &SessionArgs) -> Result<Agent> {
 
     eprintln!("{}", workspace.sandbox().summary(workspace.root()));
 
-    let provider = build_provider(&model)?;
+    let provider = build_routed_provider(&model)?;
 
     let approver: Arc<dyn Approver> = if args.yes {
         Arc::new(AutoApprove)
+    } else if args.json {
+        // Nobody is at the terminal to ask.
+        Arc::new(DenyAll)
     } else {
         Arc::new(InteractiveApprover::default())
     };
@@ -89,9 +92,14 @@ pub async fn build_agent(args: &SessionArgs) -> Result<Agent> {
     let location = SessionLocation {
         directory: state_directory.clone(),
         scope: workspace.root().display().to_string(),
+        project: Some(workspace.root().to_path_buf()),
     };
 
     let setup = features::setup(&model, location).await?;
+
+    for line in &setup.report {
+        eprintln!("{line}");
+    }
 
     // The records name the session as its log does.
     if let Some(stem) = trajectory_file.file_stem() {
@@ -114,10 +122,13 @@ pub async fn build_agent(args: &SessionArgs) -> Result<Agent> {
         approver,
     };
 
-    let console = ConsoleSink::new(provider.model());
+    let console: Arc<dyn TrajectorySink> = match args.json {
+        true => Arc::new(JsonLinesSink),
+        false => Arc::new(ConsoleSink::new(provider.model())),
+    };
 
     let mut agent = Agent::new(provider, setup.tools, context, config)
-        .with_sink(Arc::new(console))
+        .with_sink(console)
         .with_sink(Arc::new(log));
 
     for sink in setup.sinks {
@@ -126,6 +137,22 @@ pub async fn build_agent(args: &SessionArgs) -> Result<Agent> {
 
     for source in setup.context_sources {
         agent = agent.with_context_source(source);
+    }
+
+    if let Some(hooks) = setup.hooks {
+        agent = agent.with_hooks(hooks);
+    }
+
+    if let Some(helper) = build_helper(&model)? {
+        agent = agent.with_helper(helper);
+    }
+
+    if let Some(stronger) = build_escalation(&model)? {
+        agent = agent.with_escalation(stronger);
+    }
+
+    if let Some(recovery) = setup.recovery {
+        agent = agent.with_recovery(recovery);
     }
 
     if let Some(verifier) = setup.verifier {
@@ -137,4 +164,63 @@ pub async fn build_agent(args: &SessionArgs) -> Result<Agent> {
     }
 
     Ok(agent)
+}
+
+/// The main model, with the fallback models behind it.
+pub fn build_routed_provider(args: &ModelArgs) -> Result<Arc<dyn ModelProvider>> {
+    let mut providers = vec![build_provider(args)?];
+
+    for model in &args.fallback_models {
+        let fallback = ModelArgs {
+            model: Some(model.clone()),
+            ..args.clone()
+        };
+
+        providers.push(build_provider(&fallback)?);
+    }
+
+    Ok(Fallback::over(providers))
+}
+
+/// The model for the questions beside a run, when one is named.
+pub fn build_helper(args: &ModelArgs) -> Result<Option<Arc<dyn ModelProvider>>> {
+    let Some(model) = &args.helper_model else {
+        return Ok(None);
+    };
+
+    let helper = ModelArgs {
+        model: Some(model.clone()),
+        ..args.clone()
+    };
+
+    build_provider(&helper).map(Some)
+}
+
+/// The stronger model to move to when a run is stuck, when one is named.
+pub fn build_escalation(args: &ModelArgs) -> Result<Option<Arc<dyn ModelProvider>>> {
+    let Some(model) = &args.escalation_model else {
+        return Ok(None);
+    };
+
+    let stronger = ModelArgs {
+        model: Some(model.clone()),
+        ..args.clone()
+    };
+
+    build_provider(&stronger).map(Some)
+}
+
+/// Refuses every call that needs approval: for runs with nobody to ask.
+struct DenyAll;
+
+#[async_trait::async_trait]
+impl Approver for DenyAll {
+    async fn approve(&self, request: &ApprovalRequest) -> bool {
+        eprintln!(
+            "refused without --yes: {} ({})",
+            request.tool, request.summary
+        );
+
+        false
+    }
 }

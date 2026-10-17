@@ -138,6 +138,8 @@ pub async fn lessons(
         (Outcome::Completed, None) => "finished; no checks were run on the result",
         (Outcome::StepLimit, _) => "ran out of steps before finishing",
         (Outcome::Truncated | Outcome::Refused, _) => "stopped before finishing",
+        (Outcome::Stuck, _) => "was stopped after failing repeatedly",
+        (Outcome::OverBudget, _) => "used its budget before finishing",
     };
 
     let question = format!(

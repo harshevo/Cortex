@@ -144,6 +144,18 @@ pub struct ProviderSettings {
 
     /// Address of the API. Unused by Anthropic.
     pub base_url: String,
+
+    /// A cheaper model for reviews, reflection and compaction. Empty is
+    /// the model in use.
+    pub helper: String,
+
+    /// Models to carry on with, in order, when the one in use is
+    /// unavailable.
+    pub fallbacks: Vec<String>,
+
+    /// A stronger model to move to when a run keeps failing. Empty is
+    /// none.
+    pub escalation: String,
 }
 
 impl ProviderSettings {
@@ -177,6 +189,15 @@ pub struct Settings {
 
     /// Maximum number of model calls per instruction.
     pub max_steps: u32,
+
+    /// The most one run may cost, in US cents. 0 is no limit.
+    pub max_cost_cents: u32,
+
+    /// The most tokens one run may use, in thousands. 0 is no limit.
+    pub max_thousand_tokens: u32,
+
+    /// The most minutes one run may work. 0 is no limit.
+    pub max_minutes: u32,
 
     /// Show the model's reasoning in the conversation, when the provider
     /// streams it.
@@ -222,7 +243,7 @@ impl Default for Settings {
                     "claude-haiku-5-5",
                     "claude-fable-5-1",
                 ]),
-                base_url: String::new(),
+                ..ProviderSettings::default()
             },
 
             hosted: ProviderSettings::default(),
@@ -231,18 +252,22 @@ impl Default for Settings {
                 model: "qwen2.5-coder:7b".to_string(),
                 models: models(&["qwen2.5-coder:7b"]),
                 base_url: "http://127.0.0.1:11434/v1".to_string(),
+                ..ProviderSettings::default()
             },
 
             codex: ProviderSettings {
                 model: "gpt-6.1-sol".to_string(),
                 models: models(&["gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna"]),
-                base_url: String::new(),
+                ..ProviderSettings::default()
             },
 
             effort: Effort::default(),
             approve_everything: false,
             sandbox: true,
             max_steps: 60,
+            max_cost_cents: 0,
+            max_thousand_tokens: 0,
+            max_minutes: 0,
             show_thinking: true,
             capabilities: [Feature::Gate].into_iter().map(capability_name).collect(),
             rollouts: 3,
@@ -440,6 +465,31 @@ impl Settings {
             arguments.push("--no-sandbox".to_string());
         }
 
+        if !current.escalation.trim().is_empty() && current.escalation.trim() != current.model {
+            arguments.extend([
+                "--escalation-model".to_string(),
+                current.escalation.trim().to_string(),
+            ]);
+        }
+
+        if self.max_cost_cents > 0 {
+            arguments.extend([
+                "--max-cost".to_string(),
+                format!("{:.2}", f64::from(self.max_cost_cents) / 100.0),
+            ]);
+        }
+
+        if self.max_thousand_tokens > 0 {
+            arguments.extend([
+                "--max-tokens".to_string(),
+                (u64::from(self.max_thousand_tokens) * 1000).to_string(),
+            ]);
+        }
+
+        if self.max_minutes > 0 {
+            arguments.extend(["--max-minutes".to_string(), self.max_minutes.to_string()]);
+        }
+
         for capability in &self.capabilities {
             arguments.extend(["--with".to_string(), capability.clone()]);
         }
@@ -621,7 +671,7 @@ mod tests {
         let settings = ProviderSettings {
             model: "b".to_string(),
             models: vec!["a".to_string()],
-            base_url: String::new(),
+            ..ProviderSettings::default()
         };
 
         assert_eq!(settings.choices(), ["b", "a"]);

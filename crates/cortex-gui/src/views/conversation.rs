@@ -1764,6 +1764,8 @@ fn run_summary(
         (Outcome::StepLimit, _) => ("Stopped at the step limit", palette::warning()),
         (Outcome::Truncated, _) => ("Stopped: the response was cut off", palette::warning()),
         (Outcome::Refused, _) => ("Stopped: the model declined", palette::bad()),
+        (Outcome::Stuck, _) => ("Stopped: it kept failing", palette::bad()),
+        (Outcome::OverBudget, _) => ("Stopped: budget used", palette::warning()),
     };
 
     let mut facts = vec![
@@ -1795,34 +1797,54 @@ fn run_summary(
 pub fn approval_card(ui: &mut Ui, request: &ApprovalRequest) -> Option<Decision> {
     let mut decision = None;
 
-    theme::card()
-        .stroke(Stroke::new(1.0, palette::accent().gamma_multiply(0.7)))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
+    // Asked every time, whatever was allowed before.
+    let destructive = cortex_core::destructive(request);
 
+    let edge = match destructive {
+        Some(_) => palette::bad(),
+        None => palette::accent().gamma_multiply(0.7),
+    };
+
+    theme::card().stroke(Stroke::new(1.0, edge)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+
+        ui.horizontal(|ui| {
             ui.label(
                 RichText::new(format!("Allow {}?", request.tool)).font(theme::strong(size::BODY)),
             );
 
-            code_block(ui, "request", &request.summary, 120.0);
-
-            ui.horizontal(|ui| {
-                let allow = egui::Button::new(RichText::new("Allow").color(palette::sunken()))
-                    .fill(palette::accent());
-
-                if ui.add(allow).clicked() {
-                    decision = Some(Decision::Allow);
-                }
-
-                if ui.button("Always allow").clicked() {
-                    decision = Some(Decision::AlwaysAllow);
-                }
-
-                if ui.button("Deny").clicked() {
-                    decision = Some(Decision::Deny);
-                }
-            });
+            if let Some(why) = destructive {
+                ui.label(
+                    RichText::new(format!("Destructive · {why}"))
+                        .font(theme::small())
+                        .color(palette::bad()),
+                );
+            }
         });
+
+        code_block(ui, "request", &request.summary, 120.0);
+
+        ui.horizontal(|ui| {
+            let allow = egui::Button::new(RichText::new("Allow").color(palette::sunken())).fill(
+                match destructive {
+                    Some(_) => palette::bad(),
+                    None => palette::accent(),
+                },
+            );
+
+            if ui.add(allow).clicked() {
+                decision = Some(Decision::Allow);
+            }
+
+            if destructive.is_none() && ui.button("Always allow").clicked() {
+                decision = Some(Decision::AlwaysAllow);
+            }
+
+            if ui.button("Deny").clicked() {
+                decision = Some(Decision::Deny);
+            }
+        });
+    });
 
     decision
 }

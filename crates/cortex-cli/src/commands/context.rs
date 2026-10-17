@@ -24,6 +24,7 @@ pub async fn execute(args: ContextArgs) -> Result<ExitCode> {
     let location = SessionLocation {
         directory: workspace.root().join(".cortex"),
         scope: workspace.root().display().to_string(),
+        project: None,
     };
 
     let setup = features::setup(&args.model, location).await?;

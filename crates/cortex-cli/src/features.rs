@@ -9,10 +9,14 @@ use std::sync::Arc;
 
 use anyhow::{Result, bail};
 use clap::ValueEnum;
+use cortex_core::budget::Budget;
+use cortex_core::learn::PlaybookSource;
+use cortex_core::ledger::PriceTable;
+use cortex_core::notes::{self, EpisodeSink, NotesSource};
 use cortex_core::{
-    Adviser, CompactConfig, ContextSource, EffectLedger, EffectSink, ExperimentConfig, Extras,
-    Ledger, LedgerSink, MaskConfig, PruneConfig, RolloutConfig, ToolRegistry, TrajectorySink,
-    Verifier, Workspace, prompt,
+    Adviser, CommandHooks, CompactConfig, ContextSource, EffectLedger, EffectSink,
+    ExperimentConfig, Extras, Ledger, LedgerSink, MaskConfig, PruneConfig, RolloutConfig,
+    StuckDetector, ToolRegistry, TrajectorySink, Verifier, Workspace, plan, prompt, rules,
 };
 use cortex_index::{CodeGraph, CodeIndex};
 use cortex_retrieval::{EmbeddingClient, SemanticIndex};
@@ -140,6 +144,11 @@ impl crate::args::ModelArgs {
 pub struct SessionLocation {
     pub directory: PathBuf,
     pub scope: String,
+
+    /// The project the agent works in, for what belongs to it: its hooks,
+    /// the record of its runs, and the MCP servers started for it. `None`
+    /// for an evaluation, which works in copies.
+    pub project: Option<PathBuf>,
 }
 
 /// What the chosen features add up to.
@@ -182,6 +191,17 @@ pub struct Setup {
     /// Records how every run went and which advisers were held out of
     /// it. It is among `sinks` already.
     pub effect: Option<Arc<EffectSink>>,
+
+    /// Commands run before and after tool calls, when any are set.
+    pub hooks: Option<Arc<CommandHooks>>,
+
+    /// What starting the extras came to (hooks, MCP servers), a line
+    /// each, to tell the person.
+    pub report: Vec<String>,
+
+    /// Says when a run is stuck; among `sinks` and `advisers` already.
+    /// The agent is given it too, to escalate or stop.
+    pub recovery: Option<Arc<StuckDetector>>,
 }
 
 impl Setup {
@@ -213,6 +233,10 @@ impl Setup {
         if self.skill_listing {
             notes.extend(SkillLibrary::for_project(workspace.root()).project_listing());
         }
+
+        let home = std::env::home_dir();
+
+        notes.extend(rules::note(&rules::load(workspace.root(), home.as_deref())));
 
         notes
     }
@@ -309,11 +333,52 @@ pub async fn setup(args: &ModelArgs, location: SessionLocation) -> Result<Setup>
         context_sources.push(Arc::new(LikelyFiles::new(graph)));
     }
 
+    // What earlier sessions noted about the project.
+    context_sources.push(Arc::new(NotesSource));
+
+    // How tasks like this one have gone here, and what they took.
+    context_sources.push(Arc::new(PlaybookSource));
+
     // Last, so that it reads straight before the task. A task that does
     // not begin with `/name` gets nothing from it, so it is always there.
     context_sources.push(Arc::new(SkillSource));
 
-    let mut prompt_notes = Vec::new();
+    let mut report = Vec::new();
+    let mut hooks = None;
+
+    if let Some(project) = &location.project {
+        sinks.push(Arc::new(EpisodeSink::new(project)));
+
+        let home = std::env::home_dir();
+
+        let loaded = CommandHooks::load(project, home.as_deref());
+
+        if !loaded.is_empty() {
+            report.push(format!(
+                "hooks: {} from {}",
+                loaded.count(),
+                loaded.sources.join(", ")
+            ));
+
+            hooks = Some(Arc::new(loaded));
+        }
+
+        if !args.no_mcp
+            && let Some(home) = &home
+        {
+            report.extend(cortex_tools::add_mcp_tools(&mut tools, home, project).await);
+        }
+    }
+
+    // Notices a run going round in circles. It hears the run as a sink
+    // and speaks as an adviser.
+    let stuck = Arc::new(StuckDetector::new());
+
+    sinks.push(stuck.clone());
+
+    let advisers: Vec<Arc<dyn Adviser>> = vec![stuck.clone()];
+
+    let mut prompt_notes = vec![plan::note(), notes::note()];
 
     if has(Feature::Batch) {
         prompt_notes.push(prompt::batching_note());
@@ -348,6 +413,9 @@ pub async fn setup(args: &ModelArgs, location: SessionLocation) -> Result<Setup>
     }
 
     Ok(Setup {
+        recovery: Some(stuck),
+        hooks,
+        report,
         skill_listing: has(Feature::Skills),
         usage,
         effect,
@@ -357,7 +425,7 @@ pub async fn setup(args: &ModelArgs, location: SessionLocation) -> Result<Setup>
         context_sources,
         sinks,
         verifier,
-        advisers: Vec::new(),
+        advisers,
         prompt_notes,
         fold_repeats: has(Feature::Lean),
         extras,
@@ -441,7 +509,24 @@ fn extras(args: &ModelArgs, location: &SessionLocation) -> Result<Extras> {
         compact,
         context_window: args.context_window,
         experiment,
+        checkpoints: !args.no_checkpoints,
+        budget: budget(args),
     })
+}
+
+/// The run's budget, when any limit is given.
+fn budget(args: &ModelArgs) -> Option<Budget> {
+    let budget = Budget {
+        max_tokens: args.max_tokens.filter(|max| *max > 0),
+        max_cost: args.max_cost.filter(|max| *max > 0.0),
+        max_duration: args
+            .max_minutes
+            .filter(|max| *max > 0.0)
+            .map(|minutes| std::time::Duration::from_secs_f64(minutes * 60.0)),
+        prices: PriceTable::at_home(),
+    };
+
+    budget.is_set().then_some(budget)
 }
 
 /// The folder the records of tokens used and of how runs went are kept

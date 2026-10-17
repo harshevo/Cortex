@@ -6,12 +6,13 @@ use eframe::egui::{
 
 use cortex_core::Image;
 
+use super::commands;
 use super::icons::{self, Icon};
 use super::menu::{self, Opens};
 use crate::attachment::{self, Attachment, Attachments, Content};
 use crate::theme::{self, palette};
 
-const BUTTON_SIZE: f32 = crate::theme::control::LARGE;
+const BUTTON_SIZE: f32 = 28.0;
 
 /// Room kept for the "Continue" button when it is shown.
 const CONTINUE_WIDTH: f32 = 84.0;
@@ -75,6 +76,7 @@ pub fn show(
     mode: Mode,
     can_continue: bool,
     queued: &[String],
+    commands: &[commands::Entry],
 ) -> Option<Action> {
     let can_continue = can_continue && mode == Mode::Ready;
 
@@ -121,11 +123,35 @@ pub fn show(
         });
     }
 
+    // A command was completed in the box: the cursor goes after it.
+    let completed_id = ui.id().with("command completed");
+
+    if matches!(mode, Mode::Ready | Mode::Working) {
+        match commands::palette(ui, draft, commands) {
+            Some(commands::Chosen::Complete(text)) => {
+                *draft = text;
+
+                ui.data_mut(|data| data.insert_temp(completed_id, true));
+            }
+
+            Some(commands::Chosen::Run(text)) => {
+                draft.clear();
+
+                action = Some(match mode {
+                    Mode::Working => Action::Steer(text),
+                    _ => Action::Send(text, Vec::new()),
+                });
+            }
+
+            None => {}
+        }
+    }
+
     egui::Frame::new()
         .fill(palette::surface())
         .stroke(Stroke::new(1.0, palette::border()))
         .corner_radius(CornerRadius::same(crate::theme::radius::XL))
-        .inner_margin(egui::Margin::symmetric(16, 12))
+        .inner_margin(egui::Margin::symmetric(16, 8))
         .show(ui, |ui| {
             thumbnails(ui, attachments);
             if attachments.loading() {
@@ -151,7 +177,7 @@ pub fn show(
 
                 let hint = match mode {
                     Mode::Ready if can_continue => "Continue the run, or ask for something else",
-                    Mode::Ready => "Ask Cortex to change something",
+                    Mode::Ready => "Ask Cortex, or type / for commands",
                     Mode::Working => "Cortex is working. Tell it something, or wait…",
 
                     Mode::Viewing => {
@@ -172,7 +198,9 @@ pub fn show(
                 // is in the box now.
                 let recalled_id = editor_id.with("recalled");
 
-                if ui.data_mut(|data| data.remove_temp::<bool>(recalled_id)).is_some() {
+                if ui.data_mut(|data| data.remove_temp::<bool>(recalled_id)).is_some()
+                    || ui.data_mut(|data| data.remove_temp::<bool>(completed_id)).is_some()
+                {
                     put_cursor_at_end(ui, editor_id, draft);
                 }
 
@@ -623,6 +651,7 @@ mod tests {
                 Mode::Ready,
                 false,
                 &[],
+                &[],
             );
         });
         output.textures_delta.clear();
@@ -638,6 +667,7 @@ mod tests {
                 &mut Attachments::default(),
                 Mode::Ready,
                 false,
+                &[],
                 &[],
             );
         });
@@ -676,6 +706,7 @@ mod tests {
                 &mut Attachments::default(),
                 Mode::Working,
                 false,
+                &[],
                 &[],
             );
         });
@@ -766,6 +797,7 @@ mod tests {
                     Mode::Ready,
                     false,
                     &[],
+                    &[],
                 );
             });
 
@@ -786,5 +818,98 @@ mod tests {
         draft.push_str("typed");
 
         assert!(ready(vec![key(Key::ArrowUp)], &mut draft).is_none());
+    }
+
+    fn send_with_commands(
+        context: &egui::Context,
+        events: Vec<egui::Event>,
+        draft: &mut String,
+        mode: Mode,
+    ) -> Option<Action> {
+        let entries = commands::entries(Vec::new());
+
+        let input = egui::RawInput {
+            events,
+            ..Default::default()
+        };
+
+        let mut action = None;
+
+        let mut output = context.run_ui(input, |ui| {
+            action = show(
+                ui,
+                draft,
+                &mut Attachments::default(),
+                mode,
+                false,
+                &[],
+                &entries,
+            );
+        });
+
+        output.textures_delta.clear();
+
+        action
+    }
+
+    #[test]
+    fn return_in_the_command_list_runs_the_chosen_command() {
+        let context = egui::Context::default();
+        crate::theme::apply(&context);
+        let mut draft = "/und".to_string();
+
+        send_with_commands(&context, Vec::new(), &mut draft, Mode::Ready);
+
+        let action = send_with_commands(&context, vec![key(Key::Enter)], &mut draft, Mode::Ready);
+
+        assert!(
+            matches!(&action, Some(Action::Send(text, _)) if text == "/undo"),
+            "{:?}",
+            action.map(|_| ())
+        );
+        assert!(draft.is_empty());
+    }
+
+    #[test]
+    fn tab_completes_a_command_that_takes_an_argument() {
+        let context = egui::Context::default();
+        crate::theme::apply(&context);
+        let mut draft = "/rest".to_string();
+
+        send_with_commands(&context, Vec::new(), &mut draft, Mode::Ready);
+
+        let action = send_with_commands(&context, vec![key(Key::Tab)], &mut draft, Mode::Ready);
+
+        assert!(action.is_none());
+        assert_eq!(draft, "/restore ");
+    }
+
+    #[test]
+    fn down_moves_through_the_list() {
+        let context = egui::Context::default();
+        crate::theme::apply(&context);
+        let mut draft = "/".to_string();
+
+        send_with_commands(&context, Vec::new(), &mut draft, Mode::Ready);
+        send_with_commands(&context, vec![key(Key::ArrowDown)], &mut draft, Mode::Ready);
+
+        // The second command is `/undo`.
+        let action = send_with_commands(&context, vec![key(Key::Enter)], &mut draft, Mode::Ready);
+
+        assert!(matches!(&action, Some(Action::Send(text, _)) if text == "/undo"));
+    }
+
+    #[test]
+    fn a_command_during_a_run_goes_to_the_window_not_the_model_queue() {
+        let context = egui::Context::default();
+        crate::theme::apply(&context);
+        let mut draft = "/sto".to_string();
+
+        send_with_commands(&context, Vec::new(), &mut draft, Mode::Working);
+
+        let action = send_with_commands(&context, vec![key(Key::Enter)], &mut draft, Mode::Working);
+
+        // The app reads `/stop` as its own command before steering.
+        assert!(matches!(&action, Some(Action::Steer(text)) if text == "/stop"));
     }
 }

@@ -1,10 +1,10 @@
 //! Fonts.
 //!
-//! The app is set in the system's own typefaces: San Francisco for the
-//! interface, New York for the assistant's words, SF Mono for code. All
-//! three are variable fonts, so each use picks the weight and the optical
-//! size that suit it: a serif drawn for headlines is thin and spiky at
-//! reading size, and the same font's text cut is not.
+//! The app is set in Inter, and code in JetBrains Mono, when they are
+//! installed. Otherwise it uses the system's own typefaces: San Francisco
+//! for the interface and the assistant's words, SF Mono for code. These
+//! are variable fonts, so each use picks the weight and the optical size
+//! that suit it.
 //!
 //! Windows and Linux have other typefaces. There each family takes the
 //! nearest one the system has: Segoe UI, Georgia and Cascadia or Consolas
@@ -29,6 +29,7 @@ pub const STRONG: &str = "strong";
 
 /// Each list is tried in order. The first file is the Mac's.
 const SANS: &[&str] = &[
+    "/Library/Fonts/InterVariable.ttf",
     "/System/Library/Fonts/SFNS.ttf",
     "C:/Windows/Fonts/SegUIVar.ttf",
     "C:/Windows/Fonts/segoeui.ttf",
@@ -41,6 +42,7 @@ const SANS: &[&str] = &[
 ];
 
 const SANS_STRONG: &[&str] = &[
+    "/Library/Fonts/InterVariable.ttf",
     "/System/Library/Fonts/SFNS.ttf",
     "C:/Windows/Fonts/SegUIVar.ttf",
     "C:/Windows/Fonts/seguisb.ttf",
@@ -52,7 +54,11 @@ const SANS_STRONG: &[&str] = &[
     "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Bold.ttf",
 ];
 
+// The assistant's words are set in the interface sans, with the serif
+// left as the fallback where no sans is found.
 const SERIF: &[&str] = &[
+    "/Library/Fonts/InterVariable.ttf",
+    "/System/Library/Fonts/SFNS.ttf",
     "/System/Library/Fonts/NewYork.ttf",
     "C:/Windows/Fonts/georgia.ttf",
     "/usr/share/fonts/truetype/noto/NotoSerif-Regular.ttf",
@@ -64,6 +70,8 @@ const SERIF: &[&str] = &[
 ];
 
 const SERIF_STRONG: &[&str] = &[
+    "/Library/Fonts/InterVariable.ttf",
+    "/System/Library/Fonts/SFNS.ttf",
     "/System/Library/Fonts/NewYork.ttf",
     "C:/Windows/Fonts/georgiab.ttf",
     "/usr/share/fonts/truetype/noto/NotoSerif-Bold.ttf",
@@ -75,6 +83,7 @@ const SERIF_STRONG: &[&str] = &[
 ];
 
 const MONO: &[&str] = &[
+    "/Library/Fonts/JetBrainsMono[wght].ttf",
     "/System/Library/Fonts/SFNSMono.ttf",
     "C:/Windows/Fonts/CascadiaMono.ttf",
     "C:/Windows/Fonts/consola.ttf",
@@ -191,7 +200,18 @@ pub fn install(context: &egui::Context) {
 }
 
 fn load(face: &Face) -> Option<FontData> {
-    let bytes = face.files.iter().find_map(|file| fs::read(file).ok())?;
+    // A font installed for one person only is in their own `Library`.
+    let home = std::env::home_dir();
+
+    let bytes = face.files.iter().find_map(|file| {
+        fs::read(file).ok().or_else(|| {
+            let personal = file
+                .strip_prefix('/')
+                .filter(|file| file.starts_with("Library/Fonts/"))?;
+
+            fs::read(home.as_ref()?.join(personal)).ok()
+        })
+    })?;
 
     let data = FontData::from_owned(bytes);
 

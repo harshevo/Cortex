@@ -21,6 +21,10 @@ async fn main() -> ExitCode {
         Command::Login => commands::login::execute().await,
         Command::Usage(args) => commands::usage::execute(args),
         Command::Effect(args) => commands::effect::execute(args),
+        Command::Undo(args) => commands::checkpoints::undo(args).await,
+        Command::Checkpoints(args) => commands::checkpoints::execute(args).await,
+        Command::Trace(args) => commands::trace::execute(args).await,
+        Command::Learned(args) => commands::learned::execute(args),
     };
 
     match result {

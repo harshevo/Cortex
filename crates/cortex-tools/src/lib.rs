@@ -7,18 +7,25 @@ mod affected_tests;
 mod browser;
 mod calculate;
 mod checks;
+mod delete_file;
 mod edit_file;
 mod file_dependencies;
 pub mod find_references;
+mod git;
 mod github;
+mod impact;
 mod input;
 mod list_files;
+mod mcp;
+mod move_file;
+mod notes;
 mod outline;
 mod read_file;
 mod read_symbol;
 mod search;
 mod semantic_search;
 mod shell;
+mod update_plan;
 mod write_file;
 
 use std::sync::Arc;
@@ -29,17 +36,24 @@ use cortex_retrieval::{EmbeddingClient, SemanticIndex};
 
 pub use affected_tests::AffectedTests;
 pub use browser::{Browser, BrowserOptions, BrowserView};
+pub use delete_file::DeleteFile;
 pub use edit_file::EditFile;
 pub use file_dependencies::FileDependencies;
+pub use impact::Impact;
 pub use find_references::FindReferences;
+pub use git::Git;
 pub use github::{Github, GithubWrite};
 pub use list_files::ListFiles;
+pub use mcp::add_mcp_tools;
+pub use move_file::MoveFile;
+pub use notes::{DropNote, SaveNote};
 pub use outline::Outline;
 pub use read_file::ReadFile;
 pub use read_symbol::ReadSymbol;
 pub use search::Search;
 pub use semantic_search::SemanticSearch;
 pub use shell::Shell;
+pub use update_plan::UpdatePlan;
 pub use write_file::WriteFile;
 
 /// The basic tools every configuration has.
@@ -53,6 +67,12 @@ pub fn default_registry() -> ToolRegistry {
     registry.register(EditFile::default());
     registry.register(Shell::default());
     registry.register(calculate::Calculate);
+    registry.register(DeleteFile);
+    registry.register(MoveFile);
+    registry.register(Git);
+    registry.register(UpdatePlan);
+    registry.register(SaveNote);
+    registry.register(DropNote);
 
     registry
 }
@@ -83,6 +103,7 @@ pub fn add_code_index_tools(registry: &mut ToolRegistry) {
 pub fn add_code_graph_tools(registry: &mut ToolRegistry, graph: Arc<CodeGraph>) {
     registry.register(FindReferences::new(graph.clone()));
     registry.register(AffectedTests::new(graph.clone()));
+    registry.register(Impact::new(graph.clone()));
     registry.register(FileDependencies::new(graph));
 }
 

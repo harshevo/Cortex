@@ -895,18 +895,4 @@ mod tests {
         assert!(store.kept.contains_key(&egui::Id::new(29_u64)));
         assert!(!store.kept.contains_key(&egui::Id::new(0_u64)));
     }
-
-    #[test]
-    fn zz_real_pdfs() {
-        for path in std::env::var("REAL_PDFS").unwrap().split(':') {
-            let started = std::time::Instant::now();
-            match load_source(Source::File(path.into())) {
-                Ok(a) => match a.content {
-                    Content::Document(t) => eprintln!("OK {} {} bytes in {:?}\n---\n{}\n---", a.name, t.len(), started.elapsed(), &t[..t.len().min(600)]),
-                    _ => unreachable!(),
-                },
-                Err(e) => eprintln!("ERR {path}: {e:#}"),
-            }
-        }
-    }
 }

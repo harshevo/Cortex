@@ -10,7 +10,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result, bail};
 use cortex_cli::args::{ModelArgs, ProviderKind};
 use cortex_cli::features::{self, Feature, SessionLocation, Setup};
-use cortex_core::{AgentConfig, ModelProvider, Workspace, prompt};
+use cortex_core::{AgentConfig, Fallback, ModelProvider, Workspace, prompt};
 use cortex_providers::{
     AnthropicConfig, AnthropicProvider, CodexConfig, CodexProvider, OpenAiCompatConfig,
     OpenAiCompatProvider,
@@ -26,6 +26,11 @@ const STATE_DIRECTORY: &str = ".cortex";
 pub struct Blueprint {
     pub info: Info,
     pub provider: Arc<dyn ModelProvider>,
+
+    /// The cheaper model for reviews and the stronger one for a stuck
+    /// run, when set.
+    pub models: Models,
+
     pub workspace: Workspace,
     pub config: AgentConfig,
 
@@ -59,13 +64,13 @@ impl Blueprint {
             .with_context(|| format!("cannot open the folder {}", place.display()))?
             .with_sandbox(model.sandbox());
 
-        let provider: Arc<dyn ModelProvider> = match demo_project {
-            Some(_) => Arc::new(DemoProvider::new(workspace.root())),
+        let (provider, models): (Arc<dyn ModelProvider>, _) = match demo_project {
+            Some(_) => (Arc::new(DemoProvider::new(workspace.root())), Models::default()),
 
             None => {
                 let key = provider_key(launch).await;
 
-                build_provider(&launch.settings, key.as_deref())?
+                build_routed(&launch.settings, key.as_deref())?
             }
         };
 
@@ -74,6 +79,7 @@ impl Blueprint {
             SessionLocation {
                 directory: workspace.root().join(STATE_DIRECTORY),
                 scope: workspace.root().display().to_string(),
+                project: Some(workspace.root().to_path_buf()),
             },
         )
         .await?;
@@ -95,11 +101,17 @@ impl Blueprint {
             model: provider.model().to_string(),
             max_steps: model.max_steps,
             demo: demo_project.is_some(),
+            compact_at: setup
+                .extras
+                .compact
+                .as_ref()
+                .and_then(|compact| compact.auto_at),
         };
 
         Ok(Self {
             info,
             provider,
+            models,
             workspace,
             config,
             model,
@@ -123,6 +135,55 @@ async fn provider_key(launch: &Launch) -> Option<String> {
         .await
         .ok()
         .flatten()
+}
+
+type Model = Arc<dyn ModelProvider>;
+
+/// The models beside the one in use.
+#[derive(Default)]
+pub struct Models {
+    /// For reviews and compaction.
+    pub helper: Option<Model>,
+
+    /// For a run that is stuck.
+    pub escalation: Option<Model>,
+}
+
+/// The model in use with its fallbacks behind it, and the helper model.
+/// A fallback or helper that cannot be built is left out rather than
+/// stopping the session.
+fn build_routed(
+    settings: &Settings,
+    api_key: Option<&str>,
+) -> Result<(Arc<dyn ModelProvider>, Models)> {
+    let current = settings.current();
+
+    let with_model = |model: &str| {
+        let mut settings = settings.clone();
+        settings.current_mut().model = model.trim().to_string();
+
+        build_provider(&settings, api_key).ok()
+    };
+
+    let mut providers = vec![build_provider(settings, api_key)?];
+
+    providers.extend(
+        current
+            .fallbacks
+            .iter()
+            .filter(|model| !model.trim().is_empty() && model.trim() != current.model)
+            .filter_map(|model| with_model(model)),
+    );
+
+    let helper = Some(current.helper.trim())
+        .filter(|model| !model.is_empty() && *model != current.model)
+        .and_then(with_model);
+
+    let escalation = Some(current.escalation.trim())
+        .filter(|model| !model.is_empty() && *model != current.model)
+        .and_then(with_model);
+
+    Ok((Fallback::over(providers), Models { helper, escalation }))
 }
 
 pub(crate) fn build_provider(

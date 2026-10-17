@@ -92,6 +92,22 @@ pub enum Command {
     /// Replace the older part of the conversation with a summary the
     /// model writes. Only between runs.
     Compact,
+
+    /// Put the project back as it was before the last run changed it,
+    /// or to the checkpoint named. Only between runs.
+    Restore(Option<String>),
+
+    /// Say which checkpoints there are.
+    Checkpoints,
+
+    /// Say which files changed since the last checkpoint.
+    Diff,
+
+    /// Say what notes the agent has kept about the project.
+    Notes,
+
+    /// Make a worktree of the project on a new branch of this name.
+    Worktree(String),
 }
 
 /// What the agent tells the window.
@@ -155,6 +171,12 @@ pub enum Update {
 
     /// A compaction ended: what came of it, and whether it failed.
     Compacted((String, bool)),
+
+    /// Something to show in the conversation, and whether it is bad news.
+    Said((String, bool)),
+
+    /// A worktree was made at this folder, on this branch.
+    WorktreeMade((PathBuf, String)),
 }
 
 /// Facts about the agent in use.
@@ -168,6 +190,10 @@ pub struct Info {
 
     /// The agent is the scripted stand-in, not a real model.
     pub demo: bool,
+
+    /// The share of the context window at which the conversation is
+    /// compacted on its own. `None` when it is only compacted by hand.
+    pub compact_at: Option<f32>,
 }
 
 /// Sends updates to the window and wakes it up to draw them.
@@ -310,6 +336,27 @@ impl Engine {
     /// Replaces the older part of the conversation with a summary.
     pub fn compact(&self) {
         let _ = self.commands.send(Command::Compact);
+    }
+
+    /// Undoes the last run, or restores the checkpoint named.
+    pub fn restore(&self, id: Option<String>) {
+        let _ = self.commands.send(Command::Restore(id));
+    }
+
+    pub fn checkpoints(&self) {
+        let _ = self.commands.send(Command::Checkpoints);
+    }
+
+    pub fn diff(&self) {
+        let _ = self.commands.send(Command::Diff);
+    }
+
+    pub fn notes(&self) {
+        let _ = self.commands.send(Command::Notes);
+    }
+
+    pub fn worktree(&self, name: String) {
+        let _ = self.commands.send(Command::Worktree(name));
     }
 
     /// Everything the agent has reported since the last call.

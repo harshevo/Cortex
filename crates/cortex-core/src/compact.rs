@@ -384,7 +384,7 @@ impl Agent {
         automatic: bool,
     ) -> Result<Option<Compaction>, ProviderError> {
         let done = compact(
-            self.provider.as_ref(),
+            self.helper(),
             conversation,
             &self.compact_config(),
             self.context_window(),

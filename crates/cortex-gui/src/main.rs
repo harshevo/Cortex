@@ -9,6 +9,7 @@ mod args;
 mod attachment;
 mod background;
 mod clipboard;
+mod details;
 mod engine;
 mod environment;
 mod format;

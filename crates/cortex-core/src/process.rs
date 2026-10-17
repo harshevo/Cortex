@@ -90,7 +90,7 @@ fn windows_sh() -> Option<PathBuf> {
 /// On timeout the shell process is killed. Processes it started in the
 /// background may survive.
 pub async fn run_shell(command: &str, cwd: &Path, timeout: Duration) -> io::Result<CommandOutput> {
-    run(Command::new(&shell().0), command, cwd, timeout).await
+    run(Command::new(&shell().0), command, cwd, timeout, None).await
 }
 
 /// Runs `command` through the shell in the project, inside its sandbox
@@ -107,6 +107,27 @@ pub async fn run_shell_in(
         command,
         workspace.root(),
         timeout,
+        None,
+    )
+    .await
+}
+
+/// As [`run_shell_in`], with `input` written to the command's standard
+/// input.
+pub async fn run_shell_in_with_input(
+    workspace: &Workspace,
+    command: &str,
+    timeout: Duration,
+    input: Vec<u8>,
+) -> io::Result<CommandOutput> {
+    let program = shell().0.to_string_lossy();
+
+    run(
+        workspace.command(&program),
+        command,
+        workspace.root(),
+        timeout,
+        Some(input),
     )
     .await
 }
@@ -116,6 +137,7 @@ async fn run(
     command: &str,
     cwd: &Path,
     timeout: Duration,
+    input: Option<Vec<u8>>,
 ) -> io::Result<CommandOutput> {
     let flag = shell().1;
 
@@ -137,13 +159,29 @@ async fn run(
     #[cfg(windows)]
     shell_command.creation_flags(0x0800_0000);
 
+    let stdin = match input {
+        Some(_) => Stdio::piped(),
+        None => Stdio::null(),
+    };
+
     let mut child = shell_command
         .current_dir(cwd)
-        .stdin(Stdio::null())
+        .stdin(stdin)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()?;
+
+    // Written on its own task, so a command that does not read its input
+    // cannot hold up the reading of its output.
+    if let (Some(input), Some(mut writer)) = (input, child.stdin.take()) {
+        tokio::spawn(async move {
+            use tokio::io::AsyncWriteExt;
+
+            let _ = writer.write_all(&input).await;
+            let _ = writer.shutdown().await;
+        });
+    }
 
     let mut stdout = child.stdout.take().expect("piped stdout");
     let mut stderr = child.stderr.take().expect("piped stderr");

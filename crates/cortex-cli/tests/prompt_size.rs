@@ -29,6 +29,7 @@ async fn built(project: &std::path::Path, flags: &[&str]) -> (String, Vec<ToolSp
     let location = SessionLocation {
         directory: project.join(".cortex"),
         scope: project.display().to_string(),
+        project: None,
     };
 
     let setup = features::setup(&model, location).await.unwrap();

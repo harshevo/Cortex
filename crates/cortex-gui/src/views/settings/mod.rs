@@ -110,6 +110,9 @@ pub struct Form {
     /// The models of the provider being edited, one per line.
     pub(super) models: String,
 
+    /// The fallback models of the provider being edited, comma separated.
+    pub(super) fallbacks: String,
+
     /// The outcome of the last save, to show beside the buttons.
     pub(super) notice: Option<(String, bool)>,
 
@@ -129,6 +132,7 @@ impl Form {
     pub fn new(settings: &Settings) -> Self {
         Self {
             models: settings.current().models.join("\n"),
+            fallbacks: settings.current().fallbacks.join(", "),
             draft: settings.clone(),
             section: Section::Provider,
             query: String::new(),
@@ -176,6 +180,14 @@ impl Form {
         }
 
         current.models = models;
+
+        current.fallbacks = self
+            .fallbacks
+            .split([',', '\n'])
+            .map(str::trim)
+            .filter(|model| !model.is_empty())
+            .map(str::to_string)
+            .collect();
     }
 }
 
