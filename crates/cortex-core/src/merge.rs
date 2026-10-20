@@ -130,11 +130,7 @@ pub fn overlaps(changes: &[(String, Vec<String>)]) -> BTreeMap<String, Vec<Overl
 /// Commits everything changed in the worktree at `root`, Cortex's own
 /// folder aside. Returns the commit, or `None` when nothing changed.
 pub async fn commit_all(root: &Path, message: &str) -> Result<Option<String>, String> {
-    git(
-        root,
-        &["add", "--all", "--", ".", ":(exclude).cortex", ":(exclude)**/.cortex"],
-    )
-    .await?;
+    stage_all(root).await?;
 
     let staged = git_status(root, &["diff", "--cached", "--quiet"]).await?;
 
@@ -149,6 +145,20 @@ pub async fn commit_all(root: &Path, message: &str) -> Result<Option<String>, St
     git_owned(root, &args).await?;
 
     head(root).await.map(Some)
+}
+
+/// Stages everything changed in the checkout at `root` except Cortex's
+/// own folders, which are put back as the last commit has them. Naming
+/// them in the `git add` instead would fail wherever they are ignored.
+async fn stage_all(root: &Path) -> Result<(), String> {
+    git(root, &["add", "--all", "--", "."]).await?;
+
+    git(
+        root,
+        &["reset", "--quiet", "--", ":(glob).cortex/**", ":(glob)**/.cortex/**"],
+    )
+    .await
+    .map(|_| ())
 }
 
 /// Tries merging `branch` into what is checked out at `root`, touching
@@ -308,11 +318,7 @@ pub async fn finish_merge(root: &Path) -> Result<Vec<String>, String> {
         return Ok(left);
     }
 
-    git(
-        root,
-        &["add", "--all", "--", ".", ":(exclude).cortex", ":(exclude)**/.cortex"],
-    )
-    .await?;
+    stage_all(root).await?;
 
     // Any file still marked as conflicting has no markers left: staging
     // it above was its resolution.
@@ -589,7 +595,21 @@ mod tests {
         assert_eq!(found["job-1"][0].files, vec!["a.txt".to_string()]);
 
         assert!(commit_all(&one, "job 1").await.unwrap().is_some());
+        // Cortex's own folder is left out, ignored or not.
+        std::fs::create_dir_all(two.join(".cortex")).unwrap();
+        std::fs::write(two.join(".cortex/state.json"), "{}").unwrap();
+
         assert!(commit_all(&two, "job 2").await.unwrap().is_some());
+        assert!(!run(&two, &["cat-file", "-e", "HEAD:.cortex/state.json"]));
+
+        std::fs::write(root.join(".git/info/exclude"), "/.cortex/\n").unwrap();
+        std::fs::write(one.join(".cortex-free.txt"), "x\n").unwrap();
+        std::fs::create_dir_all(one.join(".cortex")).unwrap();
+        std::fs::write(one.join(".cortex/log"), "x").unwrap();
+
+        assert!(commit_all(&one, "job 1, more").await.unwrap().is_some());
+        assert!(run(&one, &["cat-file", "-e", "HEAD:.cortex-free.txt"]));
+        assert!(!run(&one, &["cat-file", "-e", "HEAD:.cortex/log"]));
         assert_eq!(commit_all(&two, "again").await.unwrap(), None);
 
         // Something uncommitted in the project, in a file job 1 does not

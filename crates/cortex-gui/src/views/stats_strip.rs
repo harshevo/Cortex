@@ -19,13 +19,13 @@ const CELL_SIZE: f32 = 7.0;
 const CELL_GAP: f32 = 2.0;
 
 /// Squares of the loop strip shown; a long run shows its latest ones.
-const MAX_CELLS: usize = 24;
+const MAX_CELLS: usize = 12;
 
 /// Below this width the line of numbers is cut down to the step, so that
 /// it cannot run into the selectors on the right.
 const ROOMY_WIDTH: f32 = 600.0;
 
-const DETAIL_WIDTH: f32 = 270.0;
+const DETAIL_WIDTH: f32 = 320.0;
 
 /// Longest model name shown before it is cut.
 const MAX_MODEL_CHARS: usize = 26;
@@ -152,7 +152,8 @@ fn summary(ui: &mut Ui, reading: &Reading<'_>, can_change: bool) -> Option<Chang
 
     menu::attach_sticky(&button, Opens::Up, |ui| {
         ui.set_width(DETAIL_WIDTH);
-        ui.spacing_mut().item_spacing.y = 7.0;
+        ui.spacing_mut().item_spacing.y = theme::space::M;
+        menu::title(ui, "Session");
 
         detail(ui, "Speed", |ui| speed(ui, reading));
         detail(ui, "Cache", |ui| cache(ui, stats));
@@ -163,7 +164,7 @@ fn summary(ui: &mut Ui, reading: &Reading<'_>, can_change: bool) -> Option<Chang
                 value(ui, &context_line(context));
             });
 
-            parts_of(ui, context);
+            ui.collapsing("Context breakdown", |ui| parts_of(ui, context));
         }
 
         if let Some(quota) = &stats.quota {
@@ -183,8 +184,19 @@ fn summary(ui: &mut Ui, reading: &Reading<'_>, can_change: bool) -> Option<Chang
             );
         }
 
+        detail(ui, "Tokens", |ui| {
+            value(
+                ui,
+                &format!(
+                    "{} in, {} out",
+                    format::count(stats.usage.total_input()),
+                    format::count(stats.usage.output_tokens),
+                ),
+            );
+        });
+
         ui.horizontal(|ui| {
-            let button = ui.add_enabled(can_change, egui::Button::new("Compact now"));
+            let button = ui.add_enabled(can_change, egui::Button::new("Compact"));
 
             let button = button.on_hover_text(
                 "Replace the older part of the conversation with a summary the model \
@@ -197,22 +209,11 @@ fn summary(ui: &mut Ui, reading: &Reading<'_>, can_change: bool) -> Option<Chang
 
             if stats.compactions > 0 {
                 ui.label(
-                    RichText::new(format!("compacted {} times", stats.compactions))
+                    RichText::new(format!("{} compactions", stats.compactions))
                         .font(theme::small())
                         .color(palette::text_muted()),
                 );
             }
-        });
-
-        detail(ui, "Tokens", |ui| {
-            value(
-                ui,
-                &format!(
-                    "{} in, {} out",
-                    format::count(stats.usage.total_input()),
-                    format::count(stats.usage.output_tokens),
-                ),
-            );
         });
 
         if let Some(savings) = stats.savings() {
@@ -231,7 +232,7 @@ fn summary(ui: &mut Ui, reading: &Reading<'_>, can_change: bool) -> Option<Chang
 /// model's window is not known.
 fn context_line(context: &cortex_core::window::ContextUse) -> String {
     let tokens = format::count(context.tokens);
-    let about = if context.estimated { "about " } else { "" };
+    let about = if context.estimated { "~" } else { "" };
 
     match (context.window, context.share) {
         (Some(window), Some(share)) => format!(
@@ -240,7 +241,7 @@ fn context_line(context: &cortex_core::window::ContextUse) -> String {
             format::percent(share)
         ),
 
-        _ => format!("{about}{tokens} tokens; the model's window is not known"),
+        _ => format!("{about}{tokens} tokens · limit unknown"),
     }
 }
 
@@ -262,19 +263,13 @@ fn parts_of(ui: &mut Ui, context: &cortex_core::window::ContextUse) {
 
     named.sort_by_key(|(_, tokens)| std::cmp::Reverse(*tokens));
 
-    let shown: Vec<String> = named
-        .iter()
-        .filter(|(_, tokens)| *tokens > 0)
-        .take(5)
-        .map(|(name, tokens)| format!("{name} ~{}", format::count(*tokens)))
-        .collect();
-
-    if !shown.is_empty() {
-        ui.label(
-            RichText::new(shown.join(" · "))
-                .font(theme::small())
-                .color(palette::text_muted()),
-        );
+    for (name, tokens) in named.into_iter().filter(|(_, tokens)| *tokens > 0) {
+        ui.horizontal(|ui| {
+            quiet(ui, name);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                value(ui, &format!("~{}", format::count(tokens)));
+            });
+        });
     }
 }
 
@@ -285,7 +280,7 @@ fn quota_line(quota: &cortex_core::window::PlanQuota) -> String {
     };
 
     let parts: Vec<String> = [
-        window("short window", &quota.primary),
+        window("Session", &quota.primary),
         window("week", &quota.secondary),
     ]
     .into_iter()
@@ -295,7 +290,7 @@ fn quota_line(quota: &cortex_core::window::PlanQuota) -> String {
     if parts.is_empty() {
         "not reported".to_string()
     } else {
-        parts.join(", ")
+        parts.join(" · ")
     }
 }
 
@@ -304,7 +299,7 @@ fn detail(ui: &mut Ui, name: &str, content: impl FnOnce(&mut Ui)) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 5.0;
 
-        let (rect, _) = ui.allocate_exact_size(vec2(52.0, ROW_HEIGHT), Sense::hover());
+        let (rect, _) = ui.allocate_exact_size(vec2(60.0, ROW_HEIGHT), Sense::hover());
 
         ui.painter().text(
             rect.left_center(),

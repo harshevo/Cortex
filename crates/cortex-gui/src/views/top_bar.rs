@@ -205,6 +205,7 @@ fn views(ui: &mut Ui, view: &mut View, narrow: bool) {
     if narrow {
         let (_, chosen) =
             menu::dropdown(ui, None, name_of(on_screen), true, Opens::DownLeft, |ui| {
+                ui.set_width(menu::MIN_WIDTH);
                 let mut chosen = None;
 
                 for (tab, name) in SHOWN
@@ -234,6 +235,7 @@ fn views(ui: &mut Ui, view: &mut View, narrow: bool) {
     let (more, _) = segment(ui, label, tucked.is_some(), true);
 
     let chosen = menu::attach(&more, Opens::DownLeft, |ui| {
+        ui.set_width(menu::MIN_WIDTH);
         let mut chosen = None;
 
         for (tab, name) in TUCKED {

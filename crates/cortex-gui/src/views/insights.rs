@@ -30,6 +30,8 @@ const WEEKDAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 /// How long what was read is shown before it is read again, while the
 /// view is open.
 const FRESH_FOR: f64 = 30.0;
+const MODEL_ROW_HEIGHT: f32 = 80.0;
+const VISIBLE_MODELS: usize = 5;
 
 /// Everything read from the records at once.
 struct Read {
@@ -53,6 +55,7 @@ pub struct InsightsView {
 
     /// The day picked on the calendar, `YYYY-MM-DD`.
     day: Option<String>,
+    sessions_expanded: bool,
 }
 
 impl Default for InsightsView {
@@ -68,6 +71,7 @@ impl Default for InsightsView {
             reading: None,
             read_at: f64::NEG_INFINITY,
             day: None,
+            sessions_expanded: false,
         }
     }
 }
@@ -113,6 +117,7 @@ impl InsightsView {
         self.year = index.div_euclid(12);
         self.month = (index.rem_euclid(12) + 1) as u32;
         self.day = None;
+        self.sessions_expanded = false;
         self.reading = None;
 
         self.refresh(context, now);
@@ -166,7 +171,10 @@ pub fn show(ui: &mut Ui, view: &mut InsightsView) {
                 ui.set_width(width - 2.0 * theme::space::L);
 
                 let Some(read) = &view.read else {
-                    ui.label(RichText::new("Reading the records…").color(palette::text_muted()));
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        muted(ui, "Loading…");
+                    });
 
                     return;
                 };
@@ -181,213 +189,352 @@ pub fn show(ui: &mut Ui, view: &mut InsightsView) {
     });
 }
 
+fn month_picker(ui: &mut Ui, view: &mut InsightsView, now: f64) {
+    let label = format!("{} {}", MONTHS[(view.month - 1) as usize], view.year);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label, theme::strong(16.0), palette::text());
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::hover());
+    let button = 28.0;
+    let group = Rect::from_center_size(
+        rect.center(),
+        vec2(
+            galley.size().x + 2.0 * (button + theme::space::M),
+            rect.height(),
+        ),
+    );
+    let previous = Rect::from_min_size(group.min, vec2(button, rect.height()));
+    let next = Rect::from_min_size(
+        pos2(group.right() - button, group.top()),
+        vec2(button, rect.height()),
+    );
+    ui.painter().galley(
+        pos2(
+            rect.center().x - galley.size().x / 2.0,
+            rect.center().y - galley.size().y / 2.0,
+        ),
+        galley,
+        palette::text(),
+    );
+    if ui
+        .put(previous, egui::Button::new("‹"))
+        .on_hover_text("Previous month")
+        .clicked()
+    {
+        view.turn_month(-1, ui.ctx(), now);
+    }
+    if ui
+        .put(next, egui::Button::new("›"))
+        .on_hover_text("Next month")
+        .clicked()
+    {
+        view.turn_month(1, ui.ctx(), now);
+    }
+    if view.reading.is_some() {
+        ui.put(
+            Rect::from_center_size(
+                pos2(group.right() + theme::space::L, rect.center().y),
+                vec2(12.0, 12.0),
+            ),
+            egui::Spinner::new(),
+        );
+    }
+}
+
+fn heading(ui: &mut Ui, text: &str) {
+    ui.label(
+        RichText::new(text)
+            .font(theme::strong(theme::size::UI))
+            .color(palette::text()),
+    );
+    ui.add_space(theme::space::S);
+}
+
+fn card(ui: &mut Ui, title: Option<&str>, body: impl FnOnce(&mut Ui)) {
+    egui::Frame::new()
+        .fill(palette::surface())
+        .corner_radius(egui::CornerRadius::same(theme::radius::XL))
+        .inner_margin(egui::Margin::same(18))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = theme::space::S;
+            if let Some(title) = title {
+                heading(ui, title);
+            }
+            body(ui);
+        });
+}
+
+fn activity(ui: &mut Ui, view: &mut InsightsView, report: &MonthReport) {
+    card(ui, Some("Activity"), |ui| {
+        calendar(ui, view, report);
+        ui.add_space(theme::space::XL);
+        heading(ui, "Hourly usage");
+        hours(
+            ui,
+            &report
+                .summary
+                .hours
+                .iter()
+                .map(|hour| hour.tokens)
+                .collect::<Vec<_>>(),
+        );
+    });
+}
+
+fn models(ui: &mut Ui, report: &MonthReport) {
+    card(ui, Some("Models"), |ui| {
+        ui.spacing_mut().scroll.floating = false;
+        model_scroll(ui, report);
+    });
+}
+
+fn model_scroll(ui: &mut Ui, report: &MonthReport) -> egui::scroll_area::ScrollAreaOutput<()> {
+    let height = (report.summary.models.len().min(VISIBLE_MODELS) as f32 * MODEL_ROW_HEIGHT)
+        .max(theme::control::SMALL);
+    ScrollArea::vertical()
+        .id_salt("insights models")
+        .max_height(height)
+        .min_scrolled_height(height)
+        .auto_shrink([false, true])
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
+        .show(ui, |ui| model_list(ui, report))
+}
+
+fn model_list(ui: &mut Ui, report: &MonthReport) {
+    ui.spacing_mut().item_spacing.y = 0.0;
+    if report.summary.models.is_empty() {
+        muted(ui, "No usage yet");
+    }
+    for model in &report.summary.models {
+        let name = if model.model.is_empty() {
+            "Unknown model"
+        } else {
+            &model.model
+        };
+        let (rect, response) =
+            ui.allocate_exact_size(vec2(ui.available_width(), MODEL_ROW_HEIGHT), Sense::hover());
+        let mut job = egui::text::LayoutJob::simple(
+            name.to_string(),
+            theme::ui(),
+            palette::text(),
+            rect.width(),
+        );
+        job.wrap.max_rows = 1;
+        let title = ui.painter().layout_job(job);
+        ui.painter()
+            .galley(rect.min + vec2(0.0, 4.0), title, palette::text());
+        ui.painter().text(
+            rect.min + vec2(0.0, 30.0),
+            Align2::LEFT_TOP,
+            format!("{} tokens", count(model.totals.tokens())),
+            theme::small(),
+            palette::text_secondary(),
+        );
+        let share = if model.share > 0.0 && model.share < 0.01 {
+            "<1%".to_string()
+        } else {
+            format!("{:.0}%", model.share * 100.0)
+        };
+        ui.painter().text(
+            pos2(rect.right(), rect.top() + 30.0),
+            Align2::RIGHT_TOP,
+            share,
+            theme::small(),
+            palette::text_muted(),
+        );
+        let bar = Rect::from_min_size(rect.min + vec2(0.0, 54.0), vec2(rect.width(), 3.0));
+        ui.painter().rect_filled(bar, 2.0, palette::sunken());
+        ui.painter().rect_filled(
+            Rect::from_min_size(
+                bar.min,
+                vec2(
+                    bar.width() * model.share.clamp(0.0, 1.0) as f32,
+                    bar.height(),
+                ),
+            ),
+            2.0,
+            palette::text_muted(),
+        );
+        response.on_hover_text(format!(
+            "{name}\n{} · {}\n{}",
+            model.provider,
+            cost_text(&model.cost),
+            cost_note(&model.cost)
+        ));
+    }
+}
+
 fn usage(ui: &mut Ui, view: &mut InsightsView, report: &MonthReport, streak: u32, now: f64) {
     let summary = &report.summary;
 
-    ui.horizontal(|ui| {
-        if ui.button("‹").clicked() {
-            view.turn_month(-1, ui.ctx(), now);
-        }
+    month_picker(ui, view, now);
+    ui.add_space(theme::space::L);
 
-        ui.label(
-            RichText::new(format!(
-                "{} {}",
-                MONTHS[(view.month - 1) as usize],
-                view.year
-            ))
-            .font(theme::strong(16.0))
-            .color(palette::text()),
-        );
-
-        if ui.button("›").clicked() {
-            view.turn_month(1, ui.ctx(), now);
-        }
-
-        ui.add_space(12.0);
-
-        if view.reading.is_some() {
-            ui.label(
-                RichText::new("reading…")
-                    .font(theme::small())
-                    .color(palette::text_muted()),
-            );
-        }
-    });
-
-    ui.add_space(10.0);
-
-    // The figures that answer "how much".
-    let mut tiles: Vec<[String; 3]> = Vec::new();
-
-    {
-        let figures = &mut tiles;
-
-        figure(
-            figures,
-            "Tokens",
-            &count(summary.totals.tokens()),
-            &format!(
-                "{} in · {} out",
-                count(summary.totals.all_input()),
-                count(summary.totals.output_tokens)
-            ),
-        );
-
-        figure(
-            figures,
-            "Cost",
-            &cost_text(&summary.cost),
-            &cost_note(&summary.cost),
-        );
-
-        figure(
-            figures,
-            "Sessions",
-            &summary.session_count.to_string(),
-            &format!("{} model calls", summary.totals.calls),
-        );
-
-        figure(
-            figures,
-            "Streak",
-            &format!("{streak} {}", if streak == 1 { "day" } else { "days" }),
-            "",
-        );
-
-        figure(
-            figures,
-            "Favourite model",
-            summary.favourite_model.as_deref().unwrap_or("—"),
-            "",
-        );
-
-        figure(
-            figures,
-            "Peak day",
-            &summary
-                .peak_day
-                .as_ref()
-                .map_or("—".to_string(), |peak| peak.date.clone()),
-            &summary.peak_day.as_ref().map_or(String::new(), |peak| {
-                format!("{} tokens", count(peak.tokens))
-            }),
-        );
-
-        figure(
-            figures,
-            "Peak hour",
-            &summary
-                .peak_hour
-                .map_or("—".to_string(), |hour| format!("{:02}:00", hour.hour)),
-            "",
-        );
-
-        figure(
-            figures,
-            "From the cache",
-            &summary
-                .cache_hit_share
-                .map_or("—".to_string(), |share| format!("{:.0}%", share * 100.0)),
-            "of input",
-        );
-    }
-
-    tiles_in_rows(ui, &tiles);
-
-    section(ui, "By day");
-    calendar(ui, view, report);
-
-    if let Some(per_call) = summary.per_call {
-        muted(
-            ui,
-            &format!(
-                "An average call sends {} tokens and gets {} back.",
-                count(per_call.input_tokens as u64),
-                count(per_call.output_tokens as u64)
-            ),
-        );
-    }
-
-    section(ui, "By hour of the day");
-    hours(
-        ui,
-        &summary
-            .hours
-            .iter()
-            .map(|hour| hour.tokens)
-            .collect::<Vec<_>>(),
+    let mut figures = Vec::new();
+    figure(
+        &mut figures,
+        "Tokens",
+        &count(summary.totals.tokens()),
+        &format!(
+            "{} in · {} out",
+            count(summary.totals.all_input()),
+            count(summary.totals.output_tokens)
+        ),
     );
+    figure(
+        &mut figures,
+        "Cost",
+        &cost_text(&summary.cost),
+        &cost_note(&summary.cost),
+    );
+    figure(
+        &mut figures,
+        "Sessions",
+        &summary.session_count.to_string(),
+        &format!("{} calls", summary.totals.calls),
+    );
+    figure(
+        &mut figures,
+        "Cache hit",
+        &summary
+            .cache_hit_share
+            .map_or("—".to_string(), |share| format!("{:.0}%", share * 100.0)),
+        "Share of input tokens served from cache",
+    );
+    card(ui, None, |ui| metrics(ui, &figures));
 
-    section(ui, "By model");
-
-    if summary.models.is_empty() {
-        muted(ui, "Nothing used this month.");
-    }
-
-    for model in &summary.models {
-        share_row(
-            ui,
-            &format!("{} · {}", model.model, model.provider),
-            model.share,
-            &format!(
-                "{} tokens · {}",
-                count(model.totals.tokens()),
-                cost_text(&model.cost)
-            ),
-        );
+    ui.add_space(theme::space::L);
+    if ui.available_width() >= 780.0 {
+        let rail_width = 260.0;
+        let gap = theme::space::XL;
+        let chart_width = ui.available_width() - rail_width - gap;
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = gap;
+            ui.allocate_ui_with_layout(
+                vec2(chart_width, 0.0),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    ui.set_width(chart_width);
+                    activity(ui, view, report);
+                },
+            );
+            ui.allocate_ui_with_layout(
+                vec2(rail_width, 0.0),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    ui.set_width(rail_width);
+                    models(ui, report);
+                },
+            );
+        });
+    } else {
+        activity(ui, view, report);
+        ui.add_space(theme::space::L);
+        models(ui, report);
     }
 
     let picked = view.day.clone();
 
-    section(
-        ui,
-        &match &picked {
-            Some(day) => format!("Sessions on {day}"),
-            None => "Sessions".to_string(),
-        },
-    );
+    ui.add_space(theme::space::L);
+    let session_title = picked
+        .as_ref()
+        .map_or("Sessions".to_string(), |day| format!("Sessions · {day}"));
+    card(ui, Some(&session_title), |ui| {
+        if picked.is_some() && ui.small_button("All sessions").clicked() {
+            view.day = None;
+        }
 
-    if picked.is_some() && ui.small_button("Show the whole month").clicked() {
-        view.day = None;
-    }
+        let shown: Vec<&SessionUse> = summary
+            .sessions
+            .iter()
+            .filter(|session| match &picked {
+                Some(day) => touches(session, day, view.offset),
+                None => true,
+            })
+            .take(60)
+            .collect();
 
-    let shown: Vec<&SessionUse> = summary
-        .sessions
-        .iter()
-        .filter(|session| match &picked {
-            Some(day) => touches(session, day, view.offset),
-            None => true,
-        })
-        .take(60)
-        .collect();
+        if shown.is_empty() {
+            muted(ui, "No sessions.");
+        }
 
-    if shown.is_empty() {
-        muted(ui, "No sessions.");
-    }
+        if !shown.is_empty() {
+            let visible = if view.sessions_expanded {
+                shown.len()
+            } else {
+                shown.len().min(8)
+            };
+            session_table(ui, &shown[..visible]);
+            if shown.len() > 8 {
+                let label = if view.sessions_expanded {
+                    "Show fewer".to_string()
+                } else {
+                    format!("Show all ({})", shown.len())
+                };
+                if ui.small_button(label).clicked() {
+                    view.sessions_expanded = !view.sessions_expanded;
+                }
+            }
+        }
+    });
 
-    for session in shown {
-        session_row(ui, session);
-    }
-
-    ui.add_space(8.0);
-
-    ui.label(
-        RichText::new("Prices from ~/.cortex/prices.json · records in ~/.cortex/usage")
-            .font(theme::small())
-            .color(palette::text_muted()),
-    )
-    .on_hover_text(
-        "A model without a known price is counted but not costed, and ChatGPT sign-in \
-         sessions are covered by the subscription. Every model call of every session on this \
-         machine is recorded.",
-    );
+    ui.add_space(theme::space::L);
+    card(ui, None, |ui| {
+        ui.collapsing("Details", |ui| {
+            let mut details = Vec::new();
+            figure(&mut details, "Streak", &format!("{streak} days"), "");
+            figure(
+                &mut details,
+                "Top model",
+                summary.favourite_model.as_deref().unwrap_or("—"),
+                "",
+            );
+            figure(
+                &mut details,
+                "Peak day",
+                &summary
+                    .peak_day
+                    .as_ref()
+                    .map_or("—".to_string(), |peak| peak.date.clone()),
+                "",
+            );
+            figure(
+                &mut details,
+                "Peak hour",
+                &summary
+                    .peak_hour
+                    .map_or("—".to_string(), |hour| format!("{:02}:00", hour.hour)),
+                "",
+            );
+            metrics(ui, &details);
+            if let Some(per_call) = summary.per_call {
+                muted(
+                    ui,
+                    &format!(
+                        "Average call: {} in · {} out",
+                        count(per_call.input_tokens as u64),
+                        count(per_call.output_tokens as u64)
+                    ),
+                );
+            }
+            muted(
+                ui,
+                "Costs use list prices; subscriptions are counted separately.",
+            );
+            muted(
+                ui,
+                "Prices: ~/.cortex/prices.json · Records: ~/.cortex/usage",
+            );
+        });
+    });
 }
 
 /// The month as a grid of days, each as dark as the tokens used on it.
 fn calendar(ui: &mut Ui, view: &mut InsightsView, report: &MonthReport) {
     let gap = 6.0;
-    let cell = ((ui.available_width() - gap * 6.0) / 7.0).clamp(36.0, 96.0);
-    let height = cell * 0.62;
+    let cell = ((ui.available_width() - gap * 6.0) / 7.0).max(12.0);
+    let height = (cell * 0.5).clamp(28.0, 48.0);
 
     let most = report
         .days
@@ -437,7 +584,7 @@ fn calendar(ui: &mut Ui, view: &mut InsightsView, report: &MonthReport) {
         let fill = if tokens == 0 {
             palette::sunken()
         } else {
-            palette::accent().gamma_multiply(0.18 + 0.82 * strength)
+            activity_fill(strength)
         };
 
         let picked = view.day.as_deref() == Some(day.date.as_str());
@@ -453,11 +600,7 @@ fn calendar(ui: &mut Ui, view: &mut InsightsView, report: &MonthReport) {
             );
         }
 
-        let text = if strength > 0.55 {
-            palette::background()
-        } else {
-            palette::text_secondary()
-        };
+        let text = palette::text();
 
         painter.text(
             cell_rect.left_top() + vec2(6.0, 4.0),
@@ -524,7 +667,7 @@ fn touches(session: &SessionUse, day: &str, offset: i32) -> bool {
 /// Twenty-four bars, midnight first.
 fn hours(ui: &mut Ui, tokens: &[u64]) {
     if tokens.iter().all(|tokens| *tokens == 0) {
-        muted(ui, "Nothing used this month.");
+        muted(ui, "No usage yet");
 
         return;
     }
@@ -564,118 +707,151 @@ fn hours(ui: &mut Ui, tokens: &[u64]) {
     }
 }
 
-fn session_row(ui: &mut Ui, session: &SessionUse) {
-    ui.horizontal(|ui| {
-        let title = session.title.clone().unwrap_or_else(|| session.id.clone());
-
-        ui.add_sized(
-            vec2(ui.available_width() * 0.5, 18.0),
-            egui::Label::new(RichText::new(title).color(palette::text())).truncate(),
-        );
-
-        ui.label(
-            RichText::new(&session.model)
-                .font(theme::small())
-                .color(palette::text_muted()),
-        );
-
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(
-                RichText::new(format!(
-                    "{} · {}",
-                    count(session.totals.tokens()),
-                    cost_text(&session.cost)
-                ))
-                .font(theme::mono())
-                .color(palette::text_secondary()),
+fn session_table(ui: &mut Ui, sessions: &[&SessionUse]) {
+    let width = ui.available_width().max(480.0);
+    let model = (width * 0.2).clamp(100.0, 180.0);
+    let widths = [width - model - 160.0, model, 68.0, 92.0];
+    ScrollArea::horizontal()
+        .id_salt("sessions table")
+        .show(ui, |ui| {
+            ui.set_min_width(width);
+            ui.spacing_mut().item_spacing.y = 0.0;
+            table_row(
+                ui,
+                &widths,
+                ["Session", "Model", "Tokens", "Cost"],
+                true,
+                false,
             );
+            for (index, session) in sessions.iter().enumerate() {
+                let tokens = count(session.totals.tokens());
+                let cost = cost_text(&session.cost);
+                let cost_label = match cost.as_str() {
+                    "subscription" => "Plan",
+                    "unpriced" => "—",
+                    _ => &cost,
+                };
+                let title = session.title.as_deref().unwrap_or(&session.id);
+                table_row(
+                    ui,
+                    &widths,
+                    [title, &session.model, &tokens, cost_label],
+                    false,
+                    index % 2 == 0,
+                )
+                .on_hover_text(format!(
+                    "{title}\n{} · {cost}\n{}",
+                    session.model,
+                    cost_note(&session.cost)
+                ));
+            }
         });
-    });
+}
+
+fn table_row(
+    ui: &mut Ui,
+    widths: &[f32; 4],
+    values: [&str; 4],
+    header: bool,
+    shaded: bool,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(widths.iter().sum(), 30.0), Sense::hover());
+    if header || shaded || response.hovered() {
+        ui.painter().rect_filled(
+            rect,
+            egui::CornerRadius::same(theme::radius::M),
+            if header || response.hovered() {
+                palette::raised()
+            } else {
+                palette::background()
+            },
+        );
+    }
+    let mut left = rect.left() + theme::space::S;
+    for (column, (width, value)) in widths.iter().zip(values).enumerate() {
+        let font = if header { theme::small() } else { theme::ui() };
+        let color = if header {
+            palette::text_muted()
+        } else if column == 0 {
+            palette::text()
+        } else {
+            palette::text_secondary()
+        };
+        let mut job =
+            egui::text::LayoutJob::simple(value.to_string(), font, color, (width - 12.0).max(0.0));
+        job.wrap.max_rows = 1;
+        let galley = ui.painter().layout_job(job);
+        let x = if column >= 2 {
+            left + width - 2.0 * theme::space::S - galley.size().x
+        } else {
+            left
+        };
+        ui.painter().galley(
+            pos2(x, rect.center().y - galley.size().y / 2.0),
+            galley,
+            color,
+        );
+        left += width;
+    }
+    response
 }
 
 fn figure(figures: &mut Vec<[String; 3]>, name: &str, value: &str, note: &str) {
     figures.push([name.to_string(), value.to_string(), note.to_string()]);
 }
 
-/// The figures as cards in whole rows of up to four, as many to a row as
-/// the page has room for.
-fn tiles_in_rows(ui: &mut Ui, figures: &[[String; 3]]) {
-    let gap = theme::space::M;
+fn metrics(ui: &mut Ui, figures: &[[String; 3]]) {
+    let gap = theme::space::L;
     let room = ui.available_width();
-    let columns = ((room + gap) / (180.0 + gap)).floor().clamp(1.0, 4.0);
-
-    // Less the card's own margins and outline.
-    let width = (room - gap * (columns - 1.0)) / columns - 2.0 * theme::space::M - 2.0;
-
-    ui.spacing_mut().item_spacing.y = gap;
-
-    for row in figures.chunks(columns as usize) {
+    let columns = if room >= 4.0 * 150.0 + 3.0 * gap {
+        4
+    } else if room >= 2.0 * 150.0 + gap {
+        2
+    } else {
+        1
+    };
+    let width = (room - gap * (columns - 1) as f32) / columns as f32;
+    for row in figures.chunks(columns) {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = gap;
-
             for [name, value, note] in row {
-                tile(ui, width, name, value, note);
+                ui.allocate_ui_with_layout(
+                    vec2(width, 62.0),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        ui.set_min_width(width);
+                        ui.set_max_width(width);
+                        muted(ui, name);
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(value)
+                                    .font(theme::strong(20.0))
+                                    .color(palette::text()),
+                            )
+                            .halign(egui::Align::Min)
+                            .truncate(),
+                        )
+                        .on_hover_text(if note.is_empty() {
+                            value
+                        } else {
+                            note
+                        });
+                    },
+                );
             }
         });
     }
 }
 
-fn tile(ui: &mut Ui, width: f32, name: &str, value: &str, note: &str) {
-    theme::card().show(ui, |ui| {
-        ui.set_width(width);
-        ui.vertical(|ui| {
-            ui.spacing_mut().item_spacing.y = theme::space::XS;
-
-            ui.label(
-                RichText::new(name.to_uppercase())
-                    .font(theme::small())
-                    .color(palette::text_muted()),
-            );
-            ui.add(
-                egui::Label::new(
-                    RichText::new(value)
-                        .font(theme::strong(18.0))
-                        .color(palette::text()),
-                )
-                .truncate(),
-            );
-            // An empty note still takes its line, so the tiles stay level.
-            ui.label(
-                RichText::new(if note.is_empty() { " " } else { note })
-                    .font(theme::small())
-                    .color(palette::text_secondary()),
-            );
-        });
-    });
-}
-
-fn share_row(ui: &mut Ui, name: &str, share: f64, note: &str) {
-    ui.horizontal(|ui| {
-        ui.add_sized(
-            vec2(220.0, 18.0),
-            egui::Label::new(RichText::new(name).color(palette::text())).truncate(),
-        );
-
-        let (rect, _) = ui.allocate_exact_size(
-            vec2((ui.available_width() - 220.0).max(60.0), 10.0),
-            Sense::hover(),
-        );
-
-        let painter = ui.painter_at(rect);
-
-        painter.rect_filled(rect, 3.0, palette::sunken());
-        painter.rect_filled(
-            Rect::from_min_size(rect.min, vec2(rect.width() * share as f32, rect.height())),
-            3.0,
-            palette::accent(),
-        );
-
-        ui.label(
-            RichText::new(note)
-                .font(theme::small())
-                .color(palette::text_secondary()),
-        );
-    });
+fn activity_fill(strength: f32) -> egui::Color32 {
+    let base = palette::sunken();
+    let ink = palette::text_muted();
+    let mix = |a: u8, b: u8| (f32::from(a) + (f32::from(b) - f32::from(a)) * strength * 0.4) as u8;
+    egui::Color32::from_rgb(
+        mix(base.r(), ink.r()),
+        mix(base.g(), ink.g()),
+        mix(base.b(), ink.b()),
+    )
 }
 
 fn cost_text(cost: &CostEstimate) -> String {
@@ -683,7 +859,7 @@ fn cost_text(cost: &CostEstimate) -> String {
         Some(usd) if cost.is_complete() => format!("${usd:.2}"),
         Some(usd) => format!("${usd:.2}+"),
         None if cost.subscription_tokens > 0 && cost.unpriced_tokens == 0 => "subscription".into(),
-        None if cost.unpriced_tokens > 0 => "no price known".into(),
+        None if cost.unpriced_tokens > 0 => "unpriced".into(),
         None => "$0.00".into(),
     }
 }
@@ -719,16 +895,6 @@ fn count(tokens: u64) -> String {
     }
 }
 
-fn section(ui: &mut Ui, text: &str) {
-    ui.add_space(theme::space::XL);
-    ui.label(
-        RichText::new(text.to_uppercase())
-            .font(theme::small())
-            .color(palette::text_muted()),
-    );
-    ui.add_space(theme::space::S);
-}
-
 fn muted(ui: &mut Ui, text: &str) {
     ui.label(
         RichText::new(text)
@@ -740,6 +906,48 @@ fn muted(ui: &mut Ui, text: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn models_scroll_after_five_rows_without_growing_the_viewport() {
+        for count in [3, 5, 12] {
+            let context = egui::Context::default();
+            let mut report = MonthReport::default();
+            report.summary.models = (0..count)
+                .map(|index| cortex_core::ledger::ModelUse {
+                    model: format!("model-{index}"),
+                    ..Default::default()
+                })
+                .collect();
+            let mut viewport = 0.0;
+            let mut content = 0.0;
+            let _ = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(800.0, 600.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.allocate_ui_with_layout(
+                        vec2(224.0, 0.0),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            ui.set_width(224.0);
+                            let output = model_scroll(ui, &report);
+                            viewport = output.inner_rect.height();
+                            content = output.content_size.y;
+                        },
+                    );
+                },
+            );
+            assert!(
+                (viewport - count.min(5) as f32 * MODEL_ROW_HEIGHT).abs() < 1.0,
+                "{count}: viewport {viewport}"
+            );
+            assert!(
+                (content - count as f32 * MODEL_ROW_HEIGHT).abs() < 1.0,
+                "{count}: content {content}"
+            );
+        }
+    }
 
     #[test]
     fn counts_are_short() {

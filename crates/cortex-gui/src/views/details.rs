@@ -20,6 +20,7 @@ const REFRESH: Duration = Duration::from_secs(5);
 const ROW_HEIGHT: f32 = 24.0;
 const SWATCH: f32 = 10.0;
 const BAR_HEIGHT: f32 = 6.0;
+const COLLAPSE_BELOW_WIDTH: f32 = 1100.0;
 
 /// What the person asked for from the panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,6 +55,7 @@ pub struct Facts<'a> {
 /// and the latest reading of the folder.
 pub struct Details {
     pub visible: bool,
+    compact_window: bool,
 
     environment_open: bool,
     context_open: bool,
@@ -74,6 +76,7 @@ impl Default for Details {
     fn default() -> Self {
         Self {
             visible: false,
+            compact_window: false,
             environment_open: true,
             context_open: true,
             changes_open: true,
@@ -88,6 +91,14 @@ impl Default for Details {
 }
 
 impl Details {
+    pub fn adapt_to_width(&mut self, width: f32) {
+        let compact = width < COLLAPSE_BELOW_WIDTH;
+        if compact && !self.compact_window {
+            self.visible = false;
+        }
+        self.compact_window = compact;
+    }
+
     /// The panel, shown from the start when `visible`.
     pub fn opened(visible: bool) -> Self {
         Self {
@@ -169,13 +180,13 @@ pub fn show(ui: &mut Ui, details: &mut Details, facts: &Facts<'_>) -> Option<Act
             let snapshot = details.snapshot_of(facts.place).cloned();
 
             let mut open = details.environment_open;
-            card(ui, "Environment", &mut open, |ui| {
+            section(ui, "Environment", &mut open, |ui| {
                 environment(ui, facts, snapshot.as_ref());
             });
             details.environment_open = open;
 
             let mut open = details.context_open;
-            card(ui, "Context", &mut open, |ui| {
+            section(ui, "Context", &mut open, |ui| {
                 if context(ui, facts) {
                     action = Some(Action::Compact);
                 }
@@ -183,7 +194,7 @@ pub fn show(ui: &mut Ui, details: &mut Details, facts: &Facts<'_>) -> Option<Act
             details.context_open = open;
 
             let mut open = details.changes_open;
-            card(ui, "Changes", &mut open, |ui| {
+            section(ui, "Changes", &mut open, |ui| {
                 if changes(ui, snapshot.as_ref()) {
                     action = Some(Action::ShowFiles);
                 }
@@ -194,13 +205,17 @@ pub fn show(ui: &mut Ui, details: &mut Details, facts: &Facts<'_>) -> Option<Act
     action
 }
 
-/// A bordered card with a title that folds it.
-fn card(ui: &mut Ui, title: &str, open: &mut bool, body: impl FnOnce(&mut Ui)) {
+/// A collapsible card for one group of session details.
+fn section(ui: &mut Ui, title: &str, open: &mut bool, body: impl FnOnce(&mut Ui)) {
     egui::Frame::new()
-        .fill(palette::background())
-        .stroke(Stroke::new(1.0, palette::border()))
-        .corner_radius(CornerRadius::same(radius::L))
-        .inner_margin(egui::Margin::symmetric(space::M as i8, space::S as i8 + 2))
+        .fill(if palette::current().dark {
+            palette::surface()
+        } else {
+            palette::background()
+        })
+        .stroke(Stroke::new(1.0, palette::border().gamma_multiply(0.5)))
+        .corner_radius(CornerRadius::same(radius::XL))
+        .inner_margin(egui::Margin::same(space::M as i8))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = space::XS;
@@ -219,9 +234,9 @@ fn card(ui: &mut Ui, title: &str, open: &mut bool, body: impl FnOnce(&mut Ui)) {
 }
 
 fn header(ui: &mut Ui, title: &str, open: bool) -> egui::Response {
-    let galley = ui
-        .painter()
-        .layout_no_wrap(title.to_string(), theme::strong(13.0), palette::text());
+    let galley =
+        ui.painter()
+            .layout_no_wrap(title.to_string(), theme::strong(13.0), palette::text());
 
     let (rect, response) = ui.allocate_exact_size(
         vec2(ui.available_width(), galley.size().y.max(20.0)),
@@ -235,11 +250,10 @@ fn header(ui: &mut Ui, title: &str, open: bool) -> egui::Response {
     };
 
     let text_at = egui::pos2(rect.left(), rect.center().y - galley.size().y / 2.0);
-    let text_width = galley.size().x;
 
     ui.painter().galley(text_at, galley, palette::text());
 
-    let centre = egui::pos2(rect.left() + text_width + 10.0, rect.center().y + 0.5);
+    let centre = egui::pos2(rect.right() - space::XS, rect.center().y + 0.5);
 
     if open {
         icons::chevron(ui, centre, color);
@@ -276,11 +290,7 @@ fn row(ui: &mut Ui, icon: Icon, text: &str, quiet: Option<&str>, color: Color32)
 
     let mut job = egui::text::LayoutJob::default();
 
-    job.append(
-        text,
-        0.0,
-        egui::TextFormat::simple(theme::ui(), color),
-    );
+    job.append(text, 0.0, egui::TextFormat::simple(theme::ui(), color));
 
     if let Some(quiet) = quiet {
         job.append(
@@ -344,13 +354,9 @@ fn environment(ui: &mut Ui, facts: &Facts<'_>, snapshot: Option<&Snapshot>) {
         ),
         Some(Snapshot { git: Some(git), .. }) => match &git.branch {
             Branch::Named(name) => row(ui, Icon::Branch, name, None, palette::text()),
-            Branch::Detached(commit) => row(
-                ui,
-                Icon::Branch,
-                commit,
-                Some("detached"),
-                palette::text(),
-            ),
+            Branch::Detached(commit) => {
+                row(ui, Icon::Branch, commit, Some("detached"), palette::text())
+            }
         },
     }
 
@@ -438,12 +444,12 @@ fn parts(context: &ContextUse) -> Vec<Part> {
 fn context(ui: &mut Ui, facts: &Facts<'_>) -> bool {
     let Some(context) = facts.context else {
         ui.label(
-            RichText::new("Nothing sent to the model yet.")
+            RichText::new("No context yet")
                 .font(theme::ui())
                 .color(palette::text_muted()),
         );
 
-        return compact_row(ui, facts, None);
+        return false;
     };
 
     let about = if context.estimated { "~" } else { "" };
@@ -456,7 +462,11 @@ fn context(ui: &mut Ui, facts: &Facts<'_>) -> bool {
             None => format!("{about}{} tokens", format::count(context.tokens)),
         };
 
-        ui.label(RichText::new(headline).font(theme::ui()).color(palette::text()));
+        ui.label(
+            RichText::new(headline)
+                .font(theme::ui())
+                .color(palette::text()),
+        );
 
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             let of = match window {
@@ -465,7 +475,7 @@ fn context(ui: &mut Ui, facts: &Facts<'_>) -> bool {
                     format::count(context.tokens),
                     format::count(window)
                 ),
-                None => "window not known".to_string(),
+                None => "Limit unknown".to_string(),
             };
 
             ui.label(
@@ -609,7 +619,11 @@ fn legend(ui: &mut Ui, color: Color32, name: &str, tokens: &str, share: &str) {
     );
 
     // Without a share the tokens take its place at the right-hand end.
-    let share_width = if share.is_empty() { 0.0 } else { 48.0 + space::S };
+    let share_width = if share.is_empty() {
+        0.0
+    } else {
+        48.0 + space::S
+    };
     let tokens_right = rect.right() - share_width;
 
     painter.text(
@@ -620,11 +634,15 @@ fn legend(ui: &mut Ui, color: Color32, name: &str, tokens: &str, share: &str) {
         palette::text_secondary(),
     );
 
-    let tokens_galley = painter.layout_no_wrap(tokens.to_string(), theme::small(), palette::text_muted());
+    let tokens_galley =
+        painter.layout_no_wrap(tokens.to_string(), theme::small(), palette::text_muted());
     let tokens_width = tokens_galley.size().x;
 
     painter.galley(
-        egui::pos2(tokens_right - tokens_width, rect.center().y - tokens_galley.size().y / 2.0),
+        egui::pos2(
+            tokens_right - tokens_width,
+            rect.center().y - tokens_galley.size().y / 2.0,
+        ),
         tokens_galley,
         palette::text_muted(),
     );
@@ -664,14 +682,17 @@ fn compact_row(ui: &mut Ui, facts: &Facts<'_>, context: Option<&ContextUse>) -> 
         (Some(until), _) => format!("{} until auto-compact", format::count(until)),
         (None, None) => "Auto-compact is off".to_string(),
         (None, Some(_)) if context.is_some_and(|context| context.window.is_none()) => {
-            "No auto-compact: window not known".to_string()
+            "Limit unknown".to_string()
         }
         (None, Some(_)) => String::new(),
     };
 
     let note = match facts.compactions {
         0 => note,
-        1 => format!("{note}{}compacted once", if note.is_empty() { "" } else { " · " }),
+        1 => format!(
+            "{note}{}compacted once",
+            if note.is_empty() { "" } else { " · " }
+        ),
         times => format!(
             "{note}{}compacted {times}×",
             if note.is_empty() { "" } else { " · " }
@@ -683,7 +704,7 @@ fn compact_row(ui: &mut Ui, facts: &Facts<'_>, context: Option<&ContextUse>) -> 
     ui.horizontal(|ui| {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             let button = egui::Button::new(
-                RichText::new("Compact session")
+                RichText::new("Compact")
                     .font(theme::small())
                     .color(palette::text_secondary()),
             )
@@ -693,13 +714,13 @@ fn compact_row(ui: &mut Ui, facts: &Facts<'_>, context: Option<&ContextUse>) -> 
 
             let can = facts.can_compact && context.is_some();
 
-            let response = ui.add_enabled(can, button).on_disabled_hover_text(
-                if context.is_none() {
-                    "Nothing to compact yet"
-                } else {
-                    "Wait for the agent to finish"
-                },
-            );
+            let response =
+                ui.add_enabled(can, button)
+                    .on_disabled_hover_text(if context.is_none() {
+                        "Nothing to compact yet"
+                    } else {
+                        "Wait for the agent to finish"
+                    });
 
             if response
                 .on_hover_text("Replace the older part of the conversation with a summary")
@@ -803,8 +824,8 @@ fn changes(ui: &mut Ui, snapshot: Option<&Snapshot>) -> bool {
         quiet(
             ui,
             &match changes.untracked {
-                1 => "1 of them new, not yet tracked".to_string(),
-                new => format!("{new} of them new, not yet tracked"),
+                1 => "1 untracked file".to_string(),
+                new => format!("{new} untracked files"),
             },
         );
     }
@@ -831,6 +852,26 @@ fn group(value: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compact_windows_hide_details_until_reopened() {
+        let mut details = Details::opened(true);
+        details.adapt_to_width(820.0);
+        assert!(!details.visible);
+
+        details.visible = true;
+        details.adapt_to_width(820.0);
+        details.adapt_to_width(760.0);
+        assert!(details.visible);
+
+        details.adapt_to_width(1440.0);
+        assert!(details.visible);
+        details.adapt_to_width(1000.0);
+        assert!(!details.visible);
+
+        details.adapt_to_width(1440.0);
+        assert!(!details.visible);
+    }
 
     #[test]
     fn large_numbers_are_grouped_in_thousands() {

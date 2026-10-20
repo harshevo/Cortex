@@ -85,6 +85,20 @@ pub fn attach_sticky<R>(
     content: impl FnOnce(&mut Ui) -> R,
 ) -> Option<R> {
     popup(button, opens)
+        .frame(
+            egui::Frame::popup(
+                button
+                    .ctx
+                    .style_of(if palette::current().dark {
+                        egui::Theme::Dark
+                    } else {
+                        egui::Theme::Light
+                    })
+                    .as_ref(),
+            )
+            .fill(palette::background())
+            .inner_margin(egui::Margin::same(space::M as i8)),
+        )
         .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
         .show(|ui| {
             ui.spacing_mut().item_spacing.y = space::XS;

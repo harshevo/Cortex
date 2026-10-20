@@ -791,19 +791,14 @@ impl CortexApp {
             egui::containers::panel::PanelState::load(ui.ctx(), ui.id().with("sidebar"))
                 .map_or(SIDEBAR_WIDTH + 16.0, |state| state.size().x);
 
-        let files_width = self.files.visible.then(|| {
-            let (id, width) = self.files_panel_id();
-
-            egui::containers::panel::PanelState::load(ui.ctx(), ui.id().with(id))
-                .map_or(width + 16.0, |state| state.size().x)
-        });
-
         let panel_width = |id: &str, width: f32| {
             egui::containers::panel::PanelState::load(ui.ctx(), ui.id().with(id))
                 .map_or(width, |state| state.size().x)
         };
-
-        // Every panel on the right is under the bar's right-hand end.
+        let files_width = self.files.visible.then(|| {
+            let (id, width) = self.files_panel_id();
+            panel_width(id, width + 24.0)
+        });
         let right_width = [
             files_width,
             self.details
@@ -815,7 +810,8 @@ impl CortexApp {
         ]
         .into_iter()
         .flatten()
-        .reduce(|total, width| total + width);
+        .sum::<f32>();
+
         // The bar is not a strip of its own: it is the top of whatever is
         // under it, so it takes the chat's colour.
         let frame = egui::Frame::new()
@@ -853,9 +849,9 @@ impl CortexApp {
                     );
                 }
 
-                if let Some(width) = right_width {
+                if right_width > 0.0 {
                     ui.painter().rect_filled(
-                        bar.with_min_x(bar.right() - width),
+                        bar.with_min_x((bar.right() - right_width).max(bar.left())),
                         0.0,
                         palette::sidebar(),
                     );
@@ -1556,6 +1552,8 @@ impl eframe::App for CortexApp {
 
 impl CortexApp {
     pub(crate) fn tick(&mut self, ui: &mut egui::Ui) -> bool {
+        self.details.adapt_to_width(ui.available_width());
+
         // Looked at on every frame, whatever is on screen: see there.
         typeset::begin_frame(ui.ctx());
 
